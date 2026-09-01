@@ -17,3 +17,10 @@ Cargo.lock
 # log/ holds error.log and other runtime logs.
 /config
 /log
+
+# Build / release artifacts — binaries must NOT be committed (#no-binaries).
+# These are local convenience copies for the user; kept on disk but never tracked.
+# target/ (above) already covers target/{debug,release}/meatshell.exe.
+/meatshell-*-win64.exe
+/meatshell-win-verify.zip
+/meatshell-win-verify/
