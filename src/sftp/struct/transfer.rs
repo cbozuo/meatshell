@@ -34,6 +34,16 @@ pub enum SftpCommand {
         names: Vec<String>,
         local_dir: String,
     },
+    /// Multi-select "download one by one" (#100.4): fetch each entry as its own
+    /// plain file, strictly one after another. Firing N `Download` commands
+    /// instead would spawn N concurrent tasks and reintroduce exactly the
+    /// transfer races the archive path exists to avoid (#100.1), so the whole
+    /// batch runs inside a single task that awaits each file in turn.
+    DownloadSequential {
+        paths: Vec<String>,
+        local_dir: String,
+        conflict: DownloadConflict,
+    },
     /// Cancel an in-progress transfer by its id (#100). The partial local file
     /// (and any remote temp archive) are cleaned up.
     CancelTransfer(String),

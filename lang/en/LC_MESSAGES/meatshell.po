@@ -578,3 +578,39 @@ msgstr "Add trigger"
 
 msgid "When expected text appears, send the response automatically. Responses are stored encrypted."
 msgstr "When expected text appears, send the response automatically. Responses are stored encrypted."
+
+msgid "Drag to re-dock"
+msgstr "Drag to re-dock"
+
+msgid "Copy current path"
+msgstr "Copy current path"
+
+msgid "Paste and go"
+msgstr "Paste and go"
+
+msgid "Parent directory"
+msgstr "Parent directory"
+
+msgid "Upload file or folder"
+msgstr "Upload file or folder"
+
+msgid "Download selected"
+msgstr "Download selected"
+
+msgid "Delete selected"
+msgstr "Delete selected"
+
+msgid "More actions"
+msgstr "More actions"
+
+msgid "Collapse panel"
+msgstr "Collapse panel"
+
+msgid "Expand panel"
+msgstr "Expand panel"
+
+msgid "Download one by one"
+msgstr "Download one by one"
+
+msgid "Download as archive"
+msgstr "Download as archive"

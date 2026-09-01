@@ -59,6 +59,49 @@ component SftpMenuItem inherits Rectangle {
     }
 }
 
+// A small hover tooltip bubble, one per toolbar button. It is shown via
+// `if <ta>.has-hover :` at each instantiation site further below — exactly
+// like the shell-page top-bar tooltips in app.slint. Being a plain Rectangle
+// (NOT a PopupWindow) it never opens a native window, so it cannot flicker,
+// and it never intercepts pointer events, so the refresh / collapse / … buttons
+// beside it stay fully clickable (#sftp-tooltips).
+//
+// It is rendered ABOVE the host button (negative y, `y: -self.height - 3px` set
+// at the instantiation site). The panel sets `clip: false` (was true in earlier
+// rounds) specifically so these above-button tooltips are NOT clipped at the
+// panel top edge — they need to be visible when the panel is collapsed/docked-
+// bottom and the panel is too short to host a tooltip below the button. Going
+// above instead mirrors how the shell-page top-bar tooltips render just above
+// the icon into the space above the bar; here that space is the window area
+// above the SFTP panel, which is acceptable for a transient hover bubble.
+component SftpTooltip inherits Rectangle {
+    in property <string> label;
+    in property <bool> align-left: false;   // the far-left drag grip left-aligns
+    in property <length> anchor-width: 24px; // host button width, for right-alignment
+    // `y` is set at each instantiation site (e.g. `y: -self.height - 3px`) because
+    // `parent` is not addressable at a component's root-level binding. The
+    // instantiation picks ABOVE the button so the bubble survives when the
+    // panel is too short to hold it below (collapsed / docked-bottom).
+    x: root.align-left ? 0px : (root.anchor-width - self.width);
+    width: tip.preferred-width + 14px;
+    height: 16px;
+    background: Theme.bg-elevated;
+    border-radius: Theme.radius-sm;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: 8px;
+    drop-shadow-color: #00000070;
+    tip := Text {
+        text: root.label;
+        color: Theme.text-primary;
+        font-size: Theme.fs-xs;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SftpPanel — left directory tree + right file listing
 // ---------------------------------------------------------------------------
@@ -124,6 +167,8 @@ export component SftpPanel inherits Rectangle {
     callback delete(string);        // remove a remote file/dir
     callback toggle-select(int);    // toggle a row's multi-select checkbox (#100)
     callback download-selected();   // download all checked entries (#100)
+    callback download-selected-sequential(); // checked entries one by one, no archive (#100.4)
+    callback download-archive(string); // archive ONE explicit remote path as a .zip (#sftp-archive-zip)
     callback delete-selected();     // delete all checked entries (#100)
     callback copy-to-target(string /* path */, string /* target tab */);
     callback copy-selected-to-target(string /* target tab */);
@@ -149,7 +194,12 @@ export component SftpPanel inherits Rectangle {
 
     // -----------------------------------------------------------------------
     background: Theme.bg-panel;
-    clip: true;
+    // (#sftp-tooltips) clip disabled: the hover tooltips render ABOVE the toolbar
+    // (negative y, set at each instantiation site) and must stay visible when the
+    // panel is collapsed / docked-bottom and too short to host them below the
+    // button. Overflow inside the panel is still bounded by the file-area's own
+    // `clip: true` (further down) and the tree's ScrollView, so removing the
+    // panel-level clip does not reintroduce overflow there.
 
     // Keep the editable path bar in sync when the directory changes elsewhere
     // (tree click, file double-click, terminal cd) (#54).
@@ -180,15 +230,26 @@ export component SftpPanel inherits Rectangle {
         visible: !root.compact;
         spacing: 0;
 
-        // --- Toolbar (full width) ------------------------------------------
-        Rectangle {
-            height: root.narrow-toolbar && root.panel-mode == "files" ? 62px : 34px;
-            background: Theme.bg-panel-alt;
+// --- Toolbar (full width) ------------------------------------------
+                Rectangle {
+                    // Standard toolbar is 34px (single row). Only the narrow+files layout
+                    // grows to 62px because it stacks tabs + path on two rows. Tooltips are
+                    // plain Rectangles shown on hover (see SftpTooltip), so no reserved
+                    // "tooltip lane" is needed — that earlier 48px lane was what shifted
+                    // everything down (#sftp-tooltips).
+                    height: root.narrow-toolbar && root.panel-mode == "files" ? 62px : 34px;
+                    // (#collapsed-grey) Use the brighter bg-elevated when the panel is
+                    // collapsed — the dim bg-panel-alt was making the function buttons
+                    // feel "grayed out" and the hover state hard to read.
+                    background: root.collapsed ? Theme.bg-elevated : Theme.bg-panel-alt;
 
             VerticalLayout {
                 spacing: 6px;
 
                 HorizontalLayout {
+                // Single-row toolbar content area: 34px tall. Tooltips are plain
+                // Rectangles shown on hover, rendered below each button, so no lane
+                // is reserved here — keeping this at 34px re-centers the icons/header.
                 height: 34px;
                 // Pushed the left padding from 6px to 10px so the dock drag grip
                 // sits a bit further from the panel edge and the Files tab no longer
@@ -203,7 +264,11 @@ export component SftpPanel inherits Rectangle {
                 // of controls, so dragging "empty space" is unreliable; this grip
                 // is always grabbable and reports window-space coords (#dock).
                 Rectangle {
+                    visible: !root.collapsed;   // hide the drag grip whenever the panel is collapsed/minimised; it must only appear in the expanded panel (#sftp-tooltips)
                     width: 16px;
+                    // Vertically centred like the other toolbar icons. Tooltips are
+                    // now plain Rectangles rendered below the button, so no 20px
+                    // "tooltip lane" is needed (#sftp-tooltips).
                     y: (parent.height - self.height) / 2;
                     height: 22px;
                     grip-ta := TouchArea {
@@ -226,6 +291,9 @@ export component SftpPanel inherits Rectangle {
                         width: parent.width;
                         height: parent.height;
                     }
+                    // Hover tooltip (#sftp-tooltips): shown on hover via `if`, below
+                    // the button. No PopupWindow show()/close() → no flicker.
+                    if grip-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Drag to re-dock"); align-left: true; anchor-width: 16px; }
                 }
 
                 // Small transparent spacer between the dock drag grip and the Files
@@ -233,6 +301,7 @@ export component SftpPanel inherits Rectangle {
                 // tab's background, making the two look like a single overlapping
                 // shape (#toolbar-shadow-overlap).
                 Rectangle {
+                    visible: !root.collapsed;   // paired with the drag grip; hide in the collapsed/minimised panel too (#sftp-tooltips)
                     width: 6px;
                     height: 22px;
                     background: transparent;
@@ -243,6 +312,9 @@ export component SftpPanel inherits Rectangle {
                     height: 22px;
                     border-radius: Theme.radius-sm;
                     background: root.panel-mode == "files" ? Theme.accent : (files-tab-ta.has-hover ? Theme.bg-hover : transparent);
+                    // (#collapsed-grey) Fade the hover state in/out so the interaction
+                    // reads even against the brighter collapsed toolbar background.
+                    animate background { duration: 120ms; }
                     files-tab-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.panel-mode = "files"; }
@@ -261,6 +333,7 @@ export component SftpPanel inherits Rectangle {
                     height: 22px;
                     border-radius: Theme.radius-sm;
                     background: root.panel-mode == "tunnels" ? Theme.accent : (tunnels-tab-ta.has-hover ? Theme.bg-hover : transparent);
+                    animate background { duration: 120ms; }
                     tunnels-tab-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.panel-mode = "tunnels"; }
@@ -282,16 +355,19 @@ export component SftpPanel inherits Rectangle {
                 // Keep parent navigation discoverable in the narrow layout
                 // instead of hiding this primary action in the overflow menu
                 // (#322). It stays beside the other compact toolbar actions.
-                if root.narrow-toolbar && root.panel-mode == "files" : Rectangle {
+                Rectangle {
+                    visible: root.narrow-toolbar && root.panel-mode == "files";
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: compact-up-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     compact-up-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.navigate(".."); }
                     }
                     Text { text: "↑"; color: Theme.text-secondary; font-size: Theme.fs-md;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if compact-up-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Parent directory"); }
                 }
 
                 // Editable path bar: type or paste a path and press Enter to
@@ -330,6 +406,7 @@ export component SftpPanel inherits Rectangle {
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: copy-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     copy-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
@@ -341,6 +418,7 @@ export component SftpPanel inherits Rectangle {
                     Text { text: "\u{E14D}"; font-family: "Material Icons";
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if copy-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Copy current path"); }
                 }
 
                 // Paste a path from the clipboard and jump straight to it.
@@ -349,6 +427,7 @@ export component SftpPanel inherits Rectangle {
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: pj-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     pj-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
@@ -360,6 +439,7 @@ export component SftpPanel inherits Rectangle {
                     Text { text: "\u{E14F}"; font-family: "Material Icons";
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if pj-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Paste and go"); }
                 }
 
                 up-btn := Rectangle {
@@ -367,12 +447,14 @@ export component SftpPanel inherits Rectangle {
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: up-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     up-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.navigate(".."); }
                     }
                     Text { text: "↑"; color: Theme.text-secondary; font-size: Theme.fs-md;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if up-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Parent directory"); }
                 }
 
                 // Upload: a small menu offers file vs folder (#85). The remote
@@ -382,12 +464,14 @@ export component SftpPanel inherits Rectangle {
                     width: root.narrow-toolbar ? 24px : 52px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: ul-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                    animate background { duration: 120ms; }
                     ul-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { ul-menu.show(); }
                     }
                     Text { text: root.narrow-toolbar ? "↑" : @tr("Upload"); color: #ffffff; font-size: Theme.fs-sm;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if ul-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Upload file or folder"); anchor-width: 52px; }
                     ul-menu := PopupWindow {
                         x: 0; y: parent.height + 2px;
                         width: 124px;
@@ -423,6 +507,7 @@ export component SftpPanel inherits Rectangle {
                     height: 22px;
                     border-radius: Theme.radius-sm;
                     background: compact-more-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     compact-more-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { compact-more-menu.show(); }
@@ -435,6 +520,7 @@ export component SftpPanel inherits Rectangle {
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
+                    if compact-more-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("More actions"); }
                     compact-more-menu := PopupWindow {
                         x: parent.width - self.width;
                         y: parent.height + 2px;
@@ -482,21 +568,72 @@ export component SftpPanel inherits Rectangle {
                     font-size: Theme.fs-sm;
                     vertical-alignment: center;
                 }
-                if root.panel-mode == "files" && root.selected-count > 0 && !root.narrow-toolbar : Rectangle {
+                Rectangle {
+                    visible: root.panel-mode == "files" && root.selected-count > 0 && !root.narrow-toolbar;
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: dls-ta.has-hover ? Theme.bg-hover : transparent;
-                    dls-ta := TouchArea { mouse-cursor: pointer; clicked => { root.download-selected(); } }
+                    animate background { duration: 120ms; }
+                    dls-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        // (#100.4 + #sftp-toolbar-menu-always) Even one checked
+                        // entry must surface both options — a single checked
+                        // row may be a folder, which the user needs to package
+                        // as a .zip, so 逐个 vs 打包 is always a real choice.
+                        // The button is gated by `selected-count > 0` (lines
+                        // 565/572), so this never fires with nothing checked.
+                        clicked => {
+                            download-menu.show();
+                        }
+                    }
                     Text { text: "\u{E2C4}"; font-family: "Material Icons"; color: Theme.text-secondary;
                            font-size: Theme.fs-md; horizontal-alignment: center; vertical-alignment: center; }
+                    if dls-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Download selected") + " (" + root.selected-count + ")"; }
+
+                    // The two ways to fetch several entries at once (#100.4).
+                    // Anchored to the button and right-aligned so it stays on
+                    // screen; a popup is its own surface, so the panel's clip
+                    // can't cut it off.
+                    download-menu := PopupWindow {
+                        x: 24px - self.width;
+                        y: 26px;
+                        width: 186px;
+                        height: 2 * 26px + 8px;
+                        Rectangle {
+                            background: Theme.popup-bg;
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border-strong;
+                            drop-shadow-blur: 12px;
+                            drop-shadow-color: #00000060;
+                            VerticalLayout {
+                                padding: 4px;
+                                spacing: 1px;
+                                SftpMenuItem {
+                                    label: @tr("Download one by one") + " (" + root.selected-count + ")";
+                                    clicked => { download-menu.close(); root.download-selected-sequential(); }
+                                }
+                                SftpMenuItem {
+                                    label: @tr("Download as archive") + " (" + root.selected-count + ")";
+                                    clicked => { download-menu.close(); root.download-selected(); }
+                                }
+                            }
+                        }
+                    }
                 }
-                if root.panel-mode == "files" && root.selected-count > 0 && !root.narrow-toolbar : Rectangle {
+                Rectangle {
+                    visible: root.panel-mode == "files" && root.selected-count > 0 && !root.narrow-toolbar;
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: dels-ta.has-hover ? Theme.danger.with-alpha(0.18) : transparent;
-                    dels-ta := TouchArea { mouse-cursor: pointer; clicked => { root.delete-selected(); } }
+                    animate background { duration: 120ms; }
+                    dels-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.delete-selected(); }
+                    }
                     Text { text: "\u{E872}"; font-family: "Material Icons"; color: Theme.danger;
                            font-size: Theme.fs-md; horizontal-alignment: center; vertical-alignment: center; }
+                    if dels-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Delete selected") + " (" + root.selected-count + ")"; }
                 }
 
                 Rectangle {
@@ -504,6 +641,7 @@ export component SftpPanel inherits Rectangle {
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: ref-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     ref-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.refresh(root.current-path); }
@@ -511,6 +649,7 @@ export component SftpPanel inherits Rectangle {
                     Text { text: "\u{E5D5}"; font-family: "Material Icons";
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if ref-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Refresh"); }
                 }
 
                 // Minimise / restore the SFTP panel (#41).
@@ -518,6 +657,7 @@ export component SftpPanel inherits Rectangle {
                     width: 24px; height: 22px;
                     border-radius: Theme.radius-sm;
                     background: min-ta.has-hover ? Theme.bg-hover : transparent;
+                    animate background { duration: 120ms; }
                     min-ta := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.toggle-collapsed(); }
@@ -526,6 +666,7 @@ export component SftpPanel inherits Rectangle {
                     Text { text: root.collapsed ? "\u{E5CE}" : "\u{E5CF}"; font-family: "Material Icons";
                            color: Theme.text-secondary; font-size: Theme.fs-md;
                            horizontal-alignment: center; vertical-alignment: center; }
+                    if min-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: root.collapsed ? @tr("Expand panel") : @tr("Collapse panel"); }
                 }
                 }
 
@@ -677,6 +818,13 @@ export component SftpPanel inherits Rectangle {
                 Rectangle {
                     height: 20px;
                     background: Theme.bg-root;
+                    // (#header-line) No drop-shadow here. A shadow band rendered
+                    // just below the 20px header used to repaint on row
+                    // hover/selection and momentarily fight the 1px separator that
+                    // sits right under it — that was the "blink" on left-click.
+                    // The steady separator (see the 1px Rectangle right below) now
+                    // has nothing to conflict with, matching the tree header's
+                    // always-present line.
                     HorizontalLayout {
                         padding-left: 8px; padding-right: 8px; spacing: 8px;
                         // Spacer matching the rows' checkbox so the header columns
@@ -729,7 +877,14 @@ export component SftpPanel inherits Rectangle {
                         }
                     }
                 }
-                Rectangle { height: 1px; background: Theme.border-subtle; }
+                // (#header-line) Re-add the 1px separator below the column header.
+                // It is a plain sibling (not painted over by the rows below), so its
+                // position is fixed and always present. We use `border-strong` rather
+                // than the tree's `border-subtle`: the file rows hover with a blue tint
+                // that used to wash a subtle line out (the old "blink" in #sftp-tooltips
+                // round 2). `border-strong` stays visible at constant contrast, and its
+                // y (right under the 20px header) aligns with the tree's header line.
+                Rectangle { height: 1px; background: Theme.border-strong; }
 
                 // File list. The area fills the panel height so right-click works
                 // on the whitespace below the rows too (#84); the single menu
@@ -745,12 +900,6 @@ export component SftpPanel inherits Rectangle {
 
                         file-list := VerticalLayout {
                             spacing: 0;
-
-                            if root.loading : Rectangle {
-                                height: 40px;
-                                Text { text: @tr("Loading..."); color: Theme.text-muted; font-size: Theme.fs-sm;
-                                       horizontal-alignment: center; vertical-alignment: center; }
-                            }
 
                             if !root.loading && root.entries.length == 0 : Rectangle {
                                 height: 40px;
@@ -787,7 +936,13 @@ export component SftpPanel inherits Rectangle {
                                             root.menu-target-is-dir = entry.is-dir;
                                             root.menu-target-mode = entry.mode;
                                             root.menu-x = self.absolute-position.x + self.mouse-x - file-area.absolute-position.x;
-                                            root.menu-y = self.absolute-position.y + self.mouse-y - file-area.absolute-position.y;
+                                            // (#right-click-pos) `absolute-position.y` of a row inside
+                                            // the ScrollView is the *logical* (unscrolled) y, so for
+                                            // lower rows it overshoots the real click point and the
+                                            // menu drifts downward. `file-list.y` is the ScrollView's
+                                            // content translation (negative when scrolled down); adding
+                                            // it maps logical→visual so the menu tracks the click.
+                                            root.menu-y = self.absolute-position.y + self.mouse-y - file-area.absolute-position.y + file-list.y;
                                             file-menu.show();
                                         }
                                     }
@@ -865,7 +1020,13 @@ export component SftpPanel inherits Rectangle {
                                             root.selected-row = -1;
                                             root.menu-target = "";
                                             root.menu-x = self.absolute-position.x + self.mouse-x - file-area.absolute-position.x;
-                                            root.menu-y = self.absolute-position.y + self.mouse-y - file-area.absolute-position.y;
+                                            // (#right-click-pos) `absolute-position.y` of a row inside
+                                            // the ScrollView is the *logical* (unscrolled) y, so for
+                                            // lower rows it overshoots the real click point and the
+                                            // menu drifts downward. `file-list.y` is the ScrollView's
+                                            // content translation (negative when scrolled down); adding
+                                            // it maps logical→visual so the menu tracks the click.
+                                            root.menu-y = self.absolute-position.y + self.mouse-y - file-area.absolute-position.y + file-list.y;
                                             file-menu.show();
                                         }
                                     }
@@ -913,7 +1074,7 @@ export component SftpPanel inherits Rectangle {
                         x: root.menu-x;
                         y: root.menu-y;
                         width: 148px;
-                        height: 14 * 27px + 8px;
+                        height: 15 * 27px + 8px;   // 15 menu rows after splitting Download into two (#context-split)
                         Rectangle {
                             background: Theme.popup-bg;
                             border-radius: Theme.radius-sm;
@@ -924,10 +1085,28 @@ export component SftpPanel inherits Rectangle {
                             VerticalLayout {
                                 padding: 4px;
                                 spacing: 1px;
+                                // (#context-split) Split right-click Download into sequential vs archive. Multi-checked selection mirrors the toolbar menu (逐个=download-selected-sequential, 打包=download-selected). Single right-clicked item with no checkbox selection: both fall back to the same direct recursive download — wrapping a single file in a tar would be wasteful, so we keep the safe per-item path.
                                 SftpMenuItem {
-                                    label: @tr("Download");
-                                    enabled: root.menu-target != "";
-                                    clicked => { root.download(root.menu-target); }
+                                    label: @tr("Download one by one");
+                                    enabled: root.menu-target != "" || root.selected-count > 0;
+                                    clicked => {
+                                        if (root.selected-count > 0) { root.download-selected-sequential(); }
+                                        else { root.download(root.menu-target); }
+                                    }
+                                }
+                                SftpMenuItem {
+                                    label: @tr("Download as archive");
+                                    enabled: root.menu-target != "" || root.selected-count > 0;
+                                    clicked => {
+                                        // (#sftp-archive-zip) Both branches must end in a
+                                        // .zip: with a selection we archive the checked set
+                                        // (download-selected -> DownloadArchive), and for a
+                                        // single right-clicked file with no selection we route
+                                        // through download-archive so it too is zipped, never a
+                                        // bare file. This keeps "打包下载" uniform everywhere.
+                                        if (root.selected-count > 0) { root.download-selected(); }
+                                        else { root.download-archive(root.menu-target); }
+                                    }
                                 }
                                 SftpMenuItem {
                                     label: @tr("View");
@@ -972,8 +1151,19 @@ export component SftpPanel inherits Rectangle {
                                 SftpMenuItem {
                                     label: @tr("Delete");
                                     tint: #d86c6c;
-                                    enabled: root.menu-target != "";
-                                    clicked => { root.delete(root.menu-target); }
+                                    enabled: root.menu-target != "" || root.selected-count > 0;
+                                    clicked => {
+                                        // (#sftp-delete-consistent) Mirror the top-right
+                                        // delete button: when one or more rows are checked,
+                                        // the right-click Delete removes the whole checked
+                                        // set through the SAME batch confirm dialog; only
+                                        // with no selection does it fall back to removing
+                                        // just the right-clicked item. Both paths go through
+                                        // the shared ConfirmDialog, so the dialog + its
+                                        // message are identical to the toolbar delete.
+                                        if (root.selected-count > 0) { root.delete-selected(); }
+                                        else { root.delete(root.menu-target); }
+                                    }
                                 }
                                 Rectangle { height: 1px; background: Theme.border-subtle; }
                                 SftpMenuItem {
@@ -995,6 +1185,22 @@ export component SftpPanel inherits Rectangle {
                                 }
                             }
                         }
+                    }
+                    // (#loading-smooth) Overlay (absolute, out of the layout flow) so it
+                    // never shoves the file rows down when it toggles — that 40px jump was
+                    // the "不顺畅" during directory switches. Direct child of file-area
+                    // (clip:true keeps it inside the panel); fades via opacity so the
+                    // animate fires (Slint 1.x animate is property-change-driven).
+                    Rectangle {
+                        visible: root.loading;
+                        opacity: root.loading ? 1.0 : 0.0;
+                        animate opacity { duration: 120ms; }
+                        x: 0;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width;
+                        height: 40px;
+                        Text { text: @tr("Loading..."); color: Theme.text-muted; font-size: Theme.fs-sm;
+                               horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }

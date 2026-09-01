@@ -56,6 +56,21 @@ impl SftpHandle {
             local_dir,
         });
     }
+    /// Download several entries one after another, each as a plain file (no
+    /// archive, #100.4). Same destination folder and conflict policy for every
+    /// entry; the worker serialises the transfers internally.
+    pub fn download_sequential(
+        &self,
+        paths: Vec<String>,
+        local_dir: String,
+        conflict: DownloadConflict,
+    ) {
+        let _ = self.commands.send(SftpCommand::DownloadSequential {
+            paths,
+            local_dir,
+            conflict,
+        });
+    }
     pub fn cancel_transfer(&self, id: String) {
         let _ = self.commands.send(SftpCommand::CancelTransfer(id));
     }
@@ -611,121 +626,53 @@ async fn run_sftp(
                 let sftp = sftp.clone();
                 let handle = handle.clone();
                 let events = events.clone();
-                // Register a cancel flag up-front under the file id, so a
-                // CancelTransfer arriving mid-download can flip it (#100).
-                let file_id = Uuid::new_v4().to_string();
-                let cancel = Arc::new(AtomicBool::new(false));
-                cancels
-                    .lock()
-                    .unwrap()
-                    .insert(file_id.clone(), cancel.clone());
-                let cancels_done = cancels.clone();
+                let cancels_task = cancels.clone();
                 tokio::spawn(async move {
-                    // A directory target → recursively mirror the whole tree (#50).
-                    let is_dir = sftp
-                        .metadata(&remote)
-                        .await
-                        .ok()
-                        .map(|m| (m.permissions.unwrap_or(0) & 0o170_000) == 0o040_000)
-                        .unwrap_or(false);
-                    if is_dir {
-                        let dirname = base_name(&remote);
-                        // #100.3: an empty folder downloads nothing — just say so
-                        // rather than silently creating an empty local directory.
-                        let empty = list_dir_impl(&sftp, &remote)
-                            .await
-                            .map(|e| e.is_empty())
-                            .unwrap_or(false);
-                        if empty {
-                            let _ = events.send(SessionEvent::SftpStatus(format!(
-                                "{}: {}",
-                                t("空文件夹", "Empty folder"),
-                                dirname
-                            )));
-                            return;
-                        }
-                        let _ = events.send(SessionEvent::SftpStatus(format!(
-                            "{} {}/...",
-                            t("下载文件夹", "Downloading folder"),
-                            dirname
-                        )));
-                        match download_dir(&sftp, &handle, &remote, &local_dir, &events).await {
-                            Ok(_) => {
-                                let _ = events.send(SessionEvent::SftpStatus(format!(
-                                    "{}: {}",
-                                    t("下载完成", "Downloaded"),
-                                    dirname
-                                )));
-                            }
-                            Err(e) => {
-                                let _ = events.send(SessionEvent::SftpStatus(format!(
-                                    "{}: {e}",
-                                    t("下载失败", "Download failed")
-                                )));
-                            }
-                        }
-                    } else {
-                        // Sanitize the server-supplied name before it touches the local
-                        // filesystem (#26): a malicious server could otherwise craft a
-                        // name with traversal, shell-special chars or a Windows reserved
-                        // device name to write outside the chosen dir or hit a device.
-                        let filename = sanitize_filename(&base_name(&remote));
-                        let requested = download_target_path(&remote, &local_dir);
-                        let local_path = match conflict {
-                            DownloadConflict::Replace => requested,
-                            DownloadConflict::KeepBoth => available_download_path(&requested),
-                        };
-                        let local_path_text = local_path.to_string_lossy().to_string();
-                        let id = file_id.clone();
-                        let _ = events.send(SessionEvent::SftpStatus(format!(
-                            "{} {}...",
-                            t("下载", "Downloading"),
-                            filename
-                        )));
-                        match download_impl(
+                    download_one_entry(
+                        &sftp,
+                        &handle,
+                        &remote,
+                        &local_dir,
+                        conflict,
+                        &events,
+                        &cancels_task,
+                    )
+                    .await;
+                });
+            }
+
+            SftpCommand::DownloadSequential {
+                paths,
+                local_dir,
+                conflict,
+            } => {
+                // One task for the whole batch. Awaiting each entry in turn keeps
+                // the transfers strictly serial — the reason the archive path
+                // exists at all (#100.1) — while still leaving the command loop
+                // free to list/switch directories (#116-2).
+                let sftp = sftp.clone();
+                let handle = handle.clone();
+                let events = events.clone();
+                let cancels_task = cancels.clone();
+                tokio::spawn(async move {
+                    for remote in &paths {
+                        let keep_going = download_one_entry(
+                            &sftp,
                             &handle,
-                            &remote,
-                            &local_path_text,
-                            &filename,
-                            &id,
+                            remote,
+                            &local_dir,
+                            conflict,
                             &events,
-                            &cancel,
+                            &cancels_task,
                         )
-                        .await
-                        {
-                            Ok(true) => {
-                                let _ = events.send(SessionEvent::SftpStatus(format!(
-                                    "{}: {}",
-                                    t("下载完成", "Downloaded"),
-                                    filename
-                                )));
-                            }
-                            Ok(false) => {
-                                let _ = events.send(SessionEvent::SftpStatus(format!(
-                                    "{}: {}",
-                                    t("已取消", "Cancelled"),
-                                    filename
-                                )));
-                            }
-                            Err(e) => {
-                                emit_transfer(
-                                    &events,
-                                    &id,
-                                    &filename,
-                                    false,
-                                    0,
-                                    0,
-                                    2,
-                                    &e.to_string(),
-                                );
-                                let _ = events.send(SessionEvent::SftpStatus(format!(
-                                    "{}: {e}",
-                                    t("下载失败", "Download failed")
-                                )));
-                            }
+                        .await;
+                        // false means the user cancelled this entry: abandon the
+                        // rest of the batch instead of downloading on behind
+                        // their back. A per-file error still continues (#100.4).
+                        if !keep_going {
+                            break;
                         }
                     }
-                    cancels_done.lock().unwrap().remove(&file_id);
                 });
             }
 
@@ -747,17 +694,27 @@ async fn run_sftp(
                 let cancels_done = cancels.clone();
                 tokio::spawn(async move {
                     let n = names.len();
-                    let tmp = format!("/tmp/meatshell-{}.tar", Uuid::new_v4());
+                    // (#sftp-archive-format) Archive is now a .zip on the remote. Both
+                    // the multi-select download button and the right-click single-file
+                    // "打包下载" go through this same DownloadArchive path, so changing
+                    // it here covers them all uniformly (#sftp-archive-zip).
+                    let tmp = format!("/tmp/meatshell-{}.zip", Uuid::new_v4());
                     // Name the archive after the first item's stem, per the user:
-                    // 11.txt → "11等文件.tar". Sanitize since names come from the server.
+                    // 11.txt + several others → "11等文件.zip". A SINGLE file reads
+                    // better as "<name>.zip" (e.g. "11.txt.zip"), so only the
+                    // multi-file case gets the "等文件" ("and more") suffix
+                    // (#sftp-archive-zip). Sanitize since names come from the server.
                     let first = names.first().map(|s| s.as_str()).unwrap_or("download");
-                    let stem = first
-                        .rsplit_once('.')
-                        .map(|(a, _)| a)
-                        .filter(|a| !a.is_empty())
-                        .unwrap_or(first);
-                    let arc_name =
-                        sanitize_filename(&format!("{}{}.tar", stem, t("等文件", "-and-more")));
+                    let arc_name = if names.len() > 1 {
+                        let stem = first
+                            .rsplit_once('.')
+                            .map(|(a, _)| a)
+                            .filter(|a| !a.is_empty())
+                            .unwrap_or(first);
+                        sanitize_filename(&format!("{}{}.zip", stem, t("等文件", "-and-more")))
+                    } else {
+                        sanitize_filename(&format!("{}.zip", first))
+                    };
                     let local_path = format!("{}/{}", local_dir.trim_end_matches('/'), arc_name);
                     let _ = events.send(SessionEvent::SftpStatus(format!(
                         "{} {} {}...",
@@ -766,34 +723,35 @@ async fn run_sftp(
                         t("项", "items")
                     )));
                     // Show a "preparing" row in the transfer panel right away so a
-                    // big selection isn't a silent wait while tar runs (#100). The
+                    // big selection isn't a silent wait while zip runs (#100). The
                     // download then reuses this same id, so the row turns into the
                     // live progress bar once bytes start flowing.
                     emit_transfer(&events, &id, &arc_name, false, 0, 0, 3, "");
-                    // Plain tar (no gzip): the user prefers speed over a smaller file.
+                    // Build the zip on the remote in `remote_dir` (no equivalent of
+                    // tar's `-C`, so we cd first), then archive each requested name.
+                    // `zip` follows symlinks by default when storing file content, so
+                    // remote .pem symlinks now also land as real files in the archive
+                    // (replaces the old `tar -chf -h` behaviour, #sftp-batch-download-symlink).
                     // Server-supplied names are untrusted → quote every argument.
-                    // -h (--dereference): archive the *target* of a symlink instead of
-                    // the link itself. Without it, remote .pem files that are symlinks
-                    // are stored as link entries (0 bytes) and extract as broken/empty
-                    // links on the local side (#sftp-batch-download-symlink).
-                    let mut cmd =
-                        format!("tar -chf {} -C {}", sh_quote(&tmp), sh_quote(&remote_dir));
-                    for nm in &names {
-                        cmd.push(' ');
-                        cmd.push_str(&sh_quote(nm));
-                    }
+                    let mut cmd = format!(
+                        "cd {} && zip -q {} {}",
+                        sh_quote(&remote_dir),
+                        sh_quote(&tmp),
+                        names.iter().map(|n| sh_quote(n)).collect::<Vec<_>>().join(" ")
+                    );
                     let _ = &sftp; // listing session kept alive; transfer uses `handle`
                     let res: Result<bool> = async {
-                        let st = exec_remote(&handle, &cmd).await.context("tar on remote")?;
+                        let st = exec_remote(&handle, &cmd).await.context("zip on remote")?;
                         if st != 0 {
-                            return Err(anyhow!(t("远端 tar 打包失败", "remote tar failed")));
+                            return Err(anyhow!(t("远端 zip 打包失败", "remote zip failed")));
                         }
                         download_impl(&handle, &tmp, &local_path, &arc_name, &id, &events, &cancel)
                             .await
                     }
                     .await;
-                    // Best-effort cleanup of the remote temp tar — success, failure
-                    // or cancel all reach here, so no junk is left on the server (#100).
+                    // Best-effort cleanup of the remote temp archive — success,
+                    // failure or cancel all reach here, so no junk is left on the
+                    // server (#100).
                     let _ = exec_remote(&handle, &format!("rm -f {}", sh_quote(&tmp))).await;
                     match res {
                         Ok(true) => {
@@ -1832,6 +1790,130 @@ fn emit_transfer(
 /// Returns `Ok(true)` when the whole file was written, or `Ok(false)` if the
 /// transfer was cancelled. In both the cancel and error cases the partial
 /// local file is removed so no half-downloaded junk is left behind.
+/// Download one remote entry (file or directory) into `local_dir`, reporting
+/// progress on `events`.
+///
+/// Returns whether the caller should carry on. `false` only when this entry was
+/// cancelled, so a sequential batch stops right there; a per-entry error still
+/// returns `true` and lets the remaining entries download (#100.4).
+///
+/// Extracted from the `Download` command so the sequential batch can reuse the
+/// exact same per-entry behaviour — name sanitising, conflict handling, folder
+/// recursion and cancel registration — instead of keeping a second copy that
+/// would quietly drift out of sync with this one.
+async fn download_one_entry(
+    sftp: &SftpSession,
+    handle: &client::Handle<SftpClientHandler>,
+    remote: &str,
+    local_dir: &str,
+    conflict: DownloadConflict,
+    events: &UnboundedSender<SessionEvent>,
+    cancels: &Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+) -> bool {
+    // Register a cancel flag up-front under the file id, so a CancelTransfer
+    // arriving mid-download can flip it (#100).
+    let file_id = Uuid::new_v4().to_string();
+    let cancel = Arc::new(AtomicBool::new(false));
+    cancels
+        .lock()
+        .unwrap()
+        .insert(file_id.clone(), cancel.clone());
+    let mut cancelled = false;
+
+    // A directory target → recursively mirror the whole tree (#50).
+    let is_dir = sftp
+        .metadata(remote)
+        .await
+        .ok()
+        .map(|m| (m.permissions.unwrap_or(0) & 0o170_000) == 0o040_000)
+        .unwrap_or(false);
+    if is_dir {
+        let dirname = base_name(remote);
+        // #100.3: an empty folder downloads nothing — just say so rather than
+        // silently creating an empty local directory.
+        let empty = list_dir_impl(sftp, remote)
+            .await
+            .map(|e| e.is_empty())
+            .unwrap_or(false);
+        if empty {
+            let _ = events.send(SessionEvent::SftpStatus(format!(
+                "{}: {}",
+                t("空文件夹", "Empty folder"),
+                dirname
+            )));
+            // #100.4: the inline version used to `return` straight out of the
+            // task here, leaving the cancel flag registered for good. Clean it
+            // up so a batch full of empty folders can't leak map entries.
+            cancels.lock().unwrap().remove(&file_id);
+            return true;
+        }
+        let _ = events.send(SessionEvent::SftpStatus(format!(
+            "{} {}/...",
+            t("下载文件夹", "Downloading folder"),
+            dirname
+        )));
+        match download_dir(sftp, handle, remote, local_dir, events).await {
+            Ok(_) => {
+                let _ = events.send(SessionEvent::SftpStatus(format!(
+                    "{}: {}",
+                    t("下载完成", "Downloaded"),
+                    dirname
+                )));
+            }
+            Err(e) => {
+                let _ = events.send(SessionEvent::SftpStatus(format!(
+                    "{}: {e}",
+                    t("下载失败", "Download failed")
+                )));
+            }
+        }
+    } else {
+        // Sanitize the server-supplied name before it touches the local
+        // filesystem (#26): a malicious server could otherwise craft a name with
+        // traversal, shell-special chars or a Windows reserved device name to
+        // write outside the chosen dir or hit a device.
+        let filename = sanitize_filename(&base_name(remote));
+        let requested = download_target_path(remote, local_dir);
+        let local_path = match conflict {
+            DownloadConflict::Replace => requested,
+            DownloadConflict::KeepBoth => available_download_path(&requested),
+        };
+        let local_path_text = local_path.to_string_lossy().to_string();
+        let id = file_id.clone();
+        let _ = events.send(SessionEvent::SftpStatus(format!(
+            "{} {}...",
+            t("下载", "Downloading"),
+            filename
+        )));
+        match download_impl(handle, remote, &local_path_text, &filename, &id, events, &cancel).await {
+            Ok(true) => {
+                let _ = events.send(SessionEvent::SftpStatus(format!(
+                    "{}: {}",
+                    t("下载完成", "Downloaded"),
+                    filename
+                )));
+            }
+            Ok(false) => {
+                let _ = events.send(SessionEvent::SftpStatus(format!(
+                    "{}: {}",
+                    t("已取消", "Cancelled"),
+                    filename
+                )));
+                cancelled = true;
+            }
+            Err(e) => {
+                emit_transfer(events, &id, &filename, false, 0, 0, 2, &e.to_string());
+                let _ = events.send(SessionEvent::SftpStatus(format!(
+                    "{}: {e}",
+                    t("下载失败", "Download failed")
+                )));
+            }
+        }
+    }
+    cancels.lock().unwrap().remove(&file_id);
+    !cancelled
+}
+
 async fn download_impl(
     handle: &client::Handle<SftpClientHandler>,
     remote: &str,

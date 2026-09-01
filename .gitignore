@@ -12,3 +12,8 @@ Cargo.lock
 /.qoder
 /docs/superpowers
 /android/target/
+# Runtime state & secrets — must never be committed (#runtime-data).
+# config/ holds ipc.port, known_hosts, secret.key, sessions.json
+# log/ holds error.log and other runtime logs.
+/config
+/log

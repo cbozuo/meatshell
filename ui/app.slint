@@ -987,6 +987,8 @@ export component AppWindow inherits Window {
     callback sftp-delete(string /* tab-id */, string /* path */);
     callback sftp-toggle-select(string /* tab-id */, int /* row */);   // (#100)
     callback sftp-download-selected(string /* tab-id */);              // (#100)
+    callback sftp-download-selected-sequential(string /* tab-id */);    // (#100.4)
+    callback sftp-download-archive(string /* tab-id */, string /* remote-path */); // (#sftp-archive-zip)
     callback sftp-delete-selected(string /* tab-id */);               // (#100)
     callback sftp-copy-to-target(string /* tab-id */, string /* remote-path */, string /* target-tab-id */);
     callback sftp-copy-selected-to-target(string /* tab-id */, string /* target-tab-id */);
@@ -1909,6 +1911,8 @@ export component AppWindow inherits Window {
                         sftp-tree-expand(path) => { root.sftp-tree-expand(term.id, path); }
                         sftp-toggle-select(i) => { root.sftp-toggle-select(term.id, i); }
                         sftp-download-selected() => { root.sftp-download-selected(term.id); }
+                        sftp-download-selected-sequential() => { root.sftp-download-selected-sequential(term.id); }
+                        sftp-download-archive(path) => { root.sftp-download-archive(term.id, path); }
                         sftp-copy-to-target(path, target) => { root.sftp-copy-to-target(term.id, path, target); }
                         sftp-copy-selected-to-target(target) => { root.sftp-copy-selected-to-target(term.id, target); }
                         // Confirm before deleting the checked entries (#100), reusing

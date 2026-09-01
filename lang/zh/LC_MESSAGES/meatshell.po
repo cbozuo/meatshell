@@ -575,3 +575,39 @@ msgstr "添加触发器"
 
 msgid "When expected text appears, send the response automatically. Responses are stored encrypted."
 msgstr "出现期望文本时自动发送回复。回复内容会加密保存。"
+
+msgid "Drag to re-dock"
+msgstr "拖动以重新停靠"
+
+msgid "Copy current path"
+msgstr "复制当前路径"
+
+msgid "Paste and go"
+msgstr "粘贴并跳转"
+
+msgid "Parent directory"
+msgstr "上级目录"
+
+msgid "Upload file or folder"
+msgstr "上传文件或文件夹"
+
+msgid "Download selected"
+msgstr "下载所选"
+
+msgid "Delete selected"
+msgstr "删除所选"
+
+msgid "More actions"
+msgstr "更多操作"
+
+msgid "Collapse panel"
+msgstr "收起面板"
+
+msgid "Expand panel"
+msgstr "展开面板"
+
+msgid "Download one by one"
+msgstr "逐个下载"
+
+msgid "Download as archive"
+msgstr "打包下载"

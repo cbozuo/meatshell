@@ -38,6 +38,26 @@ fn choose_download_conflict(remote: &str, local_dir: &str) -> Option<DownloadCon
     }
 }
 
+/// Decide the overwrite policy for a whole sequential batch (#100.4).
+///
+/// Returns `None` only when the user cancelled, so the caller can abandon the
+/// batch. Unlike per-file prompting this asks at most once — a modal dialog per
+/// entry would stall the sequence behind N interruptions — and reuses that single
+/// answer for every file.
+fn choose_batch_download_conflict(
+    paths: &[String],
+    local_dir: &str,
+) -> Option<DownloadConflict> {
+    // Nothing would be overwritten → no decision to make.
+    let Some(first_conflict) = paths
+        .iter()
+        .find(|p| download_target_path(p, local_dir).is_file())
+    else {
+        return Some(DownloadConflict::Replace);
+    };
+    choose_download_conflict(first_conflict, local_dir)
+}
+
 pub(super) fn wire_sftp_callbacks(
     window: &AppWindow,
     sftp_handles: SftpHandles,
@@ -171,6 +191,60 @@ pub(super) fn wire_sftp_callbacks(
                     let _ = weak.upgrade_in_event_loop(|w| w.set_download_open(true));
                 }
             });
+        });
+    }
+
+    // SFTP single-file "Download as archive" from the right-click menu
+    // (#sftp-archive-zip). The user asked every "打包下载" — incl. a single
+    // right-clicked file — to produce a .zip. Unlike the plain per-file
+    // download, this always archives the one path into a zip on the remote and
+    // pulls that down, so a single .pem symlink still lands as a real file
+    // (#sftp-batch-download-symlink) and the format matches the multi-select
+    // "打包下载". Selection is NOT cleared here (see #sftp-keep-selection).
+    {
+        let sftp_handles = sftp_handles.clone();
+        let weak = window.as_weak();
+        window.on_sftp_download_archive(move |tab_id: SharedString, remote_path: SharedString| {
+            let tab_id = tab_id.to_string();
+            let remote_path = remote_path.to_string();
+            // zip runs `cd <dir> && zip tmp <name>`, so split the absolute path
+            // into its parent directory + base name.
+            let remote_dir = parent_path(&remote_path);
+            let name = remote_path
+                .trim_end_matches('/')
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&remote_path)
+                .to_string();
+            let preset = weak
+                .upgrade()
+                .map(|w| (w.get_download_dir().to_string(), w.get_download_always_ask()))
+                .unwrap_or_default();
+            if !preset.1 && !preset.0.is_empty() {
+                if let Ok(handles) = sftp_handles.lock() {
+                    if let Some(h) = handles.get(&tab_id) {
+                        h.download_archive(remote_dir.clone(), vec![name.clone()], preset.0);
+                    }
+                }
+                if let Some(w) = weak.upgrade() {
+                    w.set_download_open(true);
+                }
+            } else {
+                let sftp_handles = sftp_handles.clone();
+                let weak2 = weak.clone();
+                let tab = tab_id.clone();
+                std::thread::spawn(move || {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        let dir = dir.to_string_lossy().to_string();
+                        if let Ok(handles) = sftp_handles.lock() {
+                            if let Some(h) = handles.get(&tab) {
+                                h.download_archive(remote_dir.clone(), vec![name.clone()], dir);
+                            }
+                        }
+                        let _ = weak2.upgrade_in_event_loop(|w| w.set_download_open(true));
+                    }
+                });
+            }
         });
     }
 
@@ -407,10 +481,14 @@ pub(super) fn wire_sftp_callbacks(
             if paths.is_empty() {
                 return;
             }
-            // Single selection downloads as a plain file (no compression, #100.3);
-            // multiple selections are tar-packed into one archive on the remote
-            // (#100.2) — this also avoids the concurrent-transfer races (#100.1).
-            let single = paths.len() == 1;
+            // (#sftp-toolbar-menu-always) The toolbar menu's "Download as archive"
+            // now routes here for ANY checked count (1, 2+). We ALWAYS archive
+            // (zip on the remote + pull), never the per-file path — the user
+            // picked "打包" explicitly, and a single checked row might be a
+            // folder that can't be downloaded as a plain file anyway. The
+            // plain per-file path lives in `on_sftp_download_selected_sequential`
+            // ("逐个下载"). This also preserves the #100.1 invariant of no
+            // concurrent transfers (#100.2 archive path) for every call.
             let remote_dir = active_sftp_path(&w, tab_id.as_str());
             let names: Vec<String> = paths
                 .iter()
@@ -427,15 +505,7 @@ pub(super) fn wire_sftp_callbacks(
             if !always_ask && !preset.is_empty() {
                 if let Ok(handles) = sftp_handles.lock() {
                     if let Some(h) = handles.get(tab_id.as_str()) {
-                        if single {
-                            if let Some(conflict) =
-                                choose_download_conflict(&paths[0], &preset)
-                            {
-                                h.download(paths[0].clone(), preset.clone(), conflict);
-                            }
-                        } else {
-                            h.download_archive(remote_dir.clone(), names.clone(), preset.clone());
-                        }
+                        h.download_archive(remote_dir.clone(), names.clone(), preset.clone());
                     }
                 }
                 w.set_download_open(true);
@@ -448,26 +518,73 @@ pub(super) fn wire_sftp_callbacks(
                         let dir = dir.to_string_lossy().to_string();
                         if let Ok(handles) = sftp_handles.lock() {
                             if let Some(h) = handles.get(&tab) {
-                                if single {
-                                    if let Some(conflict) =
-                                        choose_download_conflict(&paths[0], &dir)
-                                    {
-                                        h.download(paths[0].clone(), dir.clone(), conflict);
-                                    }
-                                } else {
-                                    h.download_archive(
-                                        remote_dir.clone(),
-                                        names.clone(),
-                                        dir.clone(),
-                                    );
-                                }
+                                h.download_archive(
+                                    remote_dir.clone(),
+                                    names.clone(),
+                                    dir.clone(),
+                                );
                             }
                         }
                         let _ = weak2.upgrade_in_event_loop(|w| w.set_download_open(true));
                     }
                 });
             }
-            clear_sftp_selection(tm, tab_id.as_str());
+            // (#sftp-keep-selection) Do NOT clear the checkbox selection here: a
+            // download doesn't change the remote file set, so keeping the same
+            // rows checked lets the user re-download, delete or move the same set
+            // without re-ticking each row. Clear happens only on explicit actions
+            // that consume the rows (delete / move) or on a manual refresh.
+        });
+    }
+    // SFTP multi-select: download each checked entry as its own file, one after
+    // another (#100.4). Complements the archive path above — it keeps the files
+    // separate and skips the remote archive round-trip, while the worker still
+    // runs them strictly serially so transfers never overlap (#100.1).
+    {
+        let sftp_handles = sftp_handles.clone();
+        let weak = window.as_weak();
+        window.on_sftp_download_selected_sequential(move |tab_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let terminals = w.get_terminals();
+            let Some(tm) = terminals.as_any().downcast_ref::<VecModel<TerminalState>>() else {
+                return;
+            };
+            let paths = collect_sftp_selected(tm, tab_id.as_str());
+            if paths.is_empty() {
+                return;
+            }
+            let preset = w.get_download_dir().to_string();
+            let always_ask = w.get_download_always_ask();
+            if !always_ask && !preset.is_empty() {
+                if let Some(conflict) = choose_batch_download_conflict(&paths, &preset) {
+                    if let Ok(handles) = sftp_handles.lock() {
+                        if let Some(h) = handles.get(tab_id.as_str()) {
+                            h.download_sequential(paths.clone(), preset.clone(), conflict);
+                        }
+                    }
+                    w.set_download_open(true);
+                }
+            } else {
+                let sftp_handles = sftp_handles.clone();
+                let weak2 = weak.clone();
+                let tab = tab_id.to_string();
+                std::thread::spawn(move || {
+                    if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                        let dir = dir.to_string_lossy().to_string();
+                        if let Some(conflict) = choose_batch_download_conflict(&paths, &dir) {
+                            if let Ok(handles) = sftp_handles.lock() {
+                                if let Some(h) = handles.get(&tab) {
+                                    h.download_sequential(paths.clone(), dir.clone(), conflict);
+                                }
+                            }
+                            let _ = weak2.upgrade_in_event_loop(|w| w.set_download_open(true));
+                        }
+                    }
+                });
+            }
+            // (#sftp-keep-selection) Same as the archive path above: a download
+            // doesn't change the remote rows, so the selection is preserved. Only
+            // delete / move / explicit refresh clear it.
         });
     }
     // SFTP multi-select: delete all checked entries (confirmed in the UI) (#100).

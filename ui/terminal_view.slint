@@ -363,6 +363,8 @@ export component TerminalView inherits Rectangle {
     in property <int> sftp-selected-count;          // checked-entry count (#100)
     callback sftp-toggle-select(int);               // toggle a row's checkbox (#100)
     callback sftp-download-selected();              // download checked entries (#100)
+    callback sftp-download-selected-sequential();    // one-by-one, no archive (#100.4)
+    callback sftp-download-archive(string);          // archive ONE explicit path as .zip (#sftp-archive-zip)
     callback sftp-delete-selected();                // delete checked entries (#100)
     callback sftp-copy-to-target(string, string);
     callback sftp-copy-selected-to-target(string);
@@ -2076,6 +2078,8 @@ export component TerminalView inherits Rectangle {
             delete(path)        => { root.sftp-delete(path); }
             toggle-select(i)    => { root.sftp-toggle-select(i); }
             download-selected() => { root.sftp-download-selected(); }
+            download-selected-sequential() => { root.sftp-download-selected-sequential(); }
+            download-archive(path) => { root.sftp-download-archive(path); }
             delete-selected()   => { root.sftp-delete-selected(); }
             copy-to-target(path, target) => { root.sftp-copy-to-target(path, target); }
             copy-selected-to-target(target) => { root.sftp-copy-selected-to-target(target); }
