@@ -1738,6 +1738,15 @@ export component AppWindow inherits Window {
                     }
                 }
 
+                // Explicit static separator between the tab strip and the pane
+                // content (#shell-tab-divider). Without this the boundary is just
+                // a bg-panel-alt / bg-root colour transition; with focus events
+                // femtovg briefly repaints that region and the edge appears to
+                // flash. A constant opaque 1px line pins the boundary down so the
+                // click-to-focus on the shell body never animates anything in
+                // this strip.
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
                 // Content area swaps based on active tab kind.
                 Rectangle {
                     vertical-stretch: 1;

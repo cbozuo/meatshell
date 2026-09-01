@@ -815,17 +815,16 @@ export component SftpPanel inherits Rectangle {
                 horizontal-stretch: 1;
                 spacing: 0;
 
-                // Column headers
-                Rectangle {
+                // Column headers. The bottom separator is a 1px child pinned to
+                // the bottom of this Rectangle so it is painted inside the
+                // header's own layer and is never touched by the file area's
+                // row-click redraws — the previous standalone 1px sibling
+                // briefly disappeared when a row's background changed
+                // (#sftp-header-line). Slint has no per-edge border-width, so a
+                // fixed child is the robust way to get a single bottom line.
+                header-bg := Rectangle {
                     height: 20px;
                     background: Theme.bg-root;
-                    // (#header-line) No drop-shadow here. A shadow band rendered
-                    // just below the 20px header used to repaint on row
-                    // hover/selection and momentarily fight the 1px separator that
-                    // sits right under it — that was the "blink" on left-click.
-                    // The steady separator (see the 1px Rectangle right below) now
-                    // has nothing to conflict with, matching the tree header's
-                    // always-present line.
                     HorizontalLayout {
                         padding-left: 8px; padding-right: 8px; spacing: 8px;
                         // Spacer matching the rows' checkbox so the header columns
@@ -877,15 +876,16 @@ export component SftpPanel inherits Rectangle {
                             }
                         }
                     }
+                    // Bottom separator (1px) lives INSIDE the header so it
+                    // repaints atomically with the header, never with the file
+                    // rows below it. Absolute placement avoids layout side effects.
+                    Rectangle {
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.border-strong;
+                    }
                 }
-                // (#header-line) Re-add the 1px separator below the column header.
-                // It is a plain sibling (not painted over by the rows below), so its
-                // position is fixed and always present. We use `border-strong` rather
-                // than the tree's `border-subtle`: the file rows hover with a blue tint
-                // that used to wash a subtle line out (the old "blink" in #sftp-tooltips
-                // round 2). `border-strong` stays visible at constant contrast, and its
-                // y (right under the 20px header) aligns with the tree's header line.
-                Rectangle { height: 1px; background: Theme.border-strong; }
 
                 // File list. The area fills the panel height so right-click works
                 // on the whitespace below the rows too (#84); the single menu
