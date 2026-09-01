@@ -33,7 +33,264 @@ use crate::config::{AuthMethod, Session};
 use crate::i18n::t;
 use crate::ssh::{format_mtime, format_size, RemoteEntry, RemoteTreeNode, SessionEvent};
 
+use super::scp::{
+    run_shell_capture as scp_run_shell_capture, scp_chmod, scp_delete, scp_download,
+    scp_download_dir, scp_exists, scp_is_dir, scp_list_dir, scp_list_dirs_only, scp_mkdir,
+    scp_read_text, scp_rename, scp_touch, scp_upload, scp_upload_dir, scp_write_text,
+};
 use super::transfer::{DownloadConflict, SftpCommand, SftpHandle};
+
+// ---------------------------------------------------------------------------
+// Transport: either a live SFTP subsystem session or a pure-SCP fallback over
+// exec channels. The command loop below dispatches every file operation through
+// this so a router that refuses the `sftp` subsystem still gets a working
+// (SCP-based) panel instead of a permanently blank listing.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub(crate) enum Transport {
+    Sftp {
+        sftp: Arc<SftpSession>,
+        handle: Arc<client::Handle<SftpClientHandler>>,
+    },
+    Scp {
+        handle: Arc<client::Handle<SftpClientHandler>>,
+    },
+}
+
+impl Transport {
+    async fn list_dir(&self, path: &str) -> Result<Vec<RemoteEntry>> {
+        match self {
+            Transport::Sftp { sftp, .. } => list_dir_impl(sftp, path).await,
+            Transport::Scp { handle } => scp_list_dir(handle.as_ref(), path).await,
+        }
+    }
+
+    async fn list_dirs_only(&self, path: &str) -> Result<Vec<(String, String)>> {
+        match self {
+            Transport::Sftp { sftp, .. } => list_dirs_only_impl(sftp, path).await,
+            Transport::Scp { handle } => scp_list_dirs_only(handle.as_ref(), path).await,
+        }
+    }
+
+    async fn is_dir(&self, path: &str) -> bool {
+        match self {
+            Transport::Sftp { sftp, .. } => sftp
+                .metadata(path)
+                .await
+                .ok()
+                .map(|m| (m.permissions.unwrap_or(0) & 0o170_000) == 0o040_000)
+                .unwrap_or(false),
+            Transport::Scp { handle } => scp_is_dir(handle.as_ref(), path).await.unwrap_or(false),
+        }
+    }
+
+    async fn download(
+        &self,
+        remote: &str,
+        local: &str,
+        name: &str,
+        id: &str,
+        events: &UnboundedSender<SessionEvent>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<bool> {
+        match self {
+            Transport::Sftp { handle, .. } => {
+                download_impl(handle.as_ref(), remote, local, name, id, events, cancel).await
+            }
+            Transport::Scp { handle } => {
+                scp_download(handle.as_ref(), remote, local, name, id, events, cancel).await
+            }
+        }
+    }
+
+    async fn download_dir(
+        &self,
+        remote_root: &str,
+        local_parent: &str,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<()> {
+        match self {
+            Transport::Sftp { sftp, handle, .. } => {
+                download_dir(sftp, handle.as_ref(), remote_root, local_parent, events).await
+            }
+            Transport::Scp { handle } => {
+                scp_download_dir(handle.as_ref(), remote_root, local_parent, events).await
+            }
+        }
+    }
+
+    async fn upload(
+        &self,
+        local: &Path,
+        remote: &str,
+        name: &str,
+        id: &str,
+        events: &UnboundedSender<SessionEvent>,
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<bool> {
+        match self {
+            Transport::Sftp { handle, .. } => {
+                upload_pipelined(handle.as_ref(), local, remote, name, id, events, cancel).await
+            }
+            Transport::Scp { handle } => {
+                scp_upload(handle.as_ref(), local, remote, name, id, events, cancel).await
+            }
+        }
+    }
+
+    async fn upload_dir(
+        &self,
+        local: &Path,
+        remote_parent: &str,
+        events: &UnboundedSender<SessionEvent>,
+    ) -> Result<()> {
+        match self {
+            Transport::Sftp { handle, sftp, .. } => {
+                upload_dir(handle.as_ref(), sftp, local, remote_parent, events).await
+            }
+            Transport::Scp { handle } => {
+                scp_upload_dir(handle.as_ref(), local, remote_parent, events).await
+            }
+        }
+    }
+
+    async fn read_text(&self, remote: &str) -> std::result::Result<String, String> {
+        match self {
+            Transport::Sftp { sftp, .. } => read_text_guarded(sftp, remote).await,
+            Transport::Scp { handle } => {
+                let bytes = scp_read_text(handle.as_ref(), remote)
+                    .await
+                    .map_err(|e| format!("{}: {e}", t("打开失败", "Open failed")))?;
+                validate_editor_text(bytes).map_err(editor_rejection_message)
+            }
+        }
+    }
+
+    async fn write_text(&self, remote: &str, content: &str) -> Result<()> {
+        match self {
+            Transport::Sftp { sftp, .. } => write_text_file(sftp, remote, content).await,
+            Transport::Scp { handle } => scp_write_text(handle.as_ref(), remote, content).await,
+        }
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        match self {
+            Transport::Sftp { sftp, .. } => {
+                let is_dir = sftp
+                    .metadata(path)
+                    .await
+                    .ok()
+                    .map(|m| (m.permissions.unwrap_or(0) & 0o170_000) == 0o040_000)
+                    .unwrap_or(false);
+                if is_dir {
+                    remove_dir_recursive(sftp, path).await
+                } else {
+                    sftp.remove_file(path)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                }
+            }
+            Transport::Scp { handle } => scp_delete(handle.as_ref(), path).await,
+        }
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        match self {
+            Transport::Sftp { sftp, .. } => sftp.rename(from, to).await.map(|_| ()).map_err(|e| anyhow::anyhow!("{e}")),
+            Transport::Scp { handle } => scp_rename(handle.as_ref(), from, to).await,
+        }
+    }
+
+    async fn chmod(&self, path: &str, mode: u32) -> Result<()> {
+        match self {
+            Transport::Sftp { sftp, .. } => {
+                let attrs = FileAttributes {
+                    permissions: Some(mode),
+                    ..Default::default()
+                };
+                sftp.set_metadata(path, attrs)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| anyhow::anyhow!("{e}"))
+            }
+            Transport::Scp { handle } => scp_chmod(handle.as_ref(), path, mode).await,
+        }
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<()> {
+        match self {
+            Transport::Sftp { sftp, .. } => sftp.create_dir(path).await.map(|_| ()).map_err(|e| anyhow::anyhow!("{e}")),
+            Transport::Scp { handle } => scp_mkdir(handle.as_ref(), path).await,
+        }
+    }
+
+    /// Create an empty file; returns `true` if newly created, `false` if it
+    /// already exists.
+    async fn touch(&self, path: &str) -> Result<bool> {
+        match self {
+            Transport::Sftp { sftp, .. } => {
+                if sftp.metadata(path).await.is_ok() {
+                    Ok(false)
+                } else {
+                    sftp.create(path)
+                        .await
+                        .map(|_| true)
+                        .map_err(|e| anyhow::anyhow!("{e}"))
+                }
+            }
+            Transport::Scp { handle } => {
+                let exists = scp_exists(handle.as_ref(), path).await.unwrap_or(false);
+                if exists {
+                    Ok(false)
+                } else {
+                    scp_touch(handle.as_ref(), path).await.map(|_| true)
+                }
+            }
+        }
+    }
+
+    /// Run a one-shot remote command (used for the multi-select tar archive).
+    async fn exec_remote(&self, cmd: &str) -> Result<u32> {
+        match self {
+            Transport::Sftp { handle, .. } | Transport::Scp { handle } => {
+                exec_remote(handle.as_ref(), cmd).await
+            }
+        }
+    }
+
+    /// Resolve the remote home directory.
+    async fn home(&self) -> String {
+        match self {
+            Transport::Sftp { sftp, .. } => {
+                sftp.canonicalize(".").await.unwrap_or_else(|_| "/".to_string())
+            }
+            Transport::Scp { handle } => {
+                let (out, _) = scp_run_shell_capture(handle.as_ref(), "pwd")
+                    .await
+                    .unwrap_or_default();
+                let out = out.trim().to_string();
+                if out.is_empty() {
+                    "/".to_string()
+                } else {
+                    out
+                }
+            }
+        }
+    }
+
+    async fn disconnect(&self) {
+        match self {
+            Transport::Sftp { handle, .. } | Transport::Scp { handle } => {
+                let _ = handle
+                    .as_ref()
+                    .disconnect(Disconnect::ByApplication, "bye", "")
+                    .await;
+            }
+        }
+    }
+}
 
 impl SftpHandle {
     pub fn list_dir(&self, path: String) {
@@ -250,12 +507,12 @@ fn emit_tree(
 /// This is how create/delete/rename keep the left tree in sync without a
 /// reconnect (#189).
 async fn sync_tree_dir(
-    sftp: &SftpSession,
+    transport: &Transport,
     dir: &str,
     tree_dirs: &mut std::collections::HashMap<String, Vec<(String, String)>>,
 ) {
     if tree_dirs.contains_key(dir) {
-        let dirs = list_dirs_only_impl(sftp, dir).await.unwrap_or_default();
+        let dirs = transport.list_dirs_only(dir).await.unwrap_or_default();
         tree_dirs.insert(dir.to_string(), dirs);
     }
 }
@@ -457,21 +714,27 @@ async fn run_sftp(
     }
 
     // --- Open the sftp subsystem channel -----------------------------------
-    let channel = handle
-        .channel_open_session()
-        .await
-        .context("open sftp channel")?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .context("request sftp subsystem")?;
-    let sftp = SftpSession::new(channel.into_stream())
-        .await
-        .context("sftp handshake")?;
-    // Share the session + connection so transfers can run on their own task,
-    // leaving the command loop free to list/switch directories meanwhile (#116-2).
-    let sftp = std::sync::Arc::new(sftp);
-    let handle = std::sync::Arc::new(handle);
+    // Try the `sftp` subsystem first; if the server refuses it (BusyBox routers,
+    // minimal distros without an SFTP server), fall back to the SCP protocol on
+    // the same authenticated connection so the panel isn't a blank void (#scp).
+    let handle = Arc::new(handle);
+    let transport = match open_sftp_subsystem(&handle).await {
+        Ok(sftp) => Transport::Sftp {
+            sftp: Arc::new(sftp),
+            handle: handle.clone(),
+        },
+        Err(e) => {
+            tracing::warn!(
+                "sftp subsystem unavailable on {}:{} — falling back to SCP: {e:#}",
+                session.host,
+                session.port
+            );
+            let _ = events.send(SessionEvent::SftpStatus(
+                t("SFTP 子系统不可用,已回退到 SCP", "SFTP subsystem unavailable — using SCP instead").into(),
+            ));
+            Transport::Scp { handle }
+        }
+    };
 
     // Per-transfer cancel flags, keyed by transfer id. A download task registers
     // its flag here; a CancelTransfer command flips it; the task removes it on
@@ -480,16 +743,13 @@ async fn run_sftp(
         Arc::new(Mutex::new(HashMap::new()));
 
     // Resolve the home directory and do an initial listing.
-    let home = sftp
-        .canonicalize(".")
-        .await
-        .unwrap_or_else(|_| "/".to_string());
+    let home = transport.home().await;
     let _ = events.send(SessionEvent::SftpStatus(format!(
         "{} {}...",
         t("SFTP 加载", "SFTP loading"),
         home
     )));
-    match list_dir_impl(&sftp, &home).await {
+    match transport.list_dir(&home).await {
         Ok(entries) => {
             let _ = events.send(SessionEvent::SftpEntries {
                 path: home.clone(),
@@ -510,7 +770,7 @@ async fn run_sftp(
     let mut tree_expanded: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Fetch root "/" subdirs, then expand path down to home.
-    let root_dirs = list_dirs_only_impl(&sftp, "/").await.unwrap_or_default();
+    let root_dirs = transport.list_dirs_only("/").await.unwrap_or_default();
     tree_dirs.insert("/".to_string(), root_dirs);
     tree_expanded.insert("/".to_string());
 
@@ -530,7 +790,7 @@ async fn run_sftp(
             if !found {
                 break;
             }
-            let dirs = list_dirs_only_impl(&sftp, &child).await.unwrap_or_default();
+            let dirs = transport.list_dirs_only(&child).await.unwrap_or_default();
             tree_dirs.insert(child.clone(), dirs);
             tree_expanded.insert(child.clone());
             current = child;
@@ -553,7 +813,7 @@ async fn run_sftp(
                     t("加载", "Loading"),
                     path
                 )));
-                match list_dir_impl(&sftp, &path).await {
+                match transport.list_dir(&path).await {
                     Ok(entries) => {
                         let _ = events.send(SessionEvent::SftpEntries {
                             path: path.clone(),
@@ -574,7 +834,7 @@ async fn run_sftp(
                     t("加载", "Loading"),
                     path
                 )));
-                match list_dir_impl(&sftp, &path).await {
+                match transport.list_dir(&path).await {
                     Ok(entries) => {
                         let _ = events.send(SessionEvent::SftpEntries {
                             path: path.clone(),
@@ -592,7 +852,7 @@ async fn run_sftp(
                 // build_tree_nodes, so they drop out on the rebuild.
                 let expanded: Vec<String> = tree_expanded.iter().cloned().collect();
                 for dir in expanded {
-                    let dirs = list_dirs_only_impl(&sftp, &dir).await.unwrap_or_default();
+                    let dirs = transport.list_dirs_only(&dir).await.unwrap_or_default();
                     tree_dirs.insert(dir, dirs);
                 }
                 emit_tree(&tree_dirs, &tree_expanded, &events);
@@ -606,7 +866,7 @@ async fn run_sftp(
                 } else {
                     // Expand: fetch children if not yet cached.
                     if !tree_dirs.contains_key(&path) {
-                        let dirs = list_dirs_only_impl(&sftp, &path).await.unwrap_or_default();
+                        let dirs = transport.list_dirs_only(&path).await.unwrap_or_default();
                         tree_dirs.insert(path.clone(), dirs);
                     }
                     tree_expanded.insert(path.clone());
@@ -623,21 +883,121 @@ async fn run_sftp(
             } => {
                 // Run on its own task so the command loop stays free to list /
                 // switch directories during the transfer (#116-2).
-                let sftp = sftp.clone();
-                let handle = handle.clone();
+                let transport = transport.clone();
                 let events = events.clone();
                 let cancels_task = cancels.clone();
                 tokio::spawn(async move {
-                    download_one_entry(
-                        &sftp,
-                        &handle,
-                        &remote,
-                        &local_dir,
-                        conflict,
-                        &events,
-                        &cancels_task,
-                    )
-                    .await;
+                    match &transport {
+                        Transport::Sftp { sftp, handle } => {
+                            // meshell: delegate to download_one_entry, which keeps
+                            // the symlink-safe archive path and per-file cancel
+                            // (#sftp-batch-download-symlink, #100).
+                            download_one_entry(
+                                sftp.as_ref(),
+                                handle.as_ref(),
+                                &remote,
+                                &local_dir,
+                                conflict,
+                                &events,
+                                &cancels_task,
+                            )
+                            .await;
+                        }
+                        Transport::Scp { .. } => {
+                            // PR405: when the `sftp` subsystem is unavailable we
+                            // fall back to raw SCP for single files / directory
+                            // trees (#scp).
+                            let is_dir = transport.is_dir(&remote).await;
+                            if is_dir {
+                                let dirname = base_name(&remote);
+                                let empty = transport
+                                    .list_dir(&remote)
+                                    .await
+                                    .map(|e| e.is_empty())
+                                    .unwrap_or(false);
+                                if empty {
+                                    let _ = events.send(SessionEvent::SftpStatus(format!(
+                                        "{}: {}",
+                                        t("空文件夹", "Empty folder"),
+                                        dirname
+                                    )));
+                                } else {
+                                    let _ = events.send(SessionEvent::SftpStatus(format!(
+                                        "{} {}/...",
+                                        t("下载文件夹", "Downloading folder"),
+                                        dirname
+                                    )));
+                                    match transport.download_dir(&remote, &local_dir, &events).await {
+                                        Ok(_) => {
+                                            let _ = events.send(SessionEvent::SftpStatus(format!(
+                                                "{}: {}",
+                                                t("下载完成", "Downloaded"),
+                                                dirname
+                                            )));
+                                        }
+                                        Err(e) => {
+                                            let _ = events.send(SessionEvent::SftpStatus(format!(
+                                                "{}: {e}",
+                                                t("下载失败", "Download failed")
+                                            )));
+                                        }
+                                    }
+                                }
+                            } else {
+                                let filename = sanitize_filename(&base_name(&remote));
+                                let requested = download_target_path(&remote, &local_dir);
+                                let local_path = match conflict {
+                                    DownloadConflict::Replace => requested,
+                                    DownloadConflict::KeepBoth => available_download_path(&requested),
+                                };
+                                let local_path_text = local_path.to_string_lossy().to_string();
+                                let id = Uuid::new_v4().to_string();
+                                let cancel = Arc::new(AtomicBool::new(false));
+                                cancels_task.lock().unwrap().insert(id.clone(), cancel.clone());
+                                let _ = events.send(SessionEvent::SftpStatus(format!(
+                                    "{} {}...",
+                                    t("下载", "Downloading"),
+                                    filename
+                                )));
+                                match transport
+                                    .download(&remote, &local_path_text, &filename, &id, &events, &cancel)
+                                    .await
+                                {
+                                    Ok(true) => {
+                                        let _ = events.send(SessionEvent::SftpStatus(format!(
+                                            "{}: {}",
+                                            t("下载完成", "Downloaded"),
+                                            filename
+                                        )));
+                                    }
+                                    Ok(false) => {
+                                        let _ = events.send(SessionEvent::SftpStatus(format!(
+                                            "{}: {}",
+                                            t("已取消", "Cancelled"),
+                                            filename
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        emit_transfer(
+                                            &events,
+                                            &id,
+                                            &filename,
+                                            false,
+                                            0,
+                                            0,
+                                            2,
+                                            &e.to_string(),
+                                        );
+                                        let _ = events.send(SessionEvent::SftpStatus(format!(
+                                            "{}: {e}",
+                                            t("下载失败", "Download failed")
+                                        )));
+                                    }
+                                }
+                                cancels_task.lock().unwrap().remove(&id);
+                            }
+                        }
+                    }
                 });
             }
 
@@ -650,22 +1010,67 @@ async fn run_sftp(
                 // the transfers strictly serial — the reason the archive path
                 // exists at all (#100.1) — while still leaving the command loop
                 // free to list/switch directories (#116-2).
-                let sftp = sftp.clone();
-                let handle = handle.clone();
+                let transport = transport.clone();
                 let events = events.clone();
                 let cancels_task = cancels.clone();
                 tokio::spawn(async move {
                     for remote in &paths {
-                        let keep_going = download_one_entry(
-                            &sftp,
-                            &handle,
-                            remote,
-                            &local_dir,
-                            conflict,
-                            &events,
-                            &cancels_task,
-                        )
-                        .await;
+                        let keep_going = match &transport {
+                            Transport::Sftp { sftp, handle } => {
+                                download_one_entry(
+                                    sftp.as_ref(),
+                                    handle.as_ref(),
+                                    remote,
+                                    &local_dir,
+                                    conflict,
+                                    &events,
+                                    &cancels_task,
+                                )
+                                .await
+                            }
+                            Transport::Scp { .. } => {
+                                let is_dir = transport.is_dir(remote).await;
+                                if is_dir {
+                                    let _ = transport
+                                        .download_dir(remote, &local_dir, &events)
+                                        .await;
+                                    true
+                                } else {
+                                    let filename = sanitize_filename(&base_name(remote));
+                                    let requested = download_target_path(remote, &local_dir);
+                                    let local_path = match conflict {
+                                        DownloadConflict::Replace => requested,
+                                        DownloadConflict::KeepBoth => {
+                                            available_download_path(&requested)
+                                        }
+                                    };
+                                    let local_path_text = local_path.to_string_lossy().to_string();
+                                    let id = Uuid::new_v4().to_string();
+                                    let cancel = Arc::new(AtomicBool::new(false));
+                                    cancels_task
+                                        .lock()
+                                        .unwrap()
+                                        .insert(id.clone(), cancel.clone());
+                                    let ok = match transport
+                                        .download(
+                                            remote,
+                                            &local_path_text,
+                                            &filename,
+                                            &id,
+                                            &events,
+                                            &cancel,
+                                        )
+                                        .await
+                                    {
+                                        Ok(true) => true,
+                                        Ok(false) => false, // cancelled → stop batch
+                                        Err(_) => true,     // per-file error continues (#100.4)
+                                    };
+                                    cancels_task.lock().unwrap().remove(&id);
+                                    ok
+                                }
+                            }
+                        };
                         // false means the user cancelled this entry: abandon the
                         // rest of the batch instead of downloading on behind
                         // their back. A per-file error still continues (#100.4).
@@ -684,8 +1089,7 @@ async fn run_sftp(
                 // #100: multi-select download. Instead of N concurrent transfers
                 // (which raced and dropped files), tar everything into ONE archive
                 // on the remote, pull that single file, then delete the temp.
-                let sftp = sftp.clone();
-                let handle = handle.clone();
+                let transport = transport.clone();
                 let events = events.clone();
                 // Register a cancel flag up-front so CancelTransfer can flip it (#100).
                 let id = Uuid::new_v4().to_string();
@@ -739,20 +1143,20 @@ async fn run_sftp(
                         sh_quote(&tmp),
                         names.iter().map(|n| sh_quote(n)).collect::<Vec<_>>().join(" ")
                     );
-                    let _ = &sftp; // listing session kept alive; transfer uses `handle`
                     let res: Result<bool> = async {
-                        let st = exec_remote(&handle, &cmd).await.context("zip on remote")?;
+                        let st = transport.exec_remote(&cmd).await.context("zip on remote")?;
                         if st != 0 {
                             return Err(anyhow!(t("远端 zip 打包失败", "remote zip failed")));
                         }
-                        download_impl(&handle, &tmp, &local_path, &arc_name, &id, &events, &cancel)
+                        transport
+                            .download(&tmp, &local_path, &arc_name, &id, &events, &cancel)
                             .await
                     }
                     .await;
                     // Best-effort cleanup of the remote temp archive — success,
                     // failure or cancel all reach here, so no junk is left on the
                     // server (#100).
-                    let _ = exec_remote(&handle, &format!("rm -f {}", sh_quote(&tmp))).await;
+                    let _ = transport.exec_remote(&format!("rm -f {}", sh_quote(&tmp))).await;
                     match res {
                         Ok(true) => {
                             let _ = events.send(SessionEvent::SftpStatus(format!(
@@ -793,8 +1197,7 @@ async fn run_sftp(
             } => {
                 // Run on its own task so the command loop stays free to list /
                 // switch directories during the transfer (#116-2).
-                let sftp = sftp.clone();
-                let handle = handle.clone();
+                let transport = transport.clone();
                 let events = events.clone();
                 // Register a cancel flag up-front under the file id so a
                 // CancelTransfer arriving mid-upload can flip it (#100).
@@ -831,8 +1234,8 @@ async fn run_sftp(
                             t("上传文件夹", "Uploading folder"),
                             dirname
                         )));
-                        let res = upload_dir(&handle, &sftp, &local, &remote_dir, &events).await;
-                        if let Ok(entries) = list_dir_impl(&sftp, &remote_dir).await {
+                        let res = transport.upload_dir(&local, &remote_dir, &events).await;
+                        if let Ok(entries) = transport.list_dir(&remote_dir).await {
                             let _ = events.send(SessionEvent::SftpEntries {
                                 path: remote_dir.clone(),
                                 entries,
@@ -876,19 +1279,12 @@ async fn run_sftp(
                             t("上传", "Uploading"),
                             filename
                         )));
-                        match upload_pipelined(
-                            &handle,
-                            &local,
-                            &remote_path,
-                            &filename,
-                            &id,
-                            &events,
-                            &cancel,
-                        )
-                        .await
+                        match transport
+                            .upload(&local, &remote_path, &filename, &id, &events, &cancel)
+                            .await
                         {
                             Ok(true) => {
-                                if let Ok(entries) = list_dir_impl(&sftp, &remote_dir).await {
+                                if let Ok(entries) = transport.list_dir(&remote_dir).await {
                                     let _ = events.send(SessionEvent::SftpEntries {
                                         path: remote_dir.clone(),
                                         entries,
@@ -902,7 +1298,7 @@ async fn run_sftp(
                             }
                             Ok(false) => {
                                 // Refresh the listing so the removed partial file disappears.
-                                if let Ok(entries) = list_dir_impl(&sftp, &remote_dir).await {
+                                if let Ok(entries) = transport.list_dir(&remote_dir).await {
                                     let _ = events.send(SessionEvent::SftpEntries {
                                         path: remote_dir.clone(),
                                         entries,
@@ -940,21 +1336,19 @@ async fn run_sftp(
             }
 
             SftpCommand::UploadEdited { local, remote } => {
-                let sftp = sftp.clone();
-                let handle = handle.clone();
+                let transport = transport.clone();
                 let events = events.clone();
                 tokio::spawn(async move {
                     let filename = base_name(&remote);
                     let remote_dir = parent_dir(&remote);
                     let id = Uuid::new_v4().to_string();
                     let no_cancel = Arc::new(AtomicBool::new(false));
-                    let result = upload_pipelined(
-                        &handle, &local, &remote, &filename, &id, &events, &no_cancel,
-                    )
-                    .await;
+                    let result = transport
+                        .upload(&local, &remote, &filename, &id, &events, &no_cancel)
+                        .await;
                     match result {
                         Ok(true) => {
-                            if let Ok(entries) = list_dir_impl(&sftp, &remote_dir).await {
+                            if let Ok(entries) = transport.list_dir(&remote_dir).await {
                                 let _ = events.send(SessionEvent::SftpEntries {
                                     path: remote_dir,
                                     entries,
@@ -982,8 +1376,7 @@ async fn run_sftp(
                 target,
                 target_dir,
             } => {
-                let sftp = sftp.clone();
-                let handle = handle.clone();
+                let transport = transport.clone();
                 let events = events.clone();
                 tokio::spawn(async move {
                     let label = format!("{} {}", remotes.len(), t("项", "items"));
@@ -993,7 +1386,7 @@ async fn run_sftp(
                         label
                     )));
                     for remote in remotes {
-                        match stage_remote_for_copy(&sftp, &handle, &remote, &events).await {
+                        match stage_remote_for_copy(&transport, &remote, &events).await {
                             Ok((local, cleanup_root)) => {
                                 let _ = target.send(SftpCommand::Upload {
                                     local,
@@ -1019,27 +1412,11 @@ async fn run_sftp(
                     t("删除", "Deleting"),
                     filename
                 )));
-                // Directories are removed recursively (a plain remove_dir only
-                // works on an empty dir, so an uploaded folder couldn't be
-                // deleted); files via remove_file.
-                let is_dir = sftp
-                    .metadata(&path)
-                    .await
-                    .ok()
-                    .map(|m| (m.permissions.unwrap_or(0) & 0o170_000) == 0o040_000)
-                    .unwrap_or(false);
-                let res: Result<()> = if is_dir {
-                    remove_dir_recursive(&sftp, &path).await
-                } else {
-                    sftp.remove_file(&path)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| anyhow::anyhow!("{e}"))
-                };
+                let res = transport.delete(&path).await;
                 match res {
                     Ok(_) => {
                         let parent = parent_dir(&path);
-                        if let Ok(entries) = list_dir_impl(&sftp, &parent).await {
+                        if let Ok(entries) = transport.list_dir(&parent).await {
                             let _ = events.send(SessionEvent::SftpEntries {
                                 path: parent.clone(),
                                 entries,
@@ -1052,7 +1429,7 @@ async fn run_sftp(
                         let prefix = format!("{}/", path.trim_end_matches('/'));
                         tree_dirs.retain(|p, _| p != &path && !p.starts_with(&prefix));
                         tree_expanded.retain(|p| p != &path && !p.starts_with(&prefix));
-                        sync_tree_dir(&sftp, &parent, &mut tree_dirs).await;
+                        sync_tree_dir(&transport, &parent, &mut tree_dirs).await;
                         emit_tree(&tree_dirs, &tree_expanded, &events);
                         let _ = events.send(SessionEvent::SftpStatus(format!(
                             "{}: {}",
@@ -1071,7 +1448,7 @@ async fn run_sftp(
 
             SftpCommand::Rename { from, to } => {
                 let refresh = parent_dir(&from);
-                match sftp.rename(&from, &to).await {
+                match transport.rename(&from, &to).await {
                     Ok(_) => {
                         let _ = events.send(SessionEvent::SftpStatus(format!(
                             "{}: {}",
@@ -1084,10 +1461,10 @@ async fn run_sftp(
                         let prefix = format!("{}/", from.trim_end_matches('/'));
                         tree_dirs.retain(|p, _| p != &from && !p.starts_with(&prefix));
                         tree_expanded.retain(|p| p != &from && !p.starts_with(&prefix));
-                        sync_tree_dir(&sftp, &refresh, &mut tree_dirs).await;
+                        sync_tree_dir(&transport, &refresh, &mut tree_dirs).await;
                         let to_parent = parent_dir(&to);
                         if to_parent != refresh {
-                            sync_tree_dir(&sftp, &to_parent, &mut tree_dirs).await;
+                            sync_tree_dir(&transport, &to_parent, &mut tree_dirs).await;
                         }
                         emit_tree(&tree_dirs, &tree_expanded, &events);
                     }
@@ -1098,7 +1475,7 @@ async fn run_sftp(
                         )));
                     }
                 }
-                if let Ok(entries) = list_dir_impl(&sftp, &refresh).await {
+                if let Ok(entries) = transport.list_dir(&refresh).await {
                     let _ = events.send(SessionEvent::SftpEntries {
                         path: refresh,
                         entries,
@@ -1108,11 +1485,7 @@ async fn run_sftp(
 
             SftpCommand::Chmod { path, mode } => {
                 let refresh = parent_dir(&path);
-                let attrs = FileAttributes {
-                    permissions: Some(mode),
-                    ..Default::default()
-                };
-                match sftp.set_metadata(&path, attrs).await {
+                match transport.chmod(&path, mode).await {
                     Ok(_) => {
                         let _ = events.send(SessionEvent::SftpStatus(format!(
                             "{}: {} → {:o}",
@@ -1128,7 +1501,7 @@ async fn run_sftp(
                         )));
                     }
                 }
-                if let Ok(entries) = list_dir_impl(&sftp, &refresh).await {
+                if let Ok(entries) = transport.list_dir(&refresh).await {
                     let _ = events.send(SessionEvent::SftpEntries {
                         path: refresh,
                         entries,
@@ -1138,7 +1511,7 @@ async fn run_sftp(
 
             SftpCommand::MkDir(path) => {
                 let refresh = parent_dir(&path);
-                match sftp.create_dir(&path).await {
+                match transport.mkdir(&path).await {
                     Ok(_) => {
                         let _ = events.send(SessionEvent::SftpStatus(format!(
                             "{}: {}",
@@ -1146,7 +1519,7 @@ async fn run_sftp(
                             base_name(&path)
                         )));
                         // Show the new folder in the left tree too (#189).
-                        sync_tree_dir(&sftp, &refresh, &mut tree_dirs).await;
+                        sync_tree_dir(&transport, &refresh, &mut tree_dirs).await;
                         emit_tree(&tree_dirs, &tree_expanded, &events);
                     }
                     Err(e) => {
@@ -1156,7 +1529,7 @@ async fn run_sftp(
                         )));
                     }
                 }
-                if let Ok(entries) = list_dir_impl(&sftp, &refresh).await {
+                if let Ok(entries) = transport.list_dir(&refresh).await {
                     let _ = events.send(SessionEvent::SftpEntries {
                         path: refresh,
                         entries,
@@ -1167,31 +1540,29 @@ async fn run_sftp(
             SftpCommand::TouchFile(path) => {
                 let refresh = parent_dir(&path);
                 // create() truncates if the file exists, so refuse to clobber.
-                let exists = sftp.metadata(&path).await.is_ok();
-                if exists {
-                    let _ = events.send(SessionEvent::SftpStatus(format!(
-                        "{}: {}",
-                        t("文件已存在", "File already exists"),
-                        base_name(&path)
-                    )));
-                } else {
-                    match sftp.create(&path).await {
-                        Ok(_) => {
-                            let _ = events.send(SessionEvent::SftpStatus(format!(
-                                "{}: {}",
-                                t("已新建文件", "File created"),
-                                base_name(&path)
-                            )));
-                        }
-                        Err(e) => {
-                            let _ = events.send(SessionEvent::SftpStatus(format!(
-                                "{}: {e}",
-                                t("新建文件失败", "Create file failed")
-                            )));
-                        }
+                match transport.touch(&path).await {
+                    Ok(false) => {
+                        let _ = events.send(SessionEvent::SftpStatus(format!(
+                            "{}: {}",
+                            t("文件已存在", "File already exists"),
+                            base_name(&path)
+                        )));
+                    }
+                    Ok(true) => {
+                        let _ = events.send(SessionEvent::SftpStatus(format!(
+                            "{}: {}",
+                            t("已新建文件", "File created"),
+                            base_name(&path)
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = events.send(SessionEvent::SftpStatus(format!(
+                            "{}: {e}",
+                            t("新建文件失败", "Create file failed")
+                        )));
                     }
                 }
-                if let Ok(entries) = list_dir_impl(&sftp, &refresh).await {
+                if let Ok(entries) = transport.list_dir(&refresh).await {
                     let _ = events.send(SessionEvent::SftpEntries {
                         path: refresh,
                         entries,
@@ -1218,10 +1589,9 @@ async fn run_sftp(
                 )));
                 let xid = Uuid::new_v4().to_string();
                 let no_cancel = Arc::new(AtomicBool::new(false));
-                match download_impl(
-                    &handle, &remote, &local_str, &filename, &xid, &events, &no_cancel,
-                )
-                .await
+                match transport
+                    .download(&remote, &local_str, &filename, &xid, &events, &no_cancel)
+                    .await
                 {
                     Ok(_) => {
                         open_with_os(&local_str);
@@ -1253,7 +1623,7 @@ async fn run_sftp(
                     t("打开", "Opening"),
                     name
                 )));
-                let (content, error) = match read_text_guarded(&sftp, &remote).await {
+                let (content, error) = match transport.read_text(&remote).await {
                     Ok(text) => (text, String::new()),
                     Err(msg) => (String::new(), msg),
                 };
@@ -1267,7 +1637,7 @@ async fn run_sftp(
             }
             SftpCommand::WriteText { remote, content } => {
                 let name = base_name(&remote);
-                match write_text_file(&sftp, &remote, &content).await {
+                match transport.write_text(&remote, &content).await {
                     Ok(_) => {
                         let _ = events.send(SessionEvent::SftpStatus(format!(
                             "{}: {}",
@@ -1286,10 +1656,28 @@ async fn run_sftp(
         }
     }
 
-    let _ = handle
-        .disconnect(Disconnect::ByApplication, "bye", "")
-        .await;
+    transport.disconnect().await;
     Ok(())
+}
+
+/// Open the `sftp` subsystem on an authenticated handle and run the SFTP
+/// handshake. Errors here (subsystem refused, handshake failure) trigger the
+/// SCP fallback.
+async fn open_sftp_subsystem(
+    handle: &client::Handle<SftpClientHandler>,
+) -> Result<SftpSession> {
+    let channel = handle
+        .channel_open_session()
+        .await
+        .context("open sftp channel")?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .context("request sftp subsystem")?;
+    let sftp = SftpSession::new(channel.into_stream())
+        .await
+        .context("sftp handshake")?;
+    Ok(sftp)
 }
 
 const MAX_BUILTIN_EDITOR_BYTES: usize = 512 * 1024;
@@ -1297,7 +1685,7 @@ const MAX_BUILTIN_EDITOR_LINES: usize = 20_000;
 const MAX_BUILTIN_EDITOR_LINE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
-enum EditorTextRejection {
+pub(crate) enum EditorTextRejection {
     TooLarge,
     TooManyLines,
     LineTooLong,
@@ -1305,7 +1693,7 @@ enum EditorTextRejection {
     InvalidUtf8,
 }
 
-fn validate_editor_text(bytes: Vec<u8>) -> std::result::Result<String, EditorTextRejection> {
+pub(crate) fn validate_editor_text(bytes: Vec<u8>) -> std::result::Result<String, EditorTextRejection> {
     if bytes.len() > MAX_BUILTIN_EDITOR_BYTES {
         return Err(EditorTextRejection::TooLarge);
     }
@@ -1338,7 +1726,7 @@ fn validate_editor_text(bytes: Vec<u8>) -> std::result::Result<String, EditorTex
     Ok(text)
 }
 
-fn editor_rejection_message(rejection: EditorTextRejection) -> String {
+pub(crate) fn editor_rejection_message(rejection: EditorTextRejection) -> String {
     match rejection {
         EditorTextRejection::TooLarge => t(
             "文件过大,无法在内置编辑器中打开(上限 512 KB),请使用外部打开/编辑或下载",
@@ -1412,7 +1800,7 @@ async fn write_text_file(sftp: &SftpSession, remote: &str, content: &str) -> Res
 /// File name component of a path.  Handles both remote (`/`) and local Windows
 /// (`\`) separators, so uploading `C:\…\frp.tar.gz` yields `frp.tar.gz` rather
 /// than the whole path (which previously became the remote file name).
-fn base_name(path: &str) -> String {
+pub(crate) fn base_name(path: &str) -> String {
     let sep = |c: char| c == '/' || c == '\\';
     path.trim_end_matches(sep)
         .rsplit(sep)
@@ -1421,7 +1809,7 @@ fn base_name(path: &str) -> String {
         .to_string()
 }
 
-fn local_file_name_utf8(path: &Path) -> Result<String> {
+pub(crate) fn local_file_name_utf8(path: &Path) -> Result<String> {
     path.file_name()
         .and_then(|n| n.to_str())
         .map(|s| s.to_string())
@@ -1431,7 +1819,7 @@ fn local_file_name_utf8(path: &Path) -> Result<String> {
 /// Single-quote a string for safe interpolation into a remote `/bin/sh`
 /// command. Remote names come from the *server's* listing and are therefore
 /// untrusted — without quoting, a crafted name like `; rm -rf ~` would run.
-fn sh_quote(s: &str) -> String {
+pub(crate) fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
@@ -1457,7 +1845,7 @@ async fn exec_remote(handle: &client::Handle<SftpClientHandler>, cmd: &str) -> R
 }
 
 /// Parent directory of a remote path ("/a/b" → "/a", "/a" → "/").
-fn parent_dir(path: &str) -> String {
+pub(crate) fn parent_dir(path: &str) -> String {
     let p = path.trim_end_matches('/');
     match p.rfind('/') {
         Some(0) | None => "/".to_string(),
@@ -1521,7 +1909,7 @@ fn open_with_os(path: &str) {
 /// and neutralises reserved device names (CON, NUL, COM1…).  Normal names
 /// (letters, digits, `.`, `-`, `_`, Unicode) pass through; Unix dotfiles keep
 /// their leading dot.  Falls back to `file` when nothing usable remains.
-fn sanitize_filename(name: &str) -> String {
+pub(crate) fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| match c {
@@ -1586,8 +1974,7 @@ pub(crate) fn download_target_path(remote: &str, local_dir: &str) -> PathBuf {
     Path::new(local_dir).join(sanitize_filename(&base_name(remote)))
 }
 
-fn available_download_path(requested: &Path) -> PathBuf {
-    if !requested.exists() {
+fn available_download_path(requested: &Path) -> PathBuf {    if !requested.exists() {
         return requested.to_path_buf();
     }
     let parent = requested.parent().unwrap_or_else(|| Path::new(""));
@@ -1639,8 +2026,7 @@ fn spawn_edit_watcher(self_tx: UnboundedSender<SftpCommand>, local: String, remo
 // SFTP helpers
 // ---------------------------------------------------------------------------
 
-async fn cleanup_import_path(path: &Path) {
-    let res = match tokio::fs::metadata(path).await {
+async fn cleanup_import_path(path: &Path) {    let res = match tokio::fs::metadata(path).await {
         Ok(meta) if meta.is_dir() => tokio::fs::remove_dir_all(path).await,
         Ok(_) => tokio::fs::remove_file(path).await,
         Err(_) => Ok(()),
@@ -1651,8 +2037,7 @@ async fn cleanup_import_path(path: &Path) {
 }
 
 async fn stage_remote_for_copy(
-    sftp: &SftpSession,
-    handle: &client::Handle<SftpClientHandler>,
+    transport: &Transport,
     remote: &str,
     events: &UnboundedSender<SessionEvent>,
 ) -> Result<(PathBuf, PathBuf)> {
@@ -1665,12 +2050,7 @@ async fn stage_remote_for_copy(
     let name = sanitize_filename(&base_name(remote));
     let local_path = cleanup_root.join(&name);
     let local_parent = cleanup_root.to_string_lossy().to_string();
-    let is_dir = sftp
-        .metadata(remote)
-        .await
-        .ok()
-        .map(|m| (m.permissions.unwrap_or(0) & 0o170_000) == 0o040_000)
-        .unwrap_or(false);
+    let is_dir = transport.is_dir(remote).await;
     let no_cancel = Arc::new(AtomicBool::new(false));
     let id = Uuid::new_v4().to_string();
 
@@ -1678,16 +2058,19 @@ async fn stage_remote_for_copy(
         tokio::fs::create_dir_all(&local_path)
             .await
             .with_context(|| format!("failed to create temp dir {}", local_path.display()))?;
-        let empty = list_dir_impl(sftp, remote)
+        let empty = transport
+            .list_dir(remote)
             .await
             .map(|entries| entries.is_empty())
             .unwrap_or(false);
         if !empty {
-            download_dir(sftp, handle, remote, &local_parent, events).await?;
+            transport.download_dir(remote, &local_parent, events).await?;
         }
     } else {
         let local = local_path.to_string_lossy().to_string();
-        download_impl(handle, remote, &local, &name, &id, events, &no_cancel).await?;
+        transport
+            .download(remote, &local, &name, &id, events, &no_cancel)
+            .await?;
     }
 
     Ok((local_path, cleanup_root))
@@ -1705,7 +2088,7 @@ fn list_error_msg(path: &str, e: &impl std::fmt::Display) -> String {
     }
 }
 
-async fn list_dir_impl(sftp: &SftpSession, path: &str) -> Result<Vec<RemoteEntry>> {
+pub(crate) async fn list_dir_impl(sftp: &SftpSession, path: &str) -> Result<Vec<RemoteEntry>> {
     let raw = sftp
         .read_dir(path)
         .await
@@ -1748,7 +2131,7 @@ async fn list_dir_impl(sftp: &SftpSession, path: &str) -> Result<Vec<RemoteEntry
 }
 
 /// List only the subdirectories of `path` (no files). Used to build the tree.
-async fn list_dirs_only_impl(sftp: &SftpSession, path: &str) -> Result<Vec<(String, String)>> {
+pub(crate) async fn list_dirs_only_impl(sftp: &SftpSession, path: &str) -> Result<Vec<(String, String)>> {
     let entries = list_dir_impl(sftp, path).await?;
     Ok(entries
         .into_iter()
@@ -1758,7 +2141,7 @@ async fn list_dirs_only_impl(sftp: &SftpSession, path: &str) -> Result<Vec<(Stri
 }
 
 /// Emit a transfer-progress event.
-fn emit_transfer(
+pub(crate) fn emit_transfer(
     events: &UnboundedSender<SessionEvent>,
     id: &str,
     name: &str,
@@ -2338,10 +2721,10 @@ async fn upload_pipelined(
 // fresh host confirmed for the shell won't prompt again for SFTP.
 // ---------------------------------------------------------------------------
 
-struct SftpClientHandler {
-    host: String,
-    port: u16,
-    events: UnboundedSender<SessionEvent>,
+pub(crate) struct SftpClientHandler {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) events: UnboundedSender<SessionEvent>,
 }
 
 fn sftp_handler(session: &Session, events: &UnboundedSender<SessionEvent>) -> SftpClientHandler {
