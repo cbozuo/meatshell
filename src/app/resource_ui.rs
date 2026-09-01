@@ -554,9 +554,7 @@ pub(super) fn sync_system_info_theme(main: &AppWindow, sys: &SystemInfoWindow) {
 }
 
 pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow) {
-    use i_slint_backend_winit::winit::dpi::{LogicalPosition, LogicalSize};
-
-    let Some((mon_x, mon_y, mon_w, mon_h, scale)) = main
+    let Some((mon_x, mon_y, mon_w, mon_h)) = main
         .window()
         .with_winit_window(|ww| {
             let scale = ww.scale_factor().max(0.01);
@@ -568,7 +566,6 @@ pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow)
                 pos.y as f64 / scale,
                 size.width as f64 / scale,
                 size.height as f64 / scale,
-                scale,
             ))
         })
         .flatten()
@@ -581,11 +578,14 @@ pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow)
     let x = mon_x + (mon_w - target_w).max(0.0) / 2.0;
     let y = mon_y + (mon_h - target_h).max(0.0) / 2.0;
 
-    sys.window().with_winit_window(|ww| {
-        let _ = ww.request_inner_size(LogicalSize::new(target_w, target_h));
-        ww.set_outer_position(LogicalPosition::new(x, y));
-        let _ = scale; // documents that all values above are already logical.
-    });
+    // Use the Slint window API instead of the winit handle: hidden windows are
+    // no longer materialized eagerly (they map on Wayland and pollute the
+    // taskbar — see the vendor patch in i-slint-backend-winit), so the first
+    // open may run before the native window exists. In that state the Slint
+    // API stores the size/position on the adapter and applies it at creation;
+    // with a live window it behaves like the winit calls did.
+    sys.window().set_size(slint::LogicalSize::new(target_w as f32, target_h as f32));
+    sys.window().set_position(slint::LogicalPosition::new(x as f32, y as f32));
 }
 
 /// Center the process monitor on the same physical monitor as the main window.
@@ -593,8 +593,6 @@ pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow)
 /// displays use different DPI scale factors. Keep the user's current process
 /// window size; opening it should reposition, not reset a manual resize.
 pub(super) fn place_process_window(main: &AppWindow, process: &ProcWindow) {
-    use i_slint_backend_winit::winit::dpi::PhysicalPosition;
-
     let monitor = main
         .window()
         .with_winit_window(|ww| ww.current_monitor().or_else(|| ww.primary_monitor()))
@@ -603,10 +601,16 @@ pub(super) fn place_process_window(main: &AppWindow, process: &ProcWindow) {
     let origin = monitor.position();
     let monitor_size = monitor.size();
 
-    process.window().with_winit_window(|ww| {
-        let window_size = ww.outer_size();
-        let x = origin.x + monitor_size.width.saturating_sub(window_size.width) as i32 / 2;
-        let y = origin.y + monitor_size.height.saturating_sub(window_size.height) as i32 / 2;
-        ww.set_outer_position(PhysicalPosition::new(x, y));
-    });
+    // The winit window may not exist yet on the first open (deferred creation,
+    // see place_system_info_window); fall back to a zero size, which anchors
+    // the window's top-left at the monitor center until the next open.
+    // Wayland ignores client-side positioning entirely, so this only affects
+    // X11/Windows first-open placement.
+    let window_size = process
+        .window()
+        .with_winit_window(|ww| ww.outer_size())
+        .unwrap_or_default();
+    let x = origin.x + monitor_size.width.saturating_sub(window_size.width) as i32 / 2;
+    let y = origin.y + monitor_size.height.saturating_sub(window_size.height) as i32 / 2;
+    process.window().set_position(slint::PhysicalPosition::new(x, y));
 }

@@ -693,8 +693,17 @@ impl SharedBackendData {
         let mut inactive_windows = self.inactive_windows.take();
         let mut result = Ok(());
         while let Some(window_weak) = inactive_windows.pop() {
-            if let Some(err) = window_weak.upgrade().and_then(|w| w.ensure_window(event_loop).err())
-            {
+            let Some(window) = window_weak.upgrade() else { continue };
+            // Skip windows the application never showed. Materializing their
+            // winit window here is unnecessary on X11/Windows (created hidden),
+            // but on Wayland winit cannot create a window that is not visible,
+            // so the hidden window would be mapped immediately and show up in
+            // the taskbar. When the application shows such a window later,
+            // set_visibility() registers it here again for deferred creation.
+            if window.winit_window().is_none() && window.visibility() == WindowVisibility::Hidden {
+                continue;
+            }
+            if let Some(err) = window.ensure_window(event_loop).err() {
                 result = Err(err);
                 break;
             }
