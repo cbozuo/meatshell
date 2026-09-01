@@ -1,6 +1,6 @@
 name: Release
 
-# Build native packages for Windows / Linux / macOS and an Android Beta APK.
+# Build native packages for Windows / Linux / macOS.
 #  - Push a tag like `v0.2.3`  -> builds all platforms and attaches the archives
 #    to a GitHub Release.
 #  - Run manually (workflow_dispatch) -> builds all platforms and uploads them as
@@ -36,15 +36,6 @@ jobs:
               exit
             }
           ' Cargo.lock)"
-          ANDROID_VERSION="$(sed -n '/^\[package\]/,/^\[/ s/^version = "\(.*\)"/\1/p' android/Cargo.toml | head -n 1)"
-          ANDROID_LOCK_VERSION="$(awk '
-            $0 == "name = \"meatshell-android\"" { found = 1; next }
-            found && $1 == "version" {
-              gsub(/"/, "", $3)
-              print $3
-              exit
-            }
-          ' android/Cargo.lock)"
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${CARGO_VERSION}."
             echo "Run: pwsh ./scripts/release.ps1 ${GITHUB_REF_NAME}"
@@ -53,14 +44,6 @@ jobs:
           if [ "$TAG_VERSION" != "$LOCK_VERSION" ]; then
             echo "Tag ${GITHUB_REF_NAME} does not match Cargo.lock meatshell version ${LOCK_VERSION}."
             echo "Run: pwsh ./scripts/release.ps1 ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-          if [ "$TAG_VERSION" != "$ANDROID_VERSION" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match android/Cargo.toml version ${ANDROID_VERSION}."
-            exit 1
-          fi
-          if [ "$TAG_VERSION" != "$ANDROID_LOCK_VERSION" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match android/Cargo.lock version ${ANDROID_LOCK_VERSION}."
             exit 1
           fi
 
@@ -222,6 +205,9 @@ jobs:
           set -eu
           VERSION="${GITHUB_REF_NAME:-dev}"
           STAGE="meatshell-${VERSION}-${{ matrix.name }}"
+          # CHANGELOG.md is the canonical release notes source; every platform
+          # package must include it.
+          test -f CHANGELOG.md || { echo "ERROR: CHANGELOG.md is required but missing"; exit 1; }
 
           if [ "${{ runner.os }}" = "macOS" ]; then
             # ── Build a proper .app bundle ────────────────────────────────────
@@ -232,7 +218,7 @@ jobs:
             mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
             cp "target/${{ matrix.target }}/release/meatshell" "$CONTENTS/MacOS/"
-            cp THIRD_PARTY_NOTICES.md "$CONTENTS/Resources/"
+            cp CHANGELOG.md README.md README.en.md THIRD_PARTY_NOTICES.md "$CONTENTS/Resources/"
 
             # Generate .icns from the 512×512 PNG using sips + iconutil (both
             # ship with every macOS, no extra tooling needed in CI).
@@ -271,7 +257,8 @@ jobs:
           elif [ "${{ runner.os }}" = "Windows" ]; then
             mkdir "$STAGE"
             cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$STAGE/"
-            cp README.md README.en.md CHANGELOG.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
+            cp CHANGELOG.md "$STAGE/"
+            cp README.md README.en.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
             7z a "${STAGE}.zip" "$STAGE" >/dev/null
             echo "ASSET=${STAGE}.zip" >> "$GITHUB_ENV"
 
@@ -279,7 +266,8 @@ jobs:
             # Linux
             mkdir "$STAGE"
             cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$STAGE/"
-            cp README.md README.en.md CHANGELOG.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
+            cp CHANGELOG.md "$STAGE/"
+            cp README.md README.en.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
             # Ship the desktop entry + installer + icon so the dock shows the icon.
             cp assets/meatshell.desktop assets/install-linux.sh "assets/icon@512.png" "$STAGE/" 2>/dev/null || true
             tar -czf "${STAGE}.tar.gz" "$STAGE"
@@ -357,93 +345,6 @@ jobs:
         with:
           files: ${{ env.MSI }}
           fail_on_unmatched_files: false
-
-  build-android:
-    name: android-arm64-beta
-    needs: check-version
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Install Android SDK platform
-        shell: bash
-        run: |
-          set -eu
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Cache Android Cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: android
-          key: android-aarch64
-
-      - name: Install cargo-apk
-        run: cargo install cargo-apk --locked
-
-      # The Android client is an explicitly experimental sideload build. Give
-      # each CI run an ephemeral Beta certificate so release optimisation can
-      # stay enabled without committing a private signing key to the repo.
-      - name: Generate ephemeral Beta signing key
-        shell: bash
-        run: |
-          set -eu
-          keytool -genkeypair \
-            -keystore "$RUNNER_TEMP/meatshell-beta.keystore" \
-            -storepass android \
-            -keypass android \
-            -alias meatshell-beta \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 3650 \
-            -dname "CN=MeatShell Beta, O=MeatShell, C=CN" \
-            -noprompt
-
-      - name: Build Android Beta APK
-        shell: bash
-        env:
-          CARGO_APK_RELEASE_KEYSTORE: ${{ runner.temp }}/meatshell-beta.keystore
-          CARGO_APK_RELEASE_KEYSTORE_PASSWORD: android
-        run: |
-          set -eu
-          cargo apk build \
-            --manifest-path android/Cargo.toml \
-            --release \
-            --target aarch64-linux-android \
-            --lib
-
-          VERSION="${GITHUB_REF_NAME:-dev}"
-          APK="$(find android/target target -type f -path '*/apk/*.apk' -print -quit 2>/dev/null || true)"
-          test -n "$APK"
-          ASSET="meatshell-${VERSION}-android-arm64-beta.apk"
-          cp "$APK" "$ASSET"
-          echo "ANDROID_APK=$ASSET" >> "$GITHUB_ENV"
-
-      - name: Upload Android APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-arm64-beta
-          path: ${{ env.ANDROID_APK }}
-
-      - name: Attach Android APK to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ env.ANDROID_APK }}
-          fail_on_unmatched_files: true
 
   build-flatpak:
     name: linux-x86_64-flatpak
@@ -559,10 +460,12 @@ jobs:
           set -eu
           VERSION="${GITHUB_REF_NAME:-dev}"
           STAGE="meatshell-${VERSION}-linux-aarch64-glibc228"
+          test -f CHANGELOG.md || { echo "ERROR: CHANGELOG.md is required but missing"; exit 1; }
 
           mkdir "$STAGE"
           cp "target/aarch64-unknown-linux-gnu/release/meatshell" "$STAGE/"
-          cp README.md README.en.md CHANGELOG.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
+          cp CHANGELOG.md "$STAGE/"
+            cp README.md README.en.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
           cp assets/meatshell.desktop assets/install-linux.sh "assets/icon@512.png" "$STAGE/" 2>/dev/null || true
           tar -czf "${STAGE}.tar.gz" "$STAGE"
           echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"
@@ -648,10 +551,12 @@ jobs:
           set -eu
           VERSION="${GITHUB_REF_NAME:-dev}"
           STAGE="meatshell-${VERSION}-linux-x86_64-glibc228"
+          test -f CHANGELOG.md || { echo "ERROR: CHANGELOG.md is required but missing"; exit 1; }
 
           mkdir "$STAGE"
           cp "target/x86_64-unknown-linux-gnu/release/meatshell" "$STAGE/"
-          cp README.md README.en.md CHANGELOG.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
+          cp CHANGELOG.md "$STAGE/"
+            cp README.md README.en.md THIRD_PARTY_NOTICES.md "$STAGE/" 2>/dev/null || true
           cp assets/meatshell.desktop assets/install-linux.sh "assets/icon@512.png" "$STAGE/" 2>/dev/null || true
           tar -czf "${STAGE}.tar.gz" "$STAGE"
           echo "ASSET=${STAGE}.tar.gz" >> "$GITHUB_ENV"

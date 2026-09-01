@@ -8,6 +8,41 @@ All notable changes are documented here. 本文件记录所有重要变更。
 - **修复旧版 macOS 启动闪退。** 在 macOS 上禁用 Slint/winit 的 AppKit DisplayLink 帧节流，回退到计时器帧节流，避免旧系统收到不存在的 `displayLinkWithTarget:selector:` 消息。
 - **Fix startup crashes on older macOS.** Disable Slint/winit's AppKit DisplayLink frame throttling on macOS and use timer throttling instead, avoiding calls to the unavailable `displayLinkWithTarget:selector:` method on older systems.
 
+## [0.7.2] - 2026-09-01
+
+- **SFTP 子系统不可用时自动回退到 SCP 传输。** 当 SFTP 通道因服务器不支持或配置禁用而无法建立时，自动以 SCP 协议完成上传与下载，保证文件传输不中断。
+- **Fall back to SCP when SFTP is unavailable.** When the SFTP subsystem cannot be started (server unsupported or disabled in config), uploads and downloads automatically use SCP so transfer always works.
+
+- **SFTP 工具栏「下载」按钮始终提供「逐个下载 / 打包下载」菜单；下载完成后保留勾选状态。** 即便只勾选 1 项也保留该菜单，因为该文件可能是文件夹，需要打包下载。保留勾选便于对同批文件重复下载、删除或移动。
+- **SFTP toolbar's Download button always offers the individual / archive menu; selection persists after downloads.** Even with a single row selected (it could be a folder that needs archiving), the menu stays available. Keeping the selection makes it easy to re-download, remove, or move the same batch.
+
+- **打包下载统一为 `.zip` 并正确跟随符号链接。** 所有打包下载（含单文件右键）统一为 `.zip`；修复批量下载 `.pem` 等符号链接文件时退化为空/破损连接的缺陷（`tar -cf` 加上 `-h` 旗标跟随 symlink）。
+- **Unify archive downloads to `.zip` and follow symlinks.** All archive downloads (including the single-file right-click) use `.zip`. Fixes batch-downloading symlinked files such as `.pem` becoming empty/broken links (`tar -cf` now passes `-h`).
+
+- **删除确认框行为一致。** 勾选恰好 1 项时，右键删除与右上角删除按钮均弹出单文件确认框（与无勾选右键删除一致）；勾选 ≥2 项走批量确认框；有勾选时两者共用同一批量确认框。
+- **Unify delete-confirmation dialogs.** With exactly one row selected, both the right-click menu and the toolbar's Delete button show the single-file dialog; two or more rows use the batch dialog; both entry points share the same batch dialog when rows are selected.
+
+- **修复 SFTP 工具栏拖拽手柄与 Files 标签重叠、路径输入框过窄的问题。** 手柄不再悬浮粘连，路径输入框在中等宽度面板下保持可用宽度；紧凑工具栏与折叠态的布局、置灰及悬浮交互优化。
+- **Fix the SFTP toolbar drag handle overlapping the Files label and the too-narrow path input.** The handle no longer sticks, the path input keeps a usable width at medium panel sizes, and the compact/collapsed toolbar layout, dimming, and hover behavior are improved.
+
+- **视觉细节优化。** 列头分隔线常驻不闪；右键菜单位置随滚动贴住点击点；tooltip 渲染到按钮上方不再被遮挡；目录切换「加载中」改为淡入淡出。
+- **Visual polish.** The column-header divider stays put instead of flickering; right-click menus stick to the click point while scrolling; tooltips render above buttons so they are no longer clipped; the directory-switching "loading" indicator now fades in and out.
+
+- **修复点击「复制路径」时面板卡死的缺陷。** 剪贴板写入移至后台线程，避免阻塞 UI 事件循环。
+- **Fix the panel freeze when clicking "Copy path".** The clipboard write now runs on a background thread so the UI event loop is never blocked.
+
+- **修复上传文件后，工具栏选中计数与批量下载/删除按钮未随列表刷新同步清零的问题。** 计数在模型重建处统一重置，所有重建路径自动兜底。
+- **Fix stale selection count after uploads.** The toolbar's selection count and the batch-download/delete buttons now reset in lockstep with the rebuilt file list, so every code path that rebuilds the model is covered.
+
+- **修复 Wayland 下启动后任务栏出现三个窗口的问题。**
+- **Fix three taskbar windows appearing on Wayland at startup.**
+
+- **忽略构建/发布产物二进制。** `.gitignore` 加入发布 `.exe` 与验证产物路径，避免误提交。
+- **Ignore build and release artifacts.** The `.gitignore` now excludes release `.exe` files and the verify package to keep them out of the repo.
+
+- **同步上游 main 的 10 个提交。** 包括终端鼠标事件转发、VT100 线框绘制、Linux/macOS 若干修复与 CI 改进。
+- **Sync 10 upstream commits from main.** Includes terminal mouse-event forwarding, VT100 line-drawing, several Linux/macOS fixes, and CI improvements.
+
 ## [0.7.1] - 2026-08-29
 
 - **完善终端内 ZMODEM `rz` 上传（#308）。** 采用贡献者实现，补充完整关闭握手、远端跳过与握手失败反馈，并限制数据块大小以提升与 `lrzsz` 的兼容性；`sz` 下载保持不变。
