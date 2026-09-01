@@ -361,6 +361,7 @@ export component TerminalView inherits Rectangle {
     callback sftp-tree-expand(string);
     callback sftp-delete(string);
     in property <int> sftp-selected-count;          // checked-entry count (#100)
+    in property <string> sftp-single-selected-path;   // single checked entry's path, else "" (#W4)
     callback sftp-toggle-select(int);               // toggle a row's checkbox (#100)
     callback sftp-download-selected();              // download checked entries (#100)
     callback sftp-download-selected-sequential();    // one-by-one, no archive (#100.4)
@@ -2056,6 +2057,7 @@ export component TerminalView inherits Rectangle {
             tree-nodes:    root.sftp-tree-nodes;
             transfer-targets: root.sftp-transfer-targets;
             selected-count: root.sftp-selected-count;
+            single-selected-path: root.sftp-single-selected-path;
             sort-key: root.sftp-sort-key;
             sort-dir: root.sftp-sort-dir;
             tunnels: root.tunnels;

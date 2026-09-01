@@ -4698,6 +4698,7 @@ fn wire_session_callbacks(
                     VecModel::<SftpTreeNode>::default(),
                 )),
                 sftp_selected_count: 0,
+                single_selected_path: slint::SharedString::default(),
                 sftp_sort_key: "".into(),
                 sftp_sort_dir: 0,
                 sftp_available: has_sftp,

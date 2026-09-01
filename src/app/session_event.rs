@@ -260,6 +260,7 @@ pub(super) fn apply_session_event_to_window(
                 // `sorted_sftp_entries_from_model` in sftp_callbacks.rs, which
                 // re-sorts the existing rows and must preserve the selection.
                 t.sftp_selected_count = 0;
+                t.single_selected_path = slint::SharedString::default();
             });
         }
         SessionEvent::SftpStatus(msg) => {

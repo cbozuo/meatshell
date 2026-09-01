@@ -188,6 +188,7 @@ pub(super) fn clear_sftp_selection(terminals: &VecModel<TerminalState>, tab_id: 
         }
         let mut r = row.clone();
         r.sftp_selected_count = 0;
+        r.single_selected_path = slint::SharedString::default();
         terminals.set_row_data(ti, r);
         break;
     }

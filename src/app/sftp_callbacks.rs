@@ -454,13 +454,26 @@ pub(super) fn wire_sftp_callbacks(
                         em.set_row_data(i, e);
                     }
                     let mut n = 0;
+                    let mut single_path = slint::SharedString::default();
                     for ei in 0..em.row_count() {
-                        if em.row_data(ei).map(|x| x.selected).unwrap_or(false) {
-                            n += 1;
+                        if let Some(e) = em.row_data(ei) {
+                            if e.selected {
+                                n += 1;
+                                if n == 1 {
+                                    single_path = e.full_path.clone();
+                                }
+                            }
                         }
+                    }
+                    // Only meaningful when EXACTLY one row is checked (#W4): the
+                    // single-item delete dialog must not fire for 2+ checked rows,
+                    // so clear it the moment the count diverges from 1.
+                    if n != 1 {
+                        single_path = slint::SharedString::default();
                     }
                     let mut r = row.clone();
                     r.sftp_selected_count = n;
+                    r.single_selected_path = single_path;
                     tm.set_row_data(ti, r);
                 }
                 break;

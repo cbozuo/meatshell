@@ -136,6 +136,7 @@ export component SftpPanel inherits Rectangle {
     property <bool> show-modified-col: root.show-tree || (root.list-w - 36px - 120px > root.name-min);
     property <int> selected-row: -1;       // clicked/highlighted file-list row (#70)
     in property <int> selected-count;      // number of checked entries (#100)
+    in property <string> single-selected-path; // full path of the single checked entry, else "" (#W4)
     // Panel-level right-click context menu (#84). One menu for the whole list:
     // an empty `menu-target` means the click landed on whitespace, which greys
     // out the item-specific actions (download/rename/…) but keeps new/refresh.
@@ -1153,15 +1154,14 @@ export component SftpPanel inherits Rectangle {
                                     tint: #d86c6c;
                                     enabled: root.menu-target != "" || root.selected-count > 0;
                                     clicked => {
-                                        // (#sftp-delete-consistent) Mirror the top-right
-                                        // delete button: when one or more rows are checked,
-                                        // the right-click Delete removes the whole checked
-                                        // set through the SAME batch confirm dialog; only
-                                        // with no selection does it fall back to removing
-                                        // just the right-clicked item. Both paths go through
-                                        // the shared ConfirmDialog, so the dialog + its
-                                        // message are identical to the toolbar delete.
-                                        if (root.selected-count > 0) { root.delete-selected(); }
+                                        // (#W4) When exactly ONE row is checked, BOTH the
+                                        // right-click Delete and the top-right delete button
+                                        // show the SAME single-item confirmation dialog as an
+                                        // unselected right-click — never the batch dialog.
+                                        // Only 2+ checked rows trigger the batch delete; with
+                                        // no selection we remove just the right-clicked item.
+                                        if (root.selected-count == 1) { root.delete(root.single-selected-path); }
+                                        else if (root.selected-count > 1) { root.delete-selected(); }
                                         else { root.delete(root.menu-target); }
                                     }
                                 }

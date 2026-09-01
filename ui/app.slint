@@ -69,6 +69,7 @@ export struct TerminalState {
     sftp-loading: bool,
     sftp-tree-nodes: [SftpTreeNode],
     sftp-selected-count: int,   // checked entries in the SFTP panel (#100)
+    single-selected-path: string,   // full path of the single checked entry, else "" (#W4)
     sftp-sort-key: string,      // ""|"name"|"size"|"modified" (#248)
     sftp-sort-dir: int,         // 0 default / 1 asc / -1 desc (#248)
     sftp-available: bool,       // false for local/serial/telnet sessions
@@ -1839,6 +1840,7 @@ export component AppWindow inherits Window {
                         sftp-tree-nodes: term.sftp-tree-nodes;
                         sftp-transfer-targets: root.tabs;
                         sftp-selected-count: term.sftp-selected-count;
+                        sftp-single-selected-path: term.single-selected-path;
                         sftp-sort-key: term.sftp-sort-key;
                         sftp-sort-dir: term.sftp-sort-dir;
                         sftp-available: term.sftp-available;
@@ -1918,10 +1920,19 @@ export component AppWindow inherits Window {
                         // Confirm before deleting the checked entries (#100), reusing
                         // the delete-confirm dialog in batch mode.
                         sftp-delete-selected() => {
-                            root.confirm-delete-tab = term.id;
-                            root.confirm-delete-batch = true;
-                            root.confirm-delete-path = root.lang-en ? "the selected items" : "选中的项目";
-                            root.confirm-delete-open = true;
+                            // (#W4) Exactly one checked entry → open the SAME single-item
+                            // confirmation dialog as an unselected right-click delete. The
+                            // batch dialog is reserved for 2+ checked entries only.
+                            if (term.single-selected-path != "") {
+                                root.confirm-delete-tab = term.id;
+                                root.confirm-delete-path = term.single-selected-path;
+                                root.confirm-delete-open = true;
+                            } else {
+                                root.confirm-delete-tab = term.id;
+                                root.confirm-delete-batch = true;
+                                root.confirm-delete-path = root.lang-en ? "the selected items" : "选中的项目";
+                                root.confirm-delete-open = true;
+                            }
                         }
                         // Gate delete behind an in-app confirmation (#28): stash the
                         // target and open the modal; the real delete fires on confirm.
