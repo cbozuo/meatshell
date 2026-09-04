@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-# 把 target/release/meatshell.exe 打成一个可分发 zip 验证包。
+# 把 target/x86_64-pc-windows-gnu/release/meatshell.exe 打成一个可分发 zip 验证包。
 # 同时用 objdump 列出动态依赖，把非系统 DLL (libgcc_s/libstdc++/libwinpthread)
 # 从 llvm-mingw/bin 一并拷进包，避免目标机器缺运行时。
 import os, shutil, subprocess, zipfile, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EXE = os.path.join(REPO, "target", "release", "meatshell.exe")
+# 本仓库无 MSVC，交叉编译产物在 gnu target 下（不是 target/release/）
+EXE = os.path.join(REPO, "target", "x86_64-pc-windows-gnu", "release", "meatshell.exe")
 LLVM_MINGW_BIN = r"C:\llvm-mingw\bin"
 # llvm-mingw 里的 `objdump` 是无扩展 shell 脚本，Windows 无法直接 exec；
 # 用带 target 前缀的真实二进制来解析 x86_64 可执行文件的导入表。
@@ -17,7 +18,7 @@ STAGE = os.path.join(REPO, STAGE_NAME)
 ZIP_PATH = os.path.join(REPO, STAGE_NAME + ".zip")
 
 if not os.path.isfile(EXE):
-    sys.exit(f"ERROR: {EXE} 不存在，先 cargo build --release")
+    sys.exit(f"ERROR: {EXE} 不存在，先 cargo build --release --target x86_64-pc-windows-gnu")
 
 shutil.rmtree(STAGE, ignore_errors=True)
 os.makedirs(STAGE, exist_ok=True)
