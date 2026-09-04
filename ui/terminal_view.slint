@@ -1965,16 +1965,24 @@ export component TerminalView inherits Rectangle {
         // （水平 11px、垂直 11px），不再嵌 1px 子线与 bg-panel-alt 实心带。
         // 之前的 bg-panel-alt 实心带在 cmd-bar 紧邻时显形为与两侧面板同
         // 色的 4px 带，视觉权重过重；改后只露 1px 静态线 + 整段 accent 高亮。
+        // (#splitter-buffer-2026-09-04) 紧邻的 cmd-bar 底与 splitter 顶共享
+        // 一个像素边界，femtovg 在 splitter hover 切换（accent↔border-subtle）
+        // 时局部重绘会外扩 1px 擦过交界像素，露底色 term-bg 形成"鼠标移出后
+        // 闪烁"的视觉故障。在 splitter 上方 1px 嵌一个子 Rectangle 作为
+        // `bg-panel-alt` 同色缓冲带（与 cmd-bar 颜色一致），并同步跟随 splitter
+        // 的 hover/drag 状态切色：重绘外扩擦到的位置永远同色（rest 时同 cmd-bar，
+        // hover 时同 accent），splitter 真正边界稳定；1px 高度不足以让 4px 带
+        // 视觉权重再增（拆条主体仍是 5px border-subtle）。
         Rectangle {
             visible: root.sftp-available && !root.sftp-collapsed;
             x: root.sftp-dock == "left"   ? parent.sf-w
-             : root.sftp-dock == "right"  ? parent.width - parent.sf-w - 5px
+             : root.sftp-dock == "right"  ? parent.width - parent.sf-w - parent.sp
              : 0px;
             y: root.sftp-dock == "top"    ? parent.sf-h
-             : root.sftp-dock == "bottom" ? parent.height - parent.sf-h - 5px
+             : root.sftp-dock == "bottom" ? parent.height - parent.sf-h - parent.sp
              : 0px;
-            width:  root.sftp-horizontal ? 5px : parent.width;
-            height: root.sftp-horizontal ? parent.height : 5px;
+            width:  root.sftp-horizontal ? parent.sp : parent.width;
+            height: root.sftp-horizontal ? parent.height : parent.sp;
             background: divider-ta.has-hover || root.sftp-dragging
                 ? Theme.accent : Theme.border-subtle;
             divider-ta := TouchArea {
@@ -2018,6 +2026,26 @@ export component TerminalView inherits Rectangle {
                         }
                     }
                 }
+            }
+            // Buffer band: 1px 子 Rectangle，贴在 splitter 靠 central（终端）
+            // 那一侧的 1px 边界像素上。vertical 模式（dock=bottom|top）→ 缓冲
+            // 带在 splitter 顶/底边、全宽；horizontal（dock=left|right）→ 缓冲
+            // 带在 splitter 右/左边、全高。缓冲带颜色跟随 splitter 同一
+            // hover/drag 状态切色，保证 femtovg 重绘外扩永不把异色像素画进
+            // 相邻区域。
+            Rectangle {
+                visible: root.sftp-available && !root.sftp-collapsed;
+                // horizontal 模式：1px 宽的竖条沿 splitter 全高，停在 central
+                // 一侧（dock=left 时靠右、dock=right 时靠左）。
+                x: root.sftp-horizontal
+                    ? (root.sftp-dock == "right" ? 0px : parent.width - 1px)
+                    : 0px;
+                y: root.sftp-horizontal ? 0px
+                    : (root.sftp-dock == "bottom" ? -1px : parent.height);
+                width:  root.sftp-horizontal ? 1px : parent.width;
+                height: root.sftp-horizontal ? parent.height : 1px;
+                background: divider-ta.has-hover || root.sftp-dragging
+                    ? Theme.accent : Theme.bg-panel-alt;
             }
         }
 
