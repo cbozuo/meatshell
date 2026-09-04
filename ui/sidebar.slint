@@ -480,12 +480,13 @@ export component Sidebar inherits Rectangle {
       : "\u{E5CB}";                               // chevron_left (left, default)
 
     width: 220px;
-    // The sidebar root matches the inner card colour on purpose so the 10px
-    // sidebar-root margin blends with the panel — there is no visible "frame"
-    // between the splitter line and the panel content. The 1px splitter line
-    // on the inner edge (built into `app.slint`'s dock-area splitter) and the
-    // 1px panel border are the only visual boundaries (#wip7-restore).
-    background: Theme.bg-panel;
+    // (#sidebar-bg-root 2026-09-04) Root background switches from bg-panel to
+    // bg-root so the panel sits flush with the welcome sidebar's colour
+    // (#1B1D23 in dark theme, equal to Theme.window-base). Inner 10px-gutter
+    // card retains bg-panel + 1px border-subtle so the resource sub-blocks
+    // still read as elevated cards on the darker ground — same hierarchy as
+    // Welcome's outer bg-root + inner bg-panel rows.
+    background: Theme.bg-root;
     border-width: 0;
 
     // Drag from any empty area of the panel to re-dock it (the status header is

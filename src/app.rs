@@ -4723,6 +4723,10 @@ fn wire_session_callbacks(
                 sftp_available: has_sftp,
                 font_size: 0,
                 tunnels: ModelRc::from(std::rc::Rc::new(VecModel::<TunnelInfo>::default())),
+                // (#sftp-cmdbar-bottom 2026-09-04) Restored: local / WSL tabs force-collapse
+                // the SFTP panel because there's nothing to display. The
+                // dock-region then shrinks to just central (terminal + cmd-bar)
+                // and the cmd-bar sits at the true bottom edge of the dock.
                 sftp_collapsed: !has_sftp || sftp_collapsed_default,  // honour the persisted "collapse SFTP by default" pref; `compact` (side+collapsed) keeps the panel hidden entirely. Reverted after #sftp-default-expanded proved the user actually wants the default to be *collapsed* with a full toolbar, not expanded.
                 sftp_panel_height: sftp_h_default,
                 sftp_panel_width: sftp_w_default,

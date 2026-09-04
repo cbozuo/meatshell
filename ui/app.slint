@@ -1501,7 +1501,10 @@ export component AppWindow inherits Window {
                 : dock-area.sidebar-strip-outside
                     || dock-area.combine-collapsed-tools ? 0px
                 : root.sidebar-collapsed ? 36px : root.sidebar-height;
-            property <length> sp: root.zen-mode || root.sidebar-collapsed ? 0px : 4px;
+            // (#splitter-v2 2026-09-04) 间距归零：命中区跨立边界两侧（各压
+            // 2px），面板之间不再留空档，否则会透出 dock-area 底色形成灰色
+            // 空隙带。原值：root.zen-mode || root.sidebar-collapsed ? 0px : 4px
+            property <length> sp: root.zen-mode || root.sidebar-collapsed ? 0px : 0px;
             // The collapsed bar (sb-h) already reserves the bottom strip now.
             property <length> bottom-strip-h: 0px;
 
@@ -1612,26 +1615,34 @@ export component AppWindow inherits Window {
             // Theme.accent on hover / drag, mirroring the welcome sidebar's
             // `ws-split-ta.has-hover` behaviour so both docked edges respond the
             // same way (Todo 2/3, #wip6).
+            //
+            // (#splitter-v2 2026-09-04) 恢复拖拽：改为与左侧 welcome 边界完全
+            // 相同的模式 —— 4px 透明命中区跨立在边界两侧（各压 2px），1px 可见
+            // 线居中在命中区内，hover/drag 切 Theme.accent。此前 term-bg 实心
+            // 填充形成 #0e0f13 色带（#del-splitter 曾短暂整块禁用），透明背景
+            // + 跨立布局让两侧面板各自透出，无新增色带。
             Rectangle {
                 visible: !root.sidebar-collapsed;
                 // Horizontal docks → a vertical 4px hit-area at the sidebar's inner
                 // edge; vertical docks → a horizontal 4px hit-area (the visible 1px
                 // line is the child Rectangle below, centred inside this area).
-                x: root.sidebar-dock == "left"   ? parent.sb-w
-                 : root.sidebar-dock == "right"  ? parent.width - parent.sb-w - 4px
+                // (#splitter-v2) 跨立边界：命中区中心对齐侧栏边缘（左/上侧
+                // 从 sb-w/sb-h - 2px 起，右/下侧止于边界前 2px），与 welcome 侧
+                // 的 -2px 模式一致，透明背景下两侧面板各透出 2px。
+                x: root.sidebar-dock == "left"   ? parent.sb-w - 2px
+                 : root.sidebar-dock == "right"  ? parent.width - parent.sb-w - 2px
                  : 0px;
-                y: root.sidebar-dock == "top"    ? parent.sb-h
-                 : root.sidebar-dock == "bottom" ? parent.height - parent.sb-h - 4px
+                y: root.sidebar-dock == "top"    ? parent.sb-h - 2px
+                 : root.sidebar-dock == "bottom" ? parent.height - parent.sb-h - 2px
                  : 0px;
                 width:  root.sidebar-horizontal ? 4px : parent.width;
                 height: root.sidebar-horizontal ? parent.height : 4px;
-                // Filled with term-bg (NOT transparent): a transparent hit-area
-                // here shows the window-base (#1b1d23) behind the dock-area,
-                // which reads as a 4px grey gap strip between the shell's black
-                // and the sidebar (user report 2026-09-04). Painting it term-bg
-                // makes the strip blend seamlessly into the shell so only the
-                // 1px child line below stays visible (#wip8).
-                background: Theme.term-bg;
+                // (#splitter-v2) transparent like the welcome splitter: the hit
+                // area now straddles the boundary (sp=0, panes paint right up to
+                // the sidebar edge), so both sides show their own surfaces and no
+                // filler colour is needed. The earlier term-bg fill is what showed
+                // as the #0e0f13 band (#wip8 → #del-splitter → #splitter-v2).
+                background: transparent;
                 sb-split-ta := TouchArea {
                     mouse-cursor: root.sidebar-horizontal ? ew-resize : ns-resize;
                     pointer-event(ev) => {
@@ -1677,14 +1688,12 @@ export component AppWindow inherits Window {
                 // `Theme.border-subtle` so it reads as a clean static thin
                 // line matching the rest of the chrome (#wip6).
                 Rectangle {
-                    x: root.sidebar-dock == "left"   ? 0px
-                     : root.sidebar-dock == "right"  ? parent.width - 1px
-                     : 0px;
-                    y: root.sidebar-dock == "top"    ? 0px
-                     : root.sidebar-dock == "bottom" ? parent.height - 1px
-                     : 0px;
-                    width:  root.sidebar-horizontal ? 1px : parent.width;
-                    height: root.sidebar-horizontal ? parent.height : 1px;
+                    // (#splitter-v2) 居中于 4px 命中区（同 welcome 侧写法），
+                    // 不再贴侧栏内缘。
+                    x: parent.width < parent.height ? (parent.width - 1px) / 2 : 0px;
+                    y: parent.width < parent.height ? 0px : (parent.height - 1px) / 2;
+                    width:  parent.width < parent.height ? 1px : parent.width;
+                    height: parent.width < parent.height ? parent.height : 1px;
                     background: sb-split-ta.has-hover || root.sidebar-dragging
                         ? Theme.accent : Theme.border-subtle;
                 }

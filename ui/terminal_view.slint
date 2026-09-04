@@ -549,11 +549,17 @@ export component TerminalView inherits Rectangle {
         // Side-docked SFTP needs enough room for its compact action row and a
         // usable path field. Clamp legacy/saved widths below that floor instead
         // of letting Slint squeeze controls out of alignment.
-        property <length> sf-w: root.sftp-collapsed ? 36px
+        // (#sftp-cmdbar-bottom 2026-09-04) When the session type doesn't
+        // support SFTP (local PowerShell / CMD / WSL) the panel never
+        // renders, so sf-h / sf-w fall back to 0 instead of leaving a
+        // permanent 36px gap above the cmd-bar.
+        property <length> sf-w: !root.sftp-available ? 0px
+            : root.sftp-collapsed ? 36px
             : root.sftp-horizontal ? max(300px, root.sftp-panel-width)
             : root.sftp-panel-width;
-        property <length> sf-h: root.sftp-collapsed ? 36px : root.sftp-panel-height;
-        property <length> sp: root.sftp-collapsed ? 0px : 4px;
+        property <length> sf-h: !root.sftp-available ? 0px
+            : root.sftp-collapsed ? 36px : root.sftp-panel-height;
+        property <length> sp: root.sftp-collapsed || !root.sftp-available ? 0px : 5px;
         // The collapsed bar (sf-h) already reserves the bottom strip now.
         property <length> bottom-strip-h: 0px;
 
@@ -1953,28 +1959,32 @@ export component TerminalView inherits Rectangle {
             }
         }
 
-        // --- SFTP resize splitter (orientation follows the dock edge) -------
+        // --- SFTP resize splitter (#sftp-splitter-style 2026-09-04) ---------
+        // 改为与 sftp_panel 目录/文件拆分条完全同款：5px 命中区直接显示
+        // Theme.border-subtle，悬浮/拖拽切 Theme.accent；命中区向外扩 3px
+        // （水平 11px、垂直 11px），不再嵌 1px 子线与 bg-panel-alt 实心带。
+        // 之前的 bg-panel-alt 实心带在 cmd-bar 紧邻时显形为与两侧面板同
+        // 色的 4px 带，视觉权重过重；改后只露 1px 静态线 + 整段 accent 高亮。
         Rectangle {
-            visible: root.sftp-available && !root.sftp-collapsed;   // gone when collapsed (like the resource splitter)
+            visible: root.sftp-available && !root.sftp-collapsed;
             x: root.sftp-dock == "left"   ? parent.sf-w
-             : root.sftp-dock == "right"  ? parent.width - parent.sf-w - 4px
+             : root.sftp-dock == "right"  ? parent.width - parent.sf-w - 5px
              : 0px;
             y: root.sftp-dock == "top"    ? parent.sf-h
-             : root.sftp-dock == "bottom" ? parent.height - parent.sf-h - 4px
+             : root.sftp-dock == "bottom" ? parent.height - parent.sf-h - 5px
              : 0px;
-            width:  root.sftp-horizontal ? 4px : parent.width;
-            height: root.sftp-horizontal ? parent.height : 4px;
-            // Fill the 4px hit-area with the same panel tone as the command bar
-            // above and the SFTP toolbar below, so the splitter reads as a clean
-            // 1px line instead of a 4px window-background band (#wip).
-            background: Theme.bg-panel-alt;
+            width:  root.sftp-horizontal ? 5px : parent.width;
+            height: root.sftp-horizontal ? parent.height : 5px;
+            background: divider-ta.has-hover || root.sftp-dragging
+                ? Theme.accent : Theme.border-subtle;
             divider-ta := TouchArea {
-                // Hit area extends a few px past the thin visual bar so it's easy
-                // to grab without landing on the terminal / SFTP edge.
-                x: root.sftp-horizontal ? -4px : 0px;
-                y: root.sftp-horizontal ? 0px : -4px;
-                width:  root.sftp-horizontal ? 12px : parent.width;
-                height: root.sftp-horizontal ? parent.height : 12px;
+                // Hit area extends 3px past each side of the 5px bar so it's
+                // easy to grab without landing on the terminal / SFTP edge
+                // (mirrors sftp_panel.slint tree-split: x:-3 / w:+6).
+                x: root.sftp-horizontal ? -3px : 0px;
+                y: root.sftp-horizontal ? 0px : -3px;
+                width:  root.sftp-horizontal ? 11px : parent.width;
+                height: root.sftp-horizontal ? parent.height : 11px;
                 mouse-cursor: root.sftp-horizontal ? ew-resize : ns-resize;
                 pointer-event(ev) => {
                     if (ev.kind == PointerEventKind.down) {
@@ -2008,27 +2018,16 @@ export component TerminalView inherits Rectangle {
                         }
                     }
                 }
-                // 1px visible line, flush against the shell side so it hugs the
-                // panel boundary; the 4px hit-area extends outward over the SFTP
-                // panel and is filled with bg-panel-alt (matches the command bar
-                // above and the SFTP toolbar below) so no window-bg band shows
-                // (#wip). Lights up in the theme accent on hover / drag.
-                Rectangle {
-                    x: root.sftp-horizontal
-                        ? (root.sftp-dock == "right" ? 0px : parent.width - 1px)
-                        : 0px;
-                    y: root.sftp-horizontal
-                        ? 0px
-                        : (root.sftp-dock == "bottom" ? 0px : parent.height - 1px);
-                    width:  root.sftp-horizontal ? 1px : parent.width;
-                    height: root.sftp-horizontal ? parent.height : 1px;
-                    background: divider-ta.has-hover || root.sftp-dragging
-                        ? Theme.accent : Theme.border-subtle;
-                }
             }
         }
 
         // --- SFTP panel — positioned on the docked edge ---------------------
+        // (#sftp-cmdbar-bottom 2026-09-04) Wrap the panel in
+        // `sftp-available` again: local / WSL tabs no longer render the
+        // panel at all, the dock-region collapses back to just the central
+        // terminal + cmd-bar, and the cmd-bar is pinned to the true
+        // bottom of the dock-region (sf-h = 0 when sftp isn't usable so
+        // central fills 100% of the height).
         if root.sftp-available : SftpPanel {
             x: root.sftp-dock == "right"  ? parent.width - parent.sf-w : 0px;
             y: root.sftp-dock == "bottom" ? parent.height - parent.sf-h : 0px;

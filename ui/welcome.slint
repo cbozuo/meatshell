@@ -659,17 +659,32 @@ export component Welcome inherits Rectangle {
                         // Exclude hidden rows from layout spacing while a group
                         // is collapsed; keep its first row for the group header.
                         visible: session.group-header != "" || !session.collapsed;
-                        padding-top: self.visible && i > 0 ? 2px : 0px;
-                        spacing: 2px;
+                        // (#group-header-larger 2026-09-04) Wider top gap
+                        // before each row + larger internal spacing so the
+                        // group band reads as a distinct section rather than
+                        // a tight label glued to the 36px rows below it.
+                        padding-top: self.visible && i > 0 ? 6px : 0px;
+                        spacing: 8px;
                         // Group header on the first row of each group (#41).
                         // Click anywhere on it to collapse / expand the group.
                         if session.group-header != "" : Rectangle {
-                            height: 26px;
+                            // (#group-header-larger) Bumped from 26px to 38px
+                            // so the header is taller than the compact 36px
+                            // session rows and reads as a section band. The
+                            // extra height is also where the bumped font sizes
+                            // can sit centred instead of being squeezed.
+                            height: 38px;
                             // Right-click popup anchor.
                             property <length> gmx;
                             property <length> gmy;
                             HorizontalLayout {
-                                padding-top: 6px;
+                                // Centre chevron / folder glyph / name
+                                // vertically inside the new 38px row by
+                                // dropping the old 6px top padding and using
+                                // matching bottom padding so the baseline
+                                // sits centred regardless of font ascent.
+                                padding-top: 0;
+                                padding-bottom: 0;
                                 padding-left: 4px;
                                 spacing: 4px;
                                 // Collapse chevron — shown for every group, empty
@@ -678,21 +693,28 @@ export component Welcome inherits Rectangle {
                                 Text {
                                     text: session.collapsed ? "\u{E5CC}" : "\u{E5CF}";
                                     font-family: "Material Icons";
-                                    color: Theme.text-muted;
-                                    font-size: Theme.fs-sm;
+                                    // (#group-header-larger) Larger chevron
+                                    // matching the bumped text size so the
+                                    // header reads as a single visual unit.
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-md;
                                     vertical-alignment: center;
                                 }
                                 Text {
                                     text: "\u{E2C7}";   // folder glyph
                                     font-family: "Material Icons";
-                                    color: Theme.text-muted;
-                                    font-size: Theme.fs-sm;
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-md;
                                     vertical-alignment: center;
                                 }
                                 Text {
                                     text: session.group-header;
-                                    color: Theme.text-muted;
-                                    font-size: Theme.fs-xs;
+                                    // (#group-header-larger) Bumped font from
+                                    // fs-xs (11px) to fs-sm (12px) and brightened
+                                    // colour so the label carries more weight
+                                    // than the session row labels underneath.
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-sm;
                                     font-weight: 700;
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;       // fill → text stays left
