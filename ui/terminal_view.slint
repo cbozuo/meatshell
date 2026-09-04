@@ -1343,9 +1343,22 @@ export component TerminalView inherits Rectangle {
                     border-width: 1px;
                     border-color: cmd-input.has-focus ? Theme.accent : Theme.border-subtle;
                     background: Theme.bg-root;
-                    cmd-input := TextInput {
+                    // (#cmd-prompt 2026-09-04) "$" 提示符前缀:等宽字体 + accent
+                    // 色,一眼可辨"这是发给 shell 的命令";输入区右移让位。
+                    Text {
                         x: 8px;
-                        width: parent.width - 16px;
+                        width: 12px;
+                        height: parent.height;
+                        text: "$";
+                        font-family: Theme.font-mono;
+                        color: Theme.accent;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                    }
+                    cmd-input := TextInput {
+                        x: 22px;
+                        width: parent.width - 30px;
                         height: parent.height;
                         color: Theme.text-primary;
                         font-family: Theme.ui-font-family;
@@ -1465,8 +1478,8 @@ export component TerminalView inherits Rectangle {
                         }
                     }
                     if cmd-input.text == "" : Text {
-                        x: 8px;
-                        width: parent.width - 16px;
+                        x: 22px;
+                        width: parent.width - 30px;
                         height: parent.height;
                         text: @tr("Type a command, Enter to send");
                         color: Theme.text-muted;
