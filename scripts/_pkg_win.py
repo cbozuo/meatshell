@@ -8,11 +8,28 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 本仓库无 MSVC，交叉编译产物在 gnu target 下（不是 target/release/）
 EXE = os.path.join(REPO, "target", "x86_64-pc-windows-gnu", "release", "meatshell.exe")
 LLVM_MINGW_BIN = r"C:\llvm-mingw\bin"
-# llvm-mingw 里的 `objdump` 是无扩展 shell 脚本，Windows 无法直接 exec；
-# 用带 target 前缀的真实二进制来解析 x86_64 可执行文件的导入表。
-OBJDUMP = os.path.join(LLVM_MINGW_BIN, "x86_64-w64-mingw32-objdump.exe")
-if not os.path.isfile(OBJDUMP):
-    OBJDUMP = os.path.join(LLVM_MINGW_BIN, "llvm-objdump.exe")
+# (#pkg-toolchain-detect 2026-09-04) 原常量保留为首个候选：本机 C:\llvm-mingw
+# 已不存在，真正完成 x86_64-pc-windows-gnu 链接的是 MSYS2 的 mingw64（cargo 从
+# PATH 里找到它）。硬编码路径一旦缺失，第 3 步会把所有运行时 DLL 都判为"未找到"，
+# 打出来的包在目标机器上缺 libgcc_s/libstdc++/libwinpthread 而启动失败。
+# 因此逐个探测候选项，取第一个真实存在的目录。
+for _cand in [r"C:\llvm-mingw\bin",
+              r"C:\Users\Administrator\msys64\mingw64\bin",
+              r"C:\msys64\mingw64\bin"]:
+    if os.path.isdir(_cand):
+        LLVM_MINGW_BIN = _cand
+        break
+# objdump 的名字随发行版而异：llvm-mingw 用的是带 target 前缀的真实二进制（其裸
+# `objdump` 是无扩展 shell 脚本，Windows 无法直接 exec），MSYS2 则是裸 objdump.exe。
+# 逐个尝试，全缺失时提前退出，避免 subprocess 抛难懂的 FileNotFoundError。
+OBJDUMP = None
+for _name in ["x86_64-w64-mingw32-objdump.exe", "llvm-objdump.exe", "objdump.exe"]:
+    _p = os.path.join(LLVM_MINGW_BIN, _name)
+    if os.path.isfile(_p):
+        OBJDUMP = _p
+        break
+if OBJDUMP is None:
+    sys.exit(f"ERROR: 在 {LLVM_MINGW_BIN} 下找不到 objdump，无法分析动态依赖")
 STAGE_NAME = "meatshell-win-verify"
 STAGE = os.path.join(REPO, STAGE_NAME)
 ZIP_PATH = os.path.join(REPO, STAGE_NAME + ".zip")
