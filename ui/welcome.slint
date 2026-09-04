@@ -1,6 +1,5 @@
 import { Theme } from "theme.slint";
 import { PrimaryButton, GhostButton } from "widgets.slint";
-import { ScrollView } from "std-widgets.slint";
 
 export struct SessionInfo {
     id: string,
@@ -14,6 +13,10 @@ export struct SessionInfo {
     group-header: string, // set on the first row of each group → render a header
     collapsed: bool,      // group is collapsed → this session row is hidden
     builtin: bool,        // built-in local shell, not a saved server session
+    // (#session-status-dot-r2 2026-09-05) 连接状态(Rust 从 tabs 模型汇总回
+    // 写):0 无点 / 1 未连接(黄,含连接中与已断开,与标签页黄点同语义)/
+    // 2 已连接(绿)。成员行图标右上角点亮对应徽章。
+    conn-state: int,
 }
 
 // --- SessionRow ------------------------------------------------------------
@@ -49,13 +52,18 @@ component SessionRow inherits Rectangle {
     // the model) and clear it instead of leaving the card lifted.
     in property <bool> list-dragging: false;
     property <bool> system-row: root.session.builtin;
+    // (#session-tree-hierarchy 2026-09-04) 树形层级:成员行相对分组头缩进
+    // content-indent,并可选显示树形引导竖线——每行画一段(border-subtle,
+    // 位于缩进区中点),行间距 2px 时视觉上连成一条,文件树的标准画法。
+    in property <length> content-indent: 0px;
+    in property <bool> tree-guide: false;
     // Local gesture state: this instance received the press and drives the
     // drag (it keeps the pointer grab across in-place model updates).
     property <bool> pressing: false;
     property <bool> grab-dragging: false;
     property <length> grab-y;
 
-    height: root.compact ? 44px : 36px;
+    height: root.compact ? 38px : 36px;
 
     // Remember where the right-click landed so the popup can appear there.
     property <length> ctx-x;
@@ -249,6 +257,9 @@ component SessionRow inherits Rectangle {
     // highlight) while the grabbing TouchArea keeps its grab. The card stays
     // in its slot: row swaps alone convey the reorder.
     card := Rectangle {
+        // (#session-list-inset-revert 2026-09-05) 撤销 4px 内缩,恢复全宽:
+        // 内缩后与右侧资源面板的行高亮宽度不一致,左右不协调(用户反馈);
+        // 全宽时组头/成员/右侧面板三处高亮语言重新统一。
         width: parent.width;
         height: parent.height;
         border-radius: Theme.radius-sm;
@@ -259,13 +270,23 @@ component SessionRow inherits Rectangle {
         animate background { duration: 120ms; }
         animate drop-shadow-blur { duration: 120ms; }
 
+        // 树形引导竖线:先声明 → 垫在内容下层;hover 背景是 card 自身的
+        // background,不会盖住它。
+        if root.tree-guide : Rectangle {
+            x: 10px + (root.content-indent / 2) - 0.5px;
+            y: 0px;
+            width: 1px;
+            height: parent.height;
+            background: Theme.border-subtle;
+        }
+
     HorizontalLayout {
-        padding-left: 10px;
+        padding-left: 10px + root.content-indent;
         padding-right: 10px;
         spacing: root.compact ? 8px : 12px;
 
         Rectangle {
-            width: 18px; height: 18px;
+            width: 16px; height: 16px;
             y: (parent.height - self.height) / 2;
             border-radius: 3px;
             background: Theme.bg-elevated;
@@ -273,9 +294,25 @@ component SessionRow inherits Rectangle {
                 text: root.system-row ? "\u{E30A}" : "\u{E875}";   // terminal / server
                 font-family: "Material Icons";
                 color: Theme.text-secondary;
-                font-size: Theme.fs-sm;
+                font-size: 11px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+            }
+            // (#session-status-dot-r2/r3) 三态徽章:黄 = 未连接(连接中/已断开),
+            // 绿 = 已连接;压在方块右上角。
+            if root.session.conn-state == 1 : Rectangle {
+                x: 11px;
+                y: -3px;
+                width: 6px; height: 6px;
+                border-radius: 3px;
+                background: Theme.warning;
+            }
+            if root.session.conn-state == 2 : Rectangle {
+                x: 11px;
+                y: -3px;
+                width: 6px; height: 6px;
+                border-radius: 3px;
+                background: Theme.success;
             }
         }
 
@@ -428,17 +465,17 @@ export component Welcome inherits Rectangle {
         }
     }
 
-    VerticalLayout {
-        padding: root.compact ? 12px : 24px;
-        spacing: root.compact ? 12px : 20px;
-
-        // Header (title + tagline) — pinned to the top at its natural height so
-        // it can't grab the stretch space and spread apart (seen on macOS); the
-        // quick-connect card below takes all the remaining height (#dock). Hidden
-        // in compact/sidebar mode.
-        if !root.compact : VerticalLayout {
-            vertical-stretch: 0;
-            alignment: start;
+    // (#welcome-fill 2026-09-05) Quick Connect 卡改为绝对定位铺满:红/绿标
+    // 记实验证实 Rectangle 里的 VerticalLayout 会收缩到内容首选高度,且显式
+    // height / min-height 均无法覆盖(布局引擎行为),卡片高度因此缩水、与
+    // 右侧资源面板不一致。卡片直接绑定根尺寸;卡内改为固定 y 的绝对分区
+    // (头部 / 新建按钮 / 搜索 / 列表),列表高度显式绑定剩余空间。
+    if !root.compact : Rectangle {
+        x: 24px;
+        y: 24px;
+        width: parent.width - 48px;
+        height: 66px;
+        VerticalLayout {
             spacing: 4px;
             Text {
                 text: "meatshell";
@@ -453,23 +490,26 @@ export component Welcome inherits Rectangle {
                 wrap: no-wrap;
             }
         }
+    }
 
-        // Quick Connect card — always fills the remaining height so the panel
-        // doesn't jump when the first session is added (the empty placeholder
-        // stretches to fill just like the session list does) (#214).
+    // Quick Connect card — fills the remaining height so the panel doesn't
+    // jump when the first session is added (#214); see #welcome-fill above.
+    Rectangle {
+        x: root.compact ? 12px : 24px;
+        y: root.compact ? 12px : 106px;
+        width: parent.width - (root.compact ? 24px : 48px);
+        height: parent.height - (root.compact ? 24px : 130px);
+        background: Theme.bg-panel;
+        border-radius: Theme.radius-md;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+
+        // 头部行(绝对 y=12,高 30,容纳 30px 的主按钮)。
         Rectangle {
-            vertical-stretch: 1;
-            background: Theme.bg-panel;
-            border-radius: Theme.radius-md;
-            border-width: 1px;
-            border-color: Theme.border-subtle;
-
-            VerticalLayout {
-                padding: 16px;
-                spacing: 12px;
-
-                Rectangle {
-                    height: header-row.preferred-height;
+            x: 16px;
+            y: 12px;
+            width: parent.width - 32px;
+            height: 30px;
                     TouchArea {
                         enabled: root.compact;
                         mouse-cursor: move;
@@ -514,12 +554,19 @@ export component Welcome inherits Rectangle {
                     }
                 }
                 if root.compact : PrimaryButton {
+                    x: 16px;
+                    y: 50px;
+                    width: parent.width - 32px;
+                    height: 30px;
                     text: @tr("+ New session");
                     clicked => { root.new-session(); }
                 }
 
                 // Filter saved and built-in sessions by display name or host.
                 Rectangle {
+                    x: 16px;
+                    y: root.compact ? 88px : 50px;
+                    width: parent.width - 32px;
                     height: 32px;
                     border-radius: Theme.radius-sm;
                     border-width: 1px;
@@ -623,7 +670,10 @@ export component Welcome inherits Rectangle {
                 }
 
                 if sessions.length == 0 : Rectangle {
-                    vertical-stretch: 1;
+                    x: 16px;
+                    y: root.compact ? 128px : 90px;
+                    width: parent.width - 32px;
+                    height: parent.height - (root.compact ? 144px : 106px);
                     background: Theme.bg-root;
                     border-radius: Theme.radius-sm;
                     border-width: 1px;
@@ -649,79 +699,63 @@ export component Welcome inherits Rectangle {
                     }
                 }
 
-                if sessions.length > 0 : ScrollView {
-                    vertical-stretch: 1;
-                    viewport-width: self.visible-width;
-                    viewport-height: max(self.visible-height, sess-list.preferred-height);
+                if sessions.length > 0 : Rectangle {
+                    x: 16px;
+                    y: root.compact ? 128px : 90px;
+                    width: parent.width - 32px;
+                    height: parent.height - (root.compact ? 144px : 106px);
+                    clip: true;
+                    // (#session-scrollbar 2026-09-05) std ScrollView 的原生滚动
+                    // 条与全局自绘细条(终端那套)风格不一致;改为 Flickable +
+                    // 自绘 4px overlay 细条。interactive 必须关:interactive 的
+                    // Flickable 会延迟子元素 press 并在移动 8px 后抢走手势,成
+                    // 员行的拖拽重排会被误判成滚动(tabs.slint #408 同款结论);
+                    // 关闭后滚轮/触控板滚动仍由 Flickable 处理,拖滚动条走自绘。
+                    flick := Flickable {
+                        interactive: false;
+                        viewport-width: self.width;
+                        viewport-height: max(self.height, sess-list.preferred-height);
                     sess-list := VerticalLayout {
                     spacing: 0px;
                     for session[i] in sessions : VerticalLayout {
                         // Exclude hidden rows from layout spacing while a group
                         // is collapsed; keep its first row for the group header.
                         visible: session.group-header != "" || !session.collapsed;
-                        // (#group-header-larger 2026-09-04) Wider top gap
-                        // before each row + larger internal spacing so the
-                        // group band reads as a distinct section rather than
-                        // a tight label glued to the 36px rows below it.
-                        padding-top: self.visible && i > 0 ? 6px : 0px;
-                        spacing: 8px;
+                        // (#session-tree-hierarchy 2026-09-04) 层级 = 组间 ≥ 组内:
+                        // 分组之间 12px 拉开,组头与成员、成员与成员之间收紧到
+                        // 2px,配合成员缩进 + 树形引导线,父子关系一目了然。
+                        // (旧值 #group-header-larger:padding-top 6px / spacing 8px,
+                        // 组内比组间还松,层级倒置。)
+                        // (#session-tree-hierarchy-r2) 关键修复:padding-top 的
+                        // 条件补上 `group-header != ""`。旧条件只有 `i > 0`,
+                        // 会把组间距错误地加在**每个成员行迭代**上——组内成员
+                        // 之间因此多出无意义空隙。
+                        // (#session-tree-hierarchy-r5 2026-09-05) 间距恒定 8px:
+                        // r3 的"折叠 4px/展开 12px"自适应会随点击收展跳变,导致
+                        // 点击的组自身上下位移(用户反馈);固定值消除跳变。
+                        padding-top: self.visible && session.group-header != "" && i > 0 ? 8px : 0px;
+                        spacing: 2px;
                         // Group header on the first row of each group (#41).
                         // Click anywhere on it to collapse / expand the group.
                         if session.group-header != "" : Rectangle {
-                            // (#group-header-larger) Bumped from 26px to 38px
-                            // so the header is taller than the compact 36px
-                            // session rows and reads as a section band. The
-                            // extra height is also where the bumped font sizes
-                            // can sit centred instead of being squeezed.
+                            // (#session-tree-hierarchy-r4 2026-09-05) 用户反馈
+                            // 三连修:1) hover 背景恢复行本体、全宽 38px——与
+                            // 成员行同高同宽(此前内层条 4px 内缩 + 32px 高,
+                            // 高亮块比成员小一圈,与右侧面板也不协调);2) 组名
+                            // 升 fs-lg、图标 fs-xl,明确大于成员名(fs-sm);
+                            // 3) chevron 恢复双字形切换——transform-rotation
+                            // 在 Slint 1.16 软件渲染下不生效(收展图标不变),
+                            // 双字形是此前验证过的可靠路径。
                             height: 38px;
+                            border-radius: Theme.radius-sm;
+                            background: grp-ta.has-hover ? Theme.bg-hover : transparent;
+                            animate background { duration: 120ms; }
                             // Right-click popup anchor.
                             property <length> gmx;
                             property <length> gmy;
-                            HorizontalLayout {
-                                // Centre chevron / folder glyph / name
-                                // vertically inside the new 38px row by
-                                // dropping the old 6px top padding and using
-                                // matching bottom padding so the baseline
-                                // sits centred regardless of font ascent.
-                                padding-top: 0;
-                                padding-bottom: 0;
-                                padding-left: 4px;
-                                spacing: 4px;
-                                // Collapse chevron — shown for every group, empty
-                                // folders included, so they line up and can be
-                                // toggled (an empty group just expands to nothing).
-                                Text {
-                                    text: session.collapsed ? "\u{E5CC}" : "\u{E5CF}";
-                                    font-family: "Material Icons";
-                                    // (#group-header-larger) Larger chevron
-                                    // matching the bumped text size so the
-                                    // header reads as a single visual unit.
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-md;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: "\u{E2C7}";   // folder glyph
-                                    font-family: "Material Icons";
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-md;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: session.group-header;
-                                    // (#group-header-larger) Bumped font from
-                                    // fs-xs (11px) to fs-sm (12px) and brightened
-                                    // colour so the label carries more weight
-                                    // than the session row labels underneath.
-                                    color: Theme.text-secondary;
-                                    font-size: Theme.fs-sm;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                    horizontal-stretch: 1;       // fill → text stays left
-                                    horizontal-alignment: left;
-                                }
-                            }
-                            TouchArea {
+                            // TouchArea 前置声明:后面的 Text 引用它的 hover 态
+                            // (Slint 不允许向前引用 id)。
+                            grp-ta := TouchArea {
                                 mouse-cursor: pointer;
                                 // Left-click toggles collapse (any group, incl.
                                 // empty); right-click opens the group menu.
@@ -736,6 +770,42 @@ export component Welcome inherits Rectangle {
                                         gmy = self.mouse-y;
                                         grp-menu.show();
                                     }
+                                }
+                            }
+                            HorizontalLayout {
+                                padding-top: 0;
+                                padding-bottom: 0;
+                                padding-left: 4px;
+                                spacing: 4px;
+                                // Collapse chevron — shown for every group, empty
+                                // folders included, so they line up and can be
+                                // toggled (an empty group just expands to nothing).
+                                // (#session-tree-hierarchy-r4) 双字形切换(▸/▾)。
+                                Text {
+                                    text: session.collapsed ? "\u{E5CC}" : "\u{E5CF}";
+                                    font-family: "Material Icons";
+                                    color: grp-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                    animate color { duration: 120ms; }
+                                    font-size: Theme.fs-xl;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: "\u{E2C7}";   // folder glyph
+                                    font-family: "Material Icons";
+                                    color: grp-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                    animate color { duration: 120ms; }
+                                    font-size: Theme.fs-xl;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: session.group-header;
+                                    color: grp-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                    animate color { duration: 120ms; }
+                                    font-size: Theme.fs-lg;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;       // fill → text stays left
+                                    horizontal-alignment: left;
                                 }
                             }
                             grp-menu := PopupWindow {
@@ -794,9 +864,29 @@ export component Welcome inherits Rectangle {
                                 }
                             }
                         }
+                        // (#empty-group-hint 2026-09-05) 空分组展开时显示占位,
+                        // 消除"点击分组却什么都没发生"的困惑。blank 行(组头
+                        // 且 id == "")只在非搜索路径生成(session_models)。
+                        if session.group-header != "" && session.id == "" && !session.collapsed : Rectangle {
+                            height: 22px;
+                            Text {
+                                x: 10px + 18px;   // 与成员行缩进对齐
+                                y: 0;
+                                height: parent.height;
+                                text: @tr("Empty");
+                                color: Theme.text-muted;
+                                font-size: Theme.fs-xs;
+                                vertical-alignment: center;
+                            }
+                        }
                         if session.id != "" && !session.collapsed : SessionRow {
                             session: session;
                             compact: root.compact;
+                            // (#session-tree-hierarchy) 成员缩进 18px + 树形
+                            // 引导线:文本起点在组头文字右侧,竖线沿缩进区中点
+                            // 逐行延伸,构成"组头 → 成员"的父子层级。
+                            content-indent: 18px;
+                            tree-guide: true;
                             all-sessions: root.sessions;
                             // Drag-reorder is meaningless while the list is a
                             // filtered subset, and system rows can't move.
@@ -820,8 +910,52 @@ export component Welcome inherits Rectangle {
                         }
                     }
                     }
+                    }
+                    // (#session-scrollbar) 自绘滚动条:右缘 4px overlay,仅
+                    // 内容溢出时出现;按下跳转 + 拖动,hover/按住加深。
+                    if flick.viewport-height > flick.height : Rectangle {
+                        x: parent.width - 6px;
+                        y: 2px;
+                        width: 4px;
+                        height: parent.height - 4px;
+                        background: transparent;
+                        // 可视比例 = 视口高 / 内容高;拇指高按比例,设 24px 下限。
+                        property <float> ratio: flick.viewport-height > 0px
+                            ? flick.height / flick.viewport-height : 1.0;
+                        property <length> thumb-h: max(24px, self.height * self.ratio);
+                        sb-ta := TouchArea {
+                            mouse-cursor: ns-resize;
+                            pointer-event(e) => {
+                                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                    // 按下即跳:拇指中心对齐按点。
+                                    flick.viewport-y = clamp(
+                                        -(self.mouse-y - parent.thumb-h / 2)
+                                            * (flick.viewport-height / max(1px, parent.height)),
+                                        flick.height - flick.viewport-height, 0px);
+                                }
+                            }
+                            moved => {
+                                if (self.pressed) {
+                                    flick.viewport-y = clamp(
+                                        -(self.mouse-y - parent.thumb-h / 2)
+                                            * (flick.viewport-height / max(1px, parent.height)),
+                                        flick.height - flick.viewport-height, 0px);
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: parent.width;
+                            height: parent.thumb-h;
+                            // 顶部位置:内容偏移比例映射到轨道。viewport-y ≤ 0。
+                            y: flick.viewport-height > 0px
+                                ? (-flick.viewport-y) / flick.viewport-height * parent.height
+                                : 0px;
+                            border-radius: 2px;
+                            background: sb-ta.pressed || sb-ta.has-hover
+                                ? Theme.text-secondary : Theme.border-strong;
+                            animate background { duration: 120ms; }
+                        }
+                    }
                 }
-            }
         }
-    }
 }

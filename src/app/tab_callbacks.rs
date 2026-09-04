@@ -167,6 +167,9 @@ pub(super) fn wire_tab_callbacks(
             }
             if let Some(i) = idx {
                 tabs_model.remove(i);
+                // (#session-status-dot) 该会话的最后一个 tab 可能刚被关掉,
+                // 会话列表的在线状态点随之熄灭。
+                super::refresh_session_markers(&weak);
             }
             let mut tidx = None;
             for i in 0..terminals_model.row_count() {

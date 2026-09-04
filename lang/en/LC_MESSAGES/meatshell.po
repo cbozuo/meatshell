@@ -715,3 +715,7 @@ msgstr "Files"
 
 msgid "Tunnels"
 msgstr "Tunnels"
+
+# (#empty-group-hint 2026-09-05) Placeholder for an expanded empty group.
+msgid "Empty"
+msgstr "Empty"

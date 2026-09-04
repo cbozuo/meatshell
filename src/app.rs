@@ -1574,6 +1574,7 @@ fn open_window(
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
     sync_sessions_to_model(&store.borrow(), &sessions_model);
+    refresh_session_markers_win(&window);
     window.set_wsl_profiles(wsl_profile_model(&store.borrow()));
     // Cross-window propagation: when another window persists sessions / theme /
     // language it broadcasts; re-sync what this window shows. The listener only
@@ -1710,6 +1711,8 @@ fn open_window(
         title: t("新标签页", "New tab").into(),
         kind: "welcome".into(),
         connected: false,
+        session_id: "".into(),
+        state: -1,
     });
     window.set_tabs(ModelRc::from(tabs_model.clone()));
     window.set_active_tab_id("welcome".into());
@@ -3521,6 +3524,59 @@ fn handle_file_drop(_win: &AppWindow, _sftp_handles: &SftpHandles, _path: std::p
 // Model helpers
 // ---------------------------------------------------------------------------
 
+// (#session-status-dot 2026-09-05) 会话列表的在线状态点:从 tabs 模型汇总
+// 每个会话的连接三态,回写 sessions 模型的 `conn_state` 列。sessions 模型的
+// 任何重建(in_place 或 set_vec)都会把 conn_state 重置为 0,因此每次重建后
+// 都要调用;连接建立/断开/重连、tab 关闭/转移时同样。只在值变化时写行,避
+// 免搜索输入等高频路径上无谓的整表重绘。
+//
+// 三态语义(Slint 端 conn-state):0 无点 / 1 未连接(黄)/ 2 已连接(绿)。
+// 汇总规则与标签页状态点对齐(connected ? 绿 : 黄):任一 tab 已连接 → 2;
+// 会话有 tab 但没有已连接的(连接中或已断开)→ 1;无 tab → 0。
+// (#session-status-dot-r3 2026-09-05) 断开态从"无点"改为黄点:用户反馈
+// 连接失败/断开后列表无任何标记,而标签页仍亮黄点,两侧语义应一致。
+// (#session-status-dot-r2 2026-09-05) 二态升级三态:TabInfo 新增 state 字段
+// (0 连接中/1 已连接/2 断开),连接中黄点也能在列表联动。
+pub(crate) fn refresh_session_markers_win(window: &AppWindow) {
+    use slint::Model as _;
+    let tabs = window.get_tabs();
+    let mut best: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
+    for i in 0..tabs.row_count() {
+        if let Some(t) = tabs.row_data(i) {
+            if t.kind.as_str() != "terminal" {
+                continue;
+            }
+            let score = match t.state {
+                1 => 2,      // connected → 绿
+                0 | 2 => 1,  // connecting / closed → 黄(与标签页黄点同语义)
+                _ => 0,      // unknown → 无点
+            };
+            let entry = best.entry(t.session_id.to_string()).or_insert(0);
+            if score > *entry {
+                *entry = score;
+            }
+        }
+    }
+    let sessions = window.get_sessions();
+    let Some(model) = sessions.as_any().downcast_ref::<VecModel<SessionInfo>>() else {
+        return;
+    };
+    for i in 0..model.row_count() {
+        let Some(mut row) = model.row_data(i) else { continue };
+        let want = *best.get(row.id.as_str()).unwrap_or(&0);
+        if row.conn_state != want {
+            row.conn_state = want;
+            model.set_row_data(i, row);
+        }
+    }
+}
+
+fn refresh_session_markers(window: &slint::Weak<AppWindow>) {
+    if let Some(w) = window.upgrade() {
+        refresh_session_markers_win(&w);
+    }
+}
+
 fn sync_sessions_for_window(
     window: &slint::Weak<AppWindow>,
     store: &ConfigStore,
@@ -3536,6 +3592,8 @@ fn sync_sessions_for_window(
     if !refresh_session_rows_in_place(store, model, &query) {
         window.set_sessions_revision(window.get_sessions_revision() + 1);
     }
+    // (#session-status-dot) 重建把 connected 重置了,补回在线状态点。
+    refresh_session_markers_win(&window);
 }
 
 /// Parse the batch-import textarea (#150). Each non-empty, non-`#` line is
@@ -3601,6 +3659,7 @@ fn wire_session_callbacks(
                     &sessions_model,
                     query.as_str(),
                 );
+                refresh_session_markers_win(&window);
             }
         });
     }
@@ -4022,6 +4081,8 @@ fn wire_session_callbacks(
                     .map(|w| w.get_host_search_query().to_string())
                     .unwrap_or_default();
                 let in_place = refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query);
+                // (#session-status-dot) in_place 重建同样会重置 connected。
+                refresh_session_markers(&weak);
                 if !in_place {
                     // The hop changed the row count (e.g. a cross-group hop
                     // emptied the ungrouped section): the set_vec rebuild
@@ -4674,6 +4735,8 @@ fn wire_session_callbacks(
                 title: tab_title.into(),
                 kind: "terminal".into(),
                 connected: false,
+                session_id: id.clone().into(),
+                state: 0,
             });
             // Each session keeps its own SFTP collapse state + sizes, seeded from
             // the global defaults (the "collapse SFTP by default" pref and the
@@ -5674,6 +5737,26 @@ fn wire_key_input(
                         ctx.tab_statuses.lock().unwrap().get_mut(tab_id.as_str())
                     {
                         st.state = 0;
+                    }
+                    // (#session-status-dot-r2) TabInfo 三态同步回"连接中",
+                    // 会话列表状态点转为黄色。
+                    if let Some(w) = ctx.weak.upgrade() {
+                        use slint::Model as _;
+                        let tabs = w.get_tabs();
+                        if let Some(model) =
+                            tabs.as_any().downcast_ref::<slint::VecModel<TabInfo>>()
+                        {
+                            for i in 0..model.row_count() {
+                                if let Some(mut row) = model.row_data(i) {
+                                    if row.id == tab_id {
+                                        row.state = 0;
+                                        model.set_row_data(i, row);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        refresh_session_markers_win(&w);
                     }
                     // Fresh session: the first OSC 7 after reconnect follows.
                     ctx.sftp_last_cwd.lock().unwrap().remove(tab_id.as_str());

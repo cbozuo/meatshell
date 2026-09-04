@@ -712,3 +712,7 @@ msgstr "已用"
 
 msgid "Vendor"
 msgstr "厂商"
+
+# (#empty-group-hint 2026-09-05) 空分组占位提示。
+msgid "Empty"
+msgstr "空分组"

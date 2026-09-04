@@ -7,6 +7,13 @@ export struct TabInfo {
     title_len: int,
     kind: string,   // "welcome" | "terminal"
     connected: bool,
+    // (#session-status-dot 2026-09-05) 该 tab 归属的会话 id(welcome tab 为
+    // "")。会话列表的在线状态点据此汇总:任一 connected tab 存在即点亮。
+    session_id: string,
+    // (#session-status-dot-r2 2026-09-05) 连接三态:0 连接中 / 1 已连接 /
+    // 2 已断开(welcome = -1)。会话列表状态点三态联动的数据源:绿 = 任一
+    // tab 已连接,黄 = 无已连接但有连接中。
+    state: int,
 }
 
 // --- SingleTab -------------------------------------------------------------

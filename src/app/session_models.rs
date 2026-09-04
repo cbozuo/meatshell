@@ -194,6 +194,7 @@ fn build_session_rows(
         group_header: group.into(),
         collapsed: group_is_collapsed(group),
         builtin: false,
+        conn_state: 0,
     };
 
     let mut rows: Vec<SessionInfo> = Vec::new();
@@ -214,6 +215,7 @@ fn build_session_rows(
             group_header: if i == 0 { "system".into() } else { "".into() },
             collapsed: group_is_collapsed("system"),
             builtin: true,
+            conn_state: 0,
         });
     }
     for group in &display_groups {
@@ -258,6 +260,7 @@ fn build_session_rows(
                     },
                     collapsed: group_is_collapsed(group),
                     builtin: false,
+                    conn_state: 0,
                 });
             }
         }

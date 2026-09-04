@@ -81,11 +81,16 @@ pub(super) fn apply_session_event_to_window(
             request_tab_render_from_ui(win.as_weak(), tab_id, bufs, gates);
         }
         SessionEvent::Connected => {
-            update_tab(&|t| t.connected = true);
+            update_tab(&|t| {
+                t.connected = true;
+                t.state = 1;   // (#session-status-dot-r2) 三态联动
+            });
             update_terminal(&|t| t.status = crate::i18n::t("已连接", "Connected").into());
             if let Some(st) = statuses.lock().unwrap().get_mut(tab_id) {
                 st.state = 1;
             }
+            // (#session-status-dot) 会话列表的在线状态点跟随点亮。
+            super::refresh_session_markers_win(win);
             if win.get_active_tab_id().as_str() == tab_id
                 && (sidebar_updates_visible(win) || win.get_system_info_window_open())
             {
@@ -112,13 +117,18 @@ pub(super) fn apply_session_event_to_window(
                 local,
                 local_net_hist,
             );
-            update_tab(&|t| t.connected = false);
+            update_tab(&|t| {
+                t.connected = false;
+                t.state = 2;   // (#session-status-dot-r2) 三态联动
+            });
             update_terminal(&|t| {
                 t.status = format!("{} — {reason}", crate::i18n::t("已断开", "Disconnected")).into()
             });
             if let Some(st) = statuses.lock().unwrap().get_mut(tab_id) {
                 st.state = 2;
             }
+            // (#session-status-dot) 会话列表的在线状态点跟随熄灭。
+            super::refresh_session_markers_win(win);
             if win.get_active_tab_id().as_str() == tab_id
                 && (sidebar_updates_visible(win) || win.get_system_info_window_open())
             {

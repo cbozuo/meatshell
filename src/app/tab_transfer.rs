@@ -394,6 +394,11 @@ pub(super) fn move_tab_between_windows(
     };
     let tab_row = src.tabs_model.row_data(tab_i).unwrap();
     src.tabs_model.remove(tab_i);
+    // (#session-status-dot) 源窗口会话列表的在线状态点随之熄灭;目标窗口在
+    // 函数尾部行落地后再刷(dst 的 sessions 模型 connected 默认 false)。
+    if let Some(w) = src.weak.upgrade() {
+        super::refresh_session_markers_win(&w);
+    }
     let term_row = {
         let mut row = None;
         let mut idx = None;
@@ -449,6 +454,10 @@ pub(super) fn move_tab_between_windows(
     dst.tabs_model.push(tab_row);
     if let Some(row) = term_row {
         dst.terminals_model.push(row);
+    }
+    // (#session-status-dot) 目标窗口的会话列表现在也要点亮该会话。
+    if let Some(w) = dst.weak.upgrade() {
+        super::refresh_session_markers_win(&w);
     }
     if let Some(w) = dst.weak.upgrade() {
         refresh_panes(
