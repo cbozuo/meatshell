@@ -614,3 +614,9 @@ msgstr "打包下载"
 
 msgid "System information"
 msgstr "系统信息"
+
+msgid "Files"
+msgstr "文件"
+
+msgid "Tunnels"
+msgstr "隧道"
