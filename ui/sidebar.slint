@@ -505,18 +505,18 @@ export component Sidebar inherits Rectangle {
     }
 
     // --- Vertical stack (docked left/right) --------------------------------
-    // Original layout: the panel card sits 10px in from each side, leaving a
-    // 10px bg-panel gutter that reads as window-frame and a 1px border-subtle
-    // stroke as the visible edge. The card is intentionally NOT flush with
-    // the splitter line — that gap matches the welcome sidebar's "card on
-    // window" rhythm and is what the user asked to restore after #wip6's
-    // attempt to dock-flush the card introduced a visible grey block between
-    // the shell and the sidebar root (#wip7-restore).
+    // The panel card sits 12px in from each side, leaving a 12px bg-panel
+    // gutter that reads as window-frame and a 1px border-subtle stroke as the
+    // visible edge. The card is intentionally NOT flush with the splitter
+    // line — the 12px gutter matches the welcome sidebar's compact padding
+    // (welcome.slint `padding: root.compact ? 12px : 24px`) so both docked
+    // panels show identical gaps on all four sides (#panel-gap-symmetry,
+    // #wip7-restore).
     if !root.lay-horizontal : Rectangle {
-        x: 10px;
-        y: 10px;
-        width: parent.width - 20px;
-        height: parent.height - 20px;
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        height: parent.height - 24px;
         background: Theme.bg-panel;
         border-radius: Theme.radius-md;
         border-width: 1px;
@@ -562,16 +562,14 @@ export component Sidebar inherits Rectangle {
     }
 
     // --- Horizontal row (docked top/bottom) --------------------------------
-    // Original 10px-in-from-each-side layout, identical to the vertical card
-    // above. The dock-flush attempt in #wip6/#wip7 introduced a visible grey
-    // gap between the shell and the sidebar root, so the card goes back to
-    // sitting on a uniform 10px gutter with its 1px border-subtle stroke as
-    // the visible edge (#wip7-restore).
+    // Same uniform 12px gutter as the vertical card above (and the welcome
+    // sidebar's compact padding) so every dock orientation shows identical
+    // boundary gaps (#panel-gap-symmetry, #wip7-restore).
     if root.lay-horizontal : Rectangle {
-        x: 10px;
-        y: 10px;
-        width: parent.width - 20px;
-        height: parent.height - 20px;
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        height: parent.height - 24px;
         background: Theme.bg-panel;
         border-radius: Theme.radius-md;
         border-width: 1px;
