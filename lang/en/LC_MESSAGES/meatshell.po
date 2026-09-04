@@ -617,3 +617,101 @@ msgstr "Download as archive"
 
 msgid "System information"
 msgstr "System information"
+
+# (#i18n-sweep 2026-09-04) Identity entries for strings added to the zh catalog
+# (keeps both locales symmetric; English source falls back to the msgid anyway).
+msgid "-L: local port → target reached from the server; -R: server port → target reached from here; -D: local SOCKS5 proxy"
+msgstr "-L: local port → target reached from the server; -R: server port → target reached from here; -D: local SOCKS5 proxy"
+
+msgid "Available"
+msgstr "Available"
+
+msgid "CPU usage"
+msgstr "CPU usage"
+
+msgid "Cache"
+msgstr "Cache"
+
+msgid "Cores"
+msgstr "Cores"
+
+msgid "Driver"
+msgstr "Driver"
+
+msgid "Filesystems"
+msgstr "Filesystems"
+
+msgid "Free"
+msgstr "Free"
+
+msgid "Frequency"
+msgstr "Frequency"
+
+msgid "Idle"
+msgstr "Idle"
+
+msgid "Merge panes"
+msgstr "Merge panes"
+
+msgid "Mount point"
+msgstr "Mount point"
+
+msgid "Network interfaces"
+msgstr "Network interfaces"
+
+msgid "No data"
+msgstr "No data"
+
+msgid "No match"
+msgstr "No match"
+
+msgid "No tunnels"
+msgstr "No tunnels"
+
+msgid "Overview"
+msgstr "Overview"
+
+msgid "Receive speed"
+msgstr "Receive speed"
+
+msgid "Received"
+msgstr "Received"
+
+msgid "Replace"
+msgstr "Replace"
+
+msgid "Replace all"
+msgstr "Replace all"
+
+msgid "SFTP not available"
+msgstr "SFTP not available"
+
+msgid "Send speed"
+msgstr "Send speed"
+
+msgid "Sent"
+msgstr "Sent"
+
+msgid "Stop"
+msgstr "Stop"
+
+msgid "System"
+msgstr "System"
+
+msgid "Total"
+msgstr "Total"
+
+msgid "Usage"
+msgstr "Usage"
+
+msgid "Used"
+msgstr "Used"
+
+msgid "Vendor"
+msgstr "Vendor"
+
+msgid "Files"
+msgstr "Files"
+
+msgid "Tunnels"
+msgstr "Tunnels"

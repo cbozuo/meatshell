@@ -620,3 +620,95 @@ msgstr "文件"
 
 msgid "Tunnels"
 msgstr "隧道"
+
+# (#i18n-sweep 2026-09-04) 补齐 ui/*.slint 中 @tr() 在用但词库缺失的词条:
+# 此前这些串在中文界面下回退英文(同 d0cd082 的 Files/Tunnels 问题)。
+msgid "-L: local port → target reached from the server; -R: server port → target reached from here; -D: local SOCKS5 proxy"
+msgstr "-L：本地端口 → 从服务器侧访问目标；-R：服务器端口 → 从本机侧访问目标；-D：本地 SOCKS5 代理"
+
+msgid "Available"
+msgstr "可用"
+
+msgid "CPU usage"
+msgstr "CPU 使用率"
+
+msgid "Cache"
+msgstr "缓存"
+
+msgid "Cores"
+msgstr "核心数"
+
+msgid "Driver"
+msgstr "驱动"
+
+msgid "Filesystems"
+msgstr "文件系统"
+
+msgid "Free"
+msgstr "可用"
+
+msgid "Frequency"
+msgstr "频率"
+
+msgid "Idle"
+msgstr "空闲"
+
+msgid "Merge panes"
+msgstr "合并窗格"
+
+msgid "Mount point"
+msgstr "挂载点"
+
+msgid "Network interfaces"
+msgstr "网络接口"
+
+msgid "No data"
+msgstr "暂无数据"
+
+msgid "No match"
+msgstr "无匹配"
+
+msgid "No tunnels"
+msgstr "暂无隧道"
+
+msgid "Overview"
+msgstr "概览"
+
+msgid "Receive speed"
+msgstr "接收速率"
+
+msgid "Received"
+msgstr "已接收"
+
+msgid "Replace"
+msgstr "替换"
+
+msgid "Replace all"
+msgstr "全部替换"
+
+msgid "SFTP not available"
+msgstr "SFTP 不可用"
+
+msgid "Send speed"
+msgstr "发送速率"
+
+msgid "Sent"
+msgstr "已发送"
+
+msgid "Stop"
+msgstr "停止"
+
+msgid "System"
+msgstr "系统"
+
+msgid "Total"
+msgstr "总计"
+
+msgid "Usage"
+msgstr "使用率"
+
+msgid "Used"
+msgstr "已用"
+
+msgid "Vendor"
+msgstr "厂商"
