@@ -2395,21 +2395,44 @@ fn parse_monitor_block(
     }
 
     let cpu_percent = if have_cpu {
-        let result = match *prev {
-            Some((ptotal, pidle)) => {
-                let dt = cpu_total.saturating_sub(ptotal);
-                let di = cpu_idle.saturating_sub(pidle);
-                if dt > 0 {
-                    (1.0 - di as f32 / dt as f32).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            }
-            None => 0.0,
+        // Snapshot prev's deltas BEFORE updating `*prev`, otherwise the
+        // log below would read the post-write prev and report dt = di = 0.
+        let (prev_total, prev_idle) = prev.as_ref().copied().unwrap_or((0, 0));
+        let had_prev = prev.is_some();
+        let dt = cpu_total.saturating_sub(prev_total);
+        let di = cpu_idle.saturating_sub(prev_idle);
+        let result = if had_prev && dt > 0 {
+            (1.0 - di as f32 / dt as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
         };
+        // (#sftp-…) Field diagnostics for the "remote CPU always 0%" complaint:
+        // enabled only when the user sets RUST_LOG=meatshell=debug (the binary's
+        // default filter is `warn`, so the release build stays quiet). Output the
+        // six values that decide whether the sample will report a meaningful CPU
+        // %, so the next run can be inspected without rebuilding.
+        tracing::debug!(
+            target: "meatshell::ssh::mon",
+            have_cpu,
+            prev_set = prev.is_some(),
+            cpu_total,
+            cpu_idle,
+            dt,
+            di,
+            result,
+            "ssh monitor cpu sample"
+        );
         *prev = Some((cpu_total, cpu_idle));
         result
     } else {
+        // No `cpu ` line in this block — most likely awk filtered it out, or
+        // /proc/stat was unreadable. Surface it so a debug run tells us
+        // immediately instead of looking like the parser is fine.
+        tracing::debug!(
+            target: "meatshell::ssh::mon",
+            have_cpu,
+            "ssh monitor sample had no cpu line"
+        );
         0.0
     };
 
@@ -3276,6 +3299,114 @@ mod monitor_hardening_tests {
         assert_eq!(procs[0].pid, 42);
         assert_eq!(procs[0].user, "root");
         assert_eq!(procs[0].command, "java -jar demo.jar");
+    }
+
+    // CPU 0% always on the "server resources" panel was hard to chase from the
+    // algorithm alone; the four tests below pin the four quadrants of the
+    // `result = 1 - di/dt` formula so the next time "CPU stuck at 0%" shows up
+    // we can immediately tell whether the parser is at fault or the data is.
+    // All blocks share the same minimal non-CPU line set so each test exercises
+    // only the CPU branch (#remote-cpu-zero).
+    fn block_with_cpu(cpu_line: &str) -> String {
+        format!("{cpu_line}\nMemTotal: 1000 kB\nMemAvailable: 500 kB\n")
+    }
+
+    fn cpu_percent_of(event: super::SessionEvent) -> f32 {
+        match event {
+            super::SessionEvent::ResourceStats { cpu_percent, .. } => cpu_percent,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cpu_percent_first_sample_reports_zero_without_baseline() {
+        // prev = None → no baseline, first sample must report 0% regardless of
+        // the actual numbers (matches the documented "first sample 0%" rule).
+        let mut prev = None;
+        let mut prev_net = HashMap::new();
+        let mut at = Instant::now();
+        let event = parse_monitor_block(
+            &block_with_cpu("cpu 100 0 0 50"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        assert_eq!(cpu_percent_of(event), 0.0);
+        assert!(prev.is_some(), "first sample must seed the baseline");
+    }
+
+    #[test]
+    fn cpu_percent_second_sample_fully_busy_is_one() {
+        // total grew from 150 → 250 (dt=100), idle stayed at 50 (di=0) → 100% busy.
+        let mut prev = None;
+        let mut prev_net = HashMap::new();
+        let mut at = Instant::now();
+        let _ = parse_monitor_block(
+            &block_with_cpu("cpu 100 0 0 50"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        let event = parse_monitor_block(
+            &block_with_cpu("cpu 200 0 0 50"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        assert!((cpu_percent_of(event) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cpu_percent_second_sample_fully_idle_is_zero() {
+        // Only the idle counter advances: user stays at 100 while idle goes
+        // 50 → 150. dt = 250-150 = 100, di = 100 → 0% busy. (A sample where
+        // user *also* grows is NOT idle — see the half-busy case below; that
+        // was the arithmetic slip behind my first version of this test.)
+        let mut prev = None;
+        let mut prev_net = HashMap::new();
+        let mut at = Instant::now();
+        let _ = parse_monitor_block(
+            &block_with_cpu("cpu 100 0 0 50"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        let event = parse_monitor_block(
+            &block_with_cpu("cpu 100 0 0 150"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        assert_eq!(cpu_percent_of(event), 0.0);
+    }
+
+    #[test]
+    fn cpu_percent_second_sample_half_busy_is_half() {
+        // Busy and idle grow by the same amount: user 100 → 200 (+100) and
+        // idle 50 → 150 (+100). dt = 350-150 = 200, di = 100 → 50% busy.
+        let mut prev = None;
+        let mut prev_net = HashMap::new();
+        let mut at = Instant::now();
+        let _ = parse_monitor_block(
+            &block_with_cpu("cpu 100 0 0 50"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        let event = parse_monitor_block(
+            &block_with_cpu("cpu 200 0 0 150"),
+            &mut prev,
+            &mut prev_net,
+            &mut at,
+        )
+        .unwrap();
+        assert!((cpu_percent_of(event) - 0.5).abs() < 1e-6);
     }
 }
 

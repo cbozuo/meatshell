@@ -12,7 +12,7 @@
 use super::layout::{Dir, Layout, Leaf, Node, PaneRect, SplitterRect};
 
 /// Visible thickness of a splitter handle, in px.
-pub const SPLITTER: f32 = 6.0;
+pub const SPLITTER: f32 = 4.0;
 /// Smallest a pane is allowed to get along the split axis when dragging, in px.
 const MIN_PANE: f32 = 80.0;
 
@@ -478,9 +478,11 @@ mod tests {
         let (panes, splits) = l.flatten(0.0, 0.0, 1006.0, 600.0);
         assert_eq!(panes.len(), 2);
         assert_eq!(splits.len(), 1);
-        // (1006 - 6) * 0.5 = 500 each.
-        assert_eq!(panes[0].w, 500.0);
-        assert_eq!(panes[1].x, 506.0);
+        // (1006 - 4) * 0.5 = 501 each — `SPLITTER` was 6 before the splitter-
+        // width unification (see `SPLITTER` doc); the test only checks the
+        // *halving* contract, not the constant.
+        assert_eq!(panes[0].w, 501.0);
+        assert_eq!(panes[1].x, 505.0);
         assert!(splits[0].vertical);
         // 'b' moved out of pane 1 into the new pane; focus followed.
         assert_eq!(l.leaf(1).unwrap().tabs, vec!["a".to_string()]);

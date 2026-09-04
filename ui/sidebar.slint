@@ -480,6 +480,11 @@ export component Sidebar inherits Rectangle {
       : "\u{E5CB}";                               // chevron_left (left, default)
 
     width: 220px;
+    // The sidebar root matches the inner card colour on purpose so the 10px
+    // sidebar-root margin blends with the panel — there is no visible "frame"
+    // between the splitter line and the panel content. The 1px splitter line
+    // on the inner edge (built into `app.slint`'s dock-area splitter) and the
+    // 1px panel border are the only visual boundaries (#wip7-restore).
     background: Theme.bg-panel;
     border-width: 0;
 
@@ -499,6 +504,13 @@ export component Sidebar inherits Rectangle {
     }
 
     // --- Vertical stack (docked left/right) --------------------------------
+    // Original layout: the panel card sits 10px in from each side, leaving a
+    // 10px bg-panel gutter that reads as window-frame and a 1px border-subtle
+    // stroke as the visible edge. The card is intentionally NOT flush with
+    // the splitter line — that gap matches the welcome sidebar's "card on
+    // window" rhythm and is what the user asked to restore after #wip6's
+    // attempt to dock-flush the card introduced a visible grey block between
+    // the shell and the sidebar root (#wip7-restore).
     if !root.lay-horizontal : Rectangle {
         x: 10px;
         y: 10px;
@@ -542,14 +554,18 @@ export component Sidebar inherits Rectangle {
             }
             Rectangle { height: 1px; background: Theme.border-subtle; }
             DiskBlock { vertical-stretch: 1; disks: root.disks; }
-            Text {
-                text: "meatshell v" + root.app-version;
-                color: Theme.text-muted; font-size: Theme.fs-xs; horizontal-alignment: center;
-            }
+            // The bottom "meatshell vX.Y.Z" version footer was removed — the
+            // release info lives in the welcome About card and a one-shot
+            // update-check banner instead (#ui-version-footer).
         }
     }
 
     // --- Horizontal row (docked top/bottom) --------------------------------
+    // Original 10px-in-from-each-side layout, identical to the vertical card
+    // above. The dock-flush attempt in #wip6/#wip7 introduced a visible grey
+    // gap between the shell and the sidebar root, so the card goes back to
+    // sitting on a uniform 10px gutter with its 1px border-subtle stroke as
+    // the visible edge (#wip7-restore).
     if root.lay-horizontal : Rectangle {
         x: 10px;
         y: 10px;

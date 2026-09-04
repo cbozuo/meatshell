@@ -307,7 +307,7 @@ msgid "Find"
 msgstr "查找"
 
 msgid "Processes"
-msgstr "进程"
+msgstr "进程信息"
 
 msgid "User"
 msgstr "用户"
@@ -611,3 +611,6 @@ msgstr "逐个下载"
 
 msgid "Download as archive"
 msgstr "打包下载"
+
+msgid "System information"
+msgstr "系统信息"

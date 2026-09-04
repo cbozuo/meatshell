@@ -721,9 +721,25 @@ fn open_window(
         let weak = proc_win.as_weak();
         proc_win.on_win_resize_se(move || {
             if let Some(w) = weak.upgrade() {
+                // Snapshot outer_size *before* the OS drag so we can detect whether
+                // the user actually moved the grip (and not just clicked). If they
+                // did, re-apply the new size to the Slint window after the drag
+                // returns — without this Slint's render region keeps the pre-drag
+                // size and the freshly-grown bottom-right area renders blank until
+                // the next paint (#win-resize-blank-corner).
+                let pre = w
+                    .window()
+                    .with_winit_window(|ww| ww.outer_size())
+                    .unwrap_or_default();
                 w.window().with_winit_window(|ww| {
                     let _ = ww.drag_resize_window(ResizeDirection::SouthEast);
                 });
+                if let Some(post) = w.window().with_winit_window(|ww| ww.outer_size()) {
+                    if post.width != pre.width || post.height != pre.height {
+                        w.window()
+                            .set_size(slint::LogicalSize::new(post.width as f32, post.height as f32));
+                    }
+                }
                 schedule_slint_pointer_ungrab(weak.clone());
             }
         });
@@ -810,7 +826,10 @@ fn open_window(
             }
             main.set_system_info_window_open(true);
             main.invoke_refresh_sidebar();
-            sw.set_host(main.get_conn_host());
+            // Match the proc window's titlebar format ("进程信息 - root@host") by
+            // passing the full user@host connection state instead of the bare IP
+            // — keeps both detachable windows' top-left label identical (#window-title-host).
+            sw.set_host(main.get_connection_state());
             sw.set_connection_state(main.get_connection_state());
             sw.set_resource_title(main.get_resource_title());
             sync_system_info_theme(&main, &sw);
@@ -4704,7 +4723,7 @@ fn wire_session_callbacks(
                 sftp_available: has_sftp,
                 font_size: 0,
                 tunnels: ModelRc::from(std::rc::Rc::new(VecModel::<TunnelInfo>::default())),
-                sftp_collapsed: !has_sftp || sftp_collapsed_default,
+                sftp_collapsed: !has_sftp || sftp_collapsed_default,  // honour the persisted "collapse SFTP by default" pref; `compact` (side+collapsed) keeps the panel hidden entirely. Reverted after #sftp-default-expanded proved the user actually wants the default to be *collapsed* with a full toolbar, not expanded.
                 sftp_panel_height: sftp_h_default,
                 sftp_panel_width: sftp_w_default,
                 sftp_saved_height: sftp_h_default,

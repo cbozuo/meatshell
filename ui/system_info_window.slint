@@ -222,11 +222,13 @@ export component SystemInfoWindow inherits Window {
                 }
             }
             HorizontalLayout {
-                padding-left: 12px;
+                padding-left: 8px;
                 spacing: 8px;
-                Image { source: @image-url("../assets/icon.png"); width: 16px; height: 16px; vertical-alignment: center; }
+                // Left-corner icon removed; the title text alone starts the
+                // bar, padded in from the edge to align with the panel below
+                // (#sftp-info-title).
                 Text {
-                    text: @tr("System information") + (root.host != "" ? "  -  " + root.host : "");
+                    text: @tr("System information") + (root.host != "" ? " - " + root.host : "");
                     color: Theme.text-secondary;
                     font-size: Theme.fs-sm;
                     vertical-alignment: center;

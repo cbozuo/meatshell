@@ -261,11 +261,15 @@ export component SftpPanel inherits Rectangle {
                 padding-bottom: 6px;
                 spacing: 4px;
 
-                // Dedicated drag handle to re-dock the panel. The toolbar is full
-                // of controls, so dragging "empty space" is unreliable; this grip
-                // is always grabbable and reports window-space coords (#dock).
+                // (#collapsed-folder) Collapse/expand toggle for the SFTP panel. The
+                // icon is the folder_open glyph in *both* states — only the tooltip
+                // changes ("Expand panel" while collapsed, "Collapse panel" while
+                // expanded). Always present so both states share a consistent
+                // left-edge affordance; the wrapper HorizontalLayout below dims every
+                // other toolbar control while collapsed, so only this stays bright.
+                // Click toggles `root.collapsed` both ways; re-docking is handled by
+                // the dock background (dock-bg), so this grip is a pure toggle button.
                 Rectangle {
-                    visible: !root.collapsed;   // hide the drag grip whenever the panel is collapsed/minimised; it must only appear in the expanded panel (#sftp-tooltips)
                     width: 16px;
                     // Vertically centred like the other toolbar icons. Tooltips are
                     // now plain Rectangles rendered below the button, so no 20px
@@ -273,19 +277,17 @@ export component SftpPanel inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     height: 22px;
                     grip-ta := TouchArea {
-                        mouse-cursor: move;
-                        moved => {
-                            root.dock-drag-move(self.absolute-position.x + self.mouse-x,
-                                                self.absolute-position.y + self.mouse-y);
-                        }
-                        pointer-event(ev) => {
-                            if (ev.kind == PointerEventKind.up) { root.dock-drag-end(); }
-                        }
+                        // Pure collapse/expand toggle in both states; re-docking is
+                        // handled by the dock background (dock-bg).
+                        mouse-cursor: pointer;
+                        clicked => { root.toggle-collapsed(); }
                     }
                     Text {
-                        text: "\u{E945}";   // drag_indicator
+                        text: "\u{E2C7}";   // folder_open — same icon in both states
                         font-family: "Material Icons";
-                        color: grip-ta.has-hover ? Theme.text-secondary : Theme.text-muted;
+                        // Always bright (the panel's left-edge affordance);
+                        // brightens to text-secondary on hover for feedback.
+                        color: grip-ta.has-hover ? Theme.text-secondary : Theme.text-primary;
                         font-size: 16px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -294,7 +296,12 @@ export component SftpPanel inherits Rectangle {
                     }
                     // Hover tooltip (#sftp-tooltips): shown on hover via `if`, below
                     // the button. No PopupWindow show()/close() → no flicker.
-                    if grip-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: @tr("Drag to re-dock"); align-left: true; anchor-width: 16px; }
+                    if grip-ta.has-hover : SftpTooltip {
+                        y: -self.height - 3px;
+                        label: root.collapsed ? @tr("Expand panel") : @tr("Collapse panel");
+                        align-left: true;
+                        anchor-width: 16px;
+                    }
                 }
 
                 // Small transparent spacer between the dock drag grip and the Files
@@ -308,6 +315,15 @@ export component SftpPanel inherits Rectangle {
                     background: transparent;
                 }
 
+                // (#collapsed-folder) Dim every toolbar control while collapsed so the
+                // folder handle on the left reads as the only "live" affordance. The
+                // dock-grip Rectangle above stays at full opacity (it's outside this
+                // wrapper), and the spacer above is a 6px transparent gap that only
+                // exists in the expanded state. Everything below — Files/Tunnels tabs,
+                // path input, copy/paste/up/upload, batch actions, refresh, minimise —
+                // stays clickable but visibly muted.
+                HorizontalLayout {
+                    opacity: root.collapsed ? 0.5 : 1.0;
                 Rectangle {
                     width: root.narrow-toolbar ? 28px : 48px;
                     height: 22px;
@@ -670,6 +686,7 @@ export component SftpPanel inherits Rectangle {
                     if min-ta.has-hover : SftpTooltip { y: -self.height - 3px; label: root.collapsed ? @tr("Expand panel") : @tr("Collapse panel"); }
                 }
                 }
+                }
 
                 // Preserve path navigation in the side-docked compact layout by
                 // moving it to a real second layout row. The layout spacing keeps
@@ -704,7 +721,10 @@ export component SftpPanel inherits Rectangle {
         }
 
         // --- Main area: tree (left) + file list (right) --------------------
-        if root.panel-mode == "files" : HorizontalLayout {
+        // (#collapsed-folder) While collapsed only the toolbar row shows — the dimmed
+        // handle + tabs + path + actions. The file list / tree must disappear so the
+        // collapsed panel is exactly one row tall.
+        if root.panel-mode == "files" && !root.collapsed : HorizontalLayout {
             vertical-stretch: 1;
             spacing: 0;
 
@@ -713,9 +733,19 @@ export component SftpPanel inherits Rectangle {
                 width: root.tree-width;
                 spacing: 0;
 
-                // Tree header
+                // Tree header. The bottom separator is a 1px child pinned to
+                // the bottom of this Rectangle so it repaints atomically with
+                // the header, never with the tree (file rows) below. We use
+                // Theme.bg-elevated (#30333c, R=44–48) — sits between
+                // Theme.bg-panel (#23262d) and Theme.bg-hover (#373a44) — so
+                // the line keeps roughly equal contrast (~13 vs ~7) in both
+                // unhovered and hovered row states (#sftp-header-line). The
+                // previous Theme.border-subtle (#3a3d46) merged with bg-hover
+                // (#373a44) on hover, making the line APPEAR to thicken and
+                // thin. Slint has no per-edge border-width, so a fixed child
+                // is the robust way to get a single bottom line.
                 Rectangle {
-                    height: 20px;
+                    height: 22px;
                     background: Theme.bg-root;
                     Text {
                         x: 8px;
@@ -725,8 +755,13 @@ export component SftpPanel inherits Rectangle {
                         vertical-alignment: center;
                         height: parent.height;
                     }
+                    Rectangle {
+                        y: 20px;
+                        width: parent.width;
+                        height: 1px;
+                        background: Theme.bg-elevated;
+                    }
                 }
-                Rectangle { height: 1px; background: Theme.border-subtle; }
 
                 // Tree list with scrollbar
                 ScrollView {
@@ -787,7 +822,8 @@ export component SftpPanel inherits Rectangle {
             // Draggable directory-tree divider (#287).
             if root.show-tree : Rectangle {
                 width: 5px;
-                background: tree-split.pressed ? Theme.accent : Theme.border-subtle;
+                background: tree-split.has-hover || tree-split.pressed
+                    ? Theme.accent : Theme.border-subtle;
                 tree-split := TouchArea {
                     x: -3px;
                     width: parent.width + 6px;
@@ -823,7 +859,7 @@ export component SftpPanel inherits Rectangle {
                 // (#sftp-header-line). Slint has no per-edge border-width, so a
                 // fixed child is the robust way to get a single bottom line.
                 header-bg := Rectangle {
-                    height: 20px;
+                    height: 22px;
                     background: Theme.bg-root;
                     HorizontalLayout {
                         padding-left: 8px; padding-right: 8px; spacing: 8px;
@@ -878,12 +914,17 @@ export component SftpPanel inherits Rectangle {
                     }
                     // Bottom separator (1px) lives INSIDE the header so it
                     // repaints atomically with the header, never with the file
-                    // rows below it. Absolute placement avoids layout side effects.
+                    // rows below. We use Theme.bg-elevated (#30333c) — the
+                    // same value as the left tree header — so the line keeps
+                    // roughly equal contrast in both unhovered and hovered row
+                    // states (#sftp-header-line). The previous
+                    // Theme.border-subtle merged with bg-hover on hover,
+                    // making the line APPEAR to thicken.
                     Rectangle {
-                        y: parent.height - 1px;
+                        y: 20px;
                         width: parent.width;
                         height: 1px;
-                        background: Theme.border-strong;
+                        background: Theme.bg-elevated;
                     }
                 }
 
@@ -1206,7 +1247,9 @@ export component SftpPanel inherits Rectangle {
             }
         }
 
-        if root.panel-mode == "tunnels" : Rectangle {
+        // (#collapsed-folder) Tunnels content also hidden while collapsed — same one-row
+        // toolbar-only rule as the files mode above.
+        if root.panel-mode == "tunnels" && !root.collapsed : Rectangle {
             vertical-stretch: 1;
             clip: true;
             background: transparent;
@@ -1315,20 +1358,12 @@ export component SftpPanel inherits Rectangle {
             }
         }
 
-        // --- Status bar (full width) --------------------------------------
-        Rectangle {
-            height: 18px;
-            background: Theme.bg-panel-alt;
-            Text {
-                x: 8px;
-                text: root.status;
-                color: Theme.text-muted;
-                font-size: Theme.fs-xs;
-                vertical-alignment: center;
-                height: parent.height;
-                overflow: elide;
-                width: parent.width - 16px;
-            }
-        }
+        // The bottom status bar that displayed `root.status` was removed: the
+        // SFTP backend used to emit `SftpStatus(path)` on every listing (sftp.rs
+        // SftpStatus emissions), making the bar just a redundant path footer
+        // (the path is already editable in the toolbar above). The backend
+        // emissions are left as-is so sftp_status stays available for any
+        // future inline error/status indicator; nothing displays it here
+        // (#sftp-bottom-status).
     }
 }

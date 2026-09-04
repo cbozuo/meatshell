@@ -68,7 +68,7 @@ component ProcDangerButton inherits Rectangle {
 }
 
 export component ProcWindow inherits Window {
-    title: "meatshell — " + @tr("Processes");
+    title: "meatshell - " + @tr("Processes");
     icon: @image-url("../assets/icon.png");
     // Theme is a *per-window* global, so a detached window keeps the compile-time
     // defaults (dark) unless Rust mirrors the main window's theme/scale/font here.
@@ -163,23 +163,16 @@ export component ProcWindow inherits Window {
                 }
             }
             HorizontalLayout {
-                padding-left: 12px;
+                padding-left: 8px;
                 spacing: 8px;
-                VerticalLayout {
-                    alignment: center;
-                    Image {
-                        source: @image-url("../assets/icon.png");
-                        width: 16px;
-                        height: 16px;
-                    }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    Text {
-                        text: @tr("Processes") + (root.host != "" ? "  ·  " + root.host : "");
-                        color: Theme.text-secondary;
-                        font-size: Theme.fs-sm;
-                    }
+                // Left-corner icon removed; the title text alone starts the
+                // bar, padded in from the edge to align with the table header
+                // below (#proc-window-title).
+                Text {
+                    text: @tr("Processes") + (root.host != "" ? " - " + root.host : "");
+                    color: Theme.text-secondary;
+                    font-size: Theme.fs-sm;
+                    vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }   // draggable spacer
                 // Close button.

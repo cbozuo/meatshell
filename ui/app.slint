@@ -1174,24 +1174,14 @@ export component AppWindow inherits Window {
                     double-clicked => { root.win-maximize-toggle(); }
                 }
                 HorizontalLayout {
-                    padding-left: 12px;
-                    spacing: 8px;
-                    // Vertical-centering wrappers so the icon and name line up (#119).
-                    VerticalLayout {
-                        alignment: center;
-                        Image {
-                            source: @image-url("../assets/icon.png");
-                            width: 18px;
-                            height: 18px;
-                        }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        Text {
-                            text: "meatshell";
-                            color: Theme.text-secondary;
-                            font-size: Theme.fs-sm;
-                        }
+                    padding-left: 8px;
+                    // Left-corner icon removed; "meatshell" alone sits at the
+                    // start of the titlebar, padded in from the edge (#ui-titlebar).
+                    Text {
+                        text: "meatshell";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
                     }
                     // Draggable spacer (no TouchArea → clicks fall to tb-drag).
                     Rectangle { horizontal-stretch: 1; }
@@ -1441,8 +1431,7 @@ export component AppWindow inherits Window {
                     : parent.width - parent.quick-left - parent.quick-right;
                 height: parent.welcome-horizontal
                     ? parent.height - parent.quick-top - parent.quick-bottom : 4px;
-                background: ws-split-ta.has-hover || dock-area.welcome-sidebar-dragging
-                    ? Theme.accent : transparent;
+                background: transparent;
                 ws-split-ta := TouchArea {
                     mouse-cursor: dock-area.welcome-horizontal ? ew-resize : ns-resize;
                     pointer-event(ev) => {
@@ -1474,6 +1463,17 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                }
+                // 1px visible line, centred inside the 4px hit-area. Lights up in
+                // the theme accent on hover / drag (Todo 3); otherwise a static
+                // `border-subtle` thin line so it matches the left edge (Todo 2).
+                Rectangle {
+                    x: parent.width < parent.height ? (parent.width - 1px) / 2 : 0px;
+                    y: parent.width < parent.height ? 0px : (parent.height - 1px) / 2;
+                    width:  parent.width < parent.height ? 1px : parent.width;
+                    height: parent.width < parent.height ? parent.height : 1px;
+                    background: ws-split-ta.has-hover || dock-area.welcome-sidebar-dragging
+                        ? Theme.accent : Theme.border-subtle;
                 }
             }
 
@@ -1605,10 +1605,18 @@ export component AppWindow inherits Window {
 
             // Splitter — drag to resize the sidebar. Orientation + which dimension it
             // adjusts follow the dock edge. Hidden while collapsed.
+            //
+            // The grab *hit-area* is a 4px transparent strip (mouse-cursor shows the
+            // ew-resize/ns-resize affordance). The *visible* boundary is the 1px line
+            // child below, sitting at the sidebar's inner edge. The line lights up in
+            // Theme.accent on hover / drag, mirroring the welcome sidebar's
+            // `ws-split-ta.has-hover` behaviour so both docked edges respond the
+            // same way (Todo 2/3, #wip6).
             Rectangle {
                 visible: !root.sidebar-collapsed;
-                // Horizontal docks → a vertical 4px bar at the sidebar's inner edge;
-                // vertical docks → a horizontal 4px bar.
+                // Horizontal docks → a vertical 4px hit-area at the sidebar's inner
+                // edge; vertical docks → a horizontal 4px hit-area (the visible 1px
+                // line is the child Rectangle below, centred inside this area).
                 x: root.sidebar-dock == "left"   ? parent.sb-w
                  : root.sidebar-dock == "right"  ? parent.width - parent.sb-w - 4px
                  : 0px;
@@ -1617,9 +1625,13 @@ export component AppWindow inherits Window {
                  : 0px;
                 width:  root.sidebar-horizontal ? 4px : parent.width;
                 height: root.sidebar-horizontal ? parent.height : 4px;
-                background: sb-split-ta.has-hover || root.sidebar-dragging
-                    ? Theme.accent
-                    : Theme.border-subtle;
+                // Filled with term-bg (NOT transparent): a transparent hit-area
+                // here shows the window-base (#1b1d23) behind the dock-area,
+                // which reads as a 4px grey gap strip between the shell's black
+                // and the sidebar (user report 2026-09-04). Painting it term-bg
+                // makes the strip blend seamlessly into the shell so only the
+                // 1px child line below stays visible (#wip8).
+                background: Theme.term-bg;
                 sb-split-ta := TouchArea {
                     mouse-cursor: root.sidebar-horizontal ? ew-resize : ns-resize;
                     pointer-event(ev) => {
@@ -1653,10 +1665,30 @@ export component AppWindow inherits Window {
                                         : (self.absolute-position.y + self.mouse-y)
                                             - dock-area.absolute-position.y,
                                     120px, 480px);
-                            }
                         }
                     }
                 }
+                // 1px visible line at the sidebar's INNER edge — the only
+                // visible boundary between the shell and the sidebar. Sits
+                // inside the splitter's hit-area so it can light up in
+                // Theme.accent on hover / while dragging (mirrors the welcome
+                // sidebar's `ws-split-ta` behaviour so the right edge has the
+                // same affordance as the left, Todo 2). At rest it stays
+                // `Theme.border-subtle` so it reads as a clean static thin
+                // line matching the rest of the chrome (#wip6).
+                Rectangle {
+                    x: root.sidebar-dock == "left"   ? 0px
+                     : root.sidebar-dock == "right"  ? parent.width - 1px
+                     : 0px;
+                    y: root.sidebar-dock == "top"    ? 0px
+                     : root.sidebar-dock == "bottom" ? parent.height - 1px
+                     : 0px;
+                    width:  root.sidebar-horizontal ? 1px : parent.width;
+                    height: root.sidebar-horizontal ? parent.height : 1px;
+                    background: sb-split-ta.has-hover || root.sidebar-dragging
+                        ? Theme.accent : Theme.border-subtle;
+                }
+            }
             }
 
             // Right side: tabs + content — positioned in the rect left after the
@@ -1737,15 +1769,6 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-
-                // Explicit static separator between the tab strip and the pane
-                // content (#shell-tab-divider). Without this the boundary is just
-                // a bg-panel-alt / bg-root colour transition; with focus events
-                // femtovg briefly repaints that region and the edge appears to
-                // flash. A constant opaque 1px line pins the boundary down so the
-                // click-to-focus on the shell body never animates anything in
-                // this strip.
-                Rectangle { height: 1px; background: Theme.border-subtle; }
 
                 // Content area swaps based on active tab kind.
                 Rectangle {
@@ -2015,15 +2038,21 @@ export component AppWindow inherits Window {
                 }
 
                 // Draggable splitters between panes. Single pane => the model is
-                // empty, so this renders nothing. The handle is a thin 6px bar but its
-                // TouchArea reaches ±5px beyond so it's easy to grab.
+                // empty, so this renders nothing. The handle is a thin 4px bar
+                // (matches the sidebar / welcome / quick-panel / SFTP splitters
+                // so the visual thickness is consistent across the whole shell)
+                // and its TouchArea reaches ±5px beyond so it's easy to grab.
                 for sp[si] in root.splitters : Rectangle {
                     x: sp.x; y: sp.y; width: sp.w; height: sp.h;
                     // A tab dropped on a pane boundary leaves the pointer hovering
                     // over this splitter. Highlight only while the splitter itself
                     // is being dragged, otherwise that hover looks like a stuck
                     // full-height tab insertion caret.
-                    background: sp-ta.pressed ? Theme.accent : Theme.border-strong;
+                    // Highlight on hover too (Todo 3), but suppress it while a tab
+                    // is being dragged onto a pane boundary — otherwise the hover
+                    // looks like a stuck full-height tab-insertion caret (#dock).
+                    background: (sp-ta.has-hover || sp-ta.pressed) && !root.drag-active
+                        ? Theme.accent : Theme.border-strong;
                     animate background { duration: 100ms; }
                     sp-ta := TouchArea {
                         x: sp.vertical ? -5px : 0px;
@@ -2110,7 +2139,7 @@ export component AppWindow inherits Window {
                  : 0px;
                 width: parent.quick-horizontal ? 4px : parent.width;
                 height: parent.quick-horizontal ? parent.height : 4px;
-                background: quick-split-ta.has-hover ? Theme.accent : Theme.border-subtle;
+                background: transparent;
                 quick-split-ta := TouchArea {
                     x: quick-area.quick-horizontal ? -4px : 0px;
                     y: quick-area.quick-horizontal ? 0px : -4px;
@@ -2138,6 +2167,16 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                }
+                // 1px visible line, centred inside the 4px hit-area. Lights up in
+                // the theme accent on hover (Todo 3); otherwise a static
+                // `border-subtle` thin line so it matches the left edge (Todo 2).
+                Rectangle {
+                    x: parent.width < parent.height ? (parent.width - 1px) / 2 : 0px;
+                    y: parent.width < parent.height ? 0px : (parent.height - 1px) / 2;
+                    width:  parent.width < parent.height ? 1px : parent.width;
+                    height: parent.width < parent.height ? parent.height : 1px;
+                    background: quick-split-ta.has-hover ? Theme.accent : Theme.border-subtle;
                 }
             }
             }
@@ -4186,12 +4225,9 @@ export component AppWindow inherits Window {
                             font-weight: 700;
                             vertical-alignment: center;
                         }
-                        Text {
-                            text: "v" + root.app-version;
-                            color: Theme.text-muted;
-                            font-size: Theme.fs-sm;
-                            vertical-alignment: center;
-                        }
+                        // The "vX.Y.Z" chip was removed from the title card —
+                        // the bottom version footnote already shows the same
+                        // string in muted text (#ui-title-card).
                     }
 
                     Text {

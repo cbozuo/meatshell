@@ -134,12 +134,26 @@ component SingleTab inherits Rectangle {
     }
 
     // Keep close pinned to the far right even when the title is very short.
-    if info.kind != "welcome" : IconButton {
-        glyph: "×";
-        size: 20px;
+    // Hover background is red (#e81123) to match the main-window top-right close
+    // button; the glyph turns white on hover (#close-hover-red, #tab-close-red).
+    if info.kind != "welcome" : Rectangle {
+        width: 20px; height: 20px;
+        border-radius: Theme.radius-sm;
         x: parent.width - self.width - 6px;
         y: (parent.height - self.height) / 2;
-        clicked => { root.closed(); }
+        background: close-ta.has-hover ? #e81123 : transparent;
+        animate background { duration: 90ms; }
+        close-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.closed(); }
+        }
+        Text {
+            text: "×";
+            color: close-ta.has-hover ? white : Theme.text-secondary;
+            font-size: Theme.fs-sm;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
     }
 
 }

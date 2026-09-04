@@ -554,29 +554,49 @@ pub(super) fn sync_system_info_theme(main: &AppWindow, sys: &SystemInfoWindow) {
 }
 
 pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow) {
-    let Some((mon_x, mon_y, mon_w, mon_h)) = main
+    // Centre on the **content area** of the main AppWindow (not the OS window
+    // bounds). `size()` returns the OS-level outer size (title bar + frame
+    // included), so centring on it lands the popup at the OS window's centre
+    // — which the user sees as "a bit too low" because the title bar pushes
+    // the visual centre upward. `winit::Window::inner_size()` gives the
+    // content area (frame subtracted), so centring on that puts the popup
+    // exactly where the user expects: the centre of the shell content
+    // (#win-centre).
+    let Some(((ox, oy), (iw, ih), tw, th)) = main
         .window()
         .with_winit_window(|ww| {
             let scale = ww.scale_factor().max(0.01);
-            let monitor = ww.current_monitor().or_else(|| ww.primary_monitor())?;
-            let pos = monitor.position();
-            let size = monitor.size();
+            // `outer_position()` is a Result — unsupported on some platforms
+            // (Wayland). Fall back to the (usually supported) inner_position
+            // and finally to (0,0) so the popup still lands near the main
+            // window instead of failing the whole placement.
+            let outer_pos = ww
+                .outer_position()
+                .ok()
+                .or_else(|| ww.inner_position().ok())
+                .unwrap_or_default();
+            let inner_size = ww.inner_size();
             Some((
-                pos.x as f64 / scale,
-                pos.y as f64 / scale,
-                size.width as f64 / scale,
-                size.height as f64 / scale,
+                (outer_pos.x as f64 / scale, outer_pos.y as f64 / scale),
+                (inner_size.width as f64 / scale, inner_size.height as f64 / scale),
+                1160.0_f64, 760.0_f64, // SystemInfoWindow preferred size
             ))
         })
         .flatten()
     else {
         return;
     };
+    if iw <= 0.0 || ih <= 0.0 {
+        return;
+    }
 
-    let target_w = (mon_w * 0.5).clamp(760.0, (mon_w - 24.0).max(760.0));
-    let target_h = (mon_h * 0.5).clamp(520.0, (mon_h - 24.0).max(520.0));
-    let x = mon_x + (mon_w - target_w).max(0.0) / 2.0;
-    let y = mon_y + (mon_h - target_h).max(0.0) / 2.0;
+    // Half the content area, clamped to SystemInfoWindow's min/preferred
+    // sizes (`min-width: 760px; min-height: 520px; preferred-width: 1160px;
+    // preferred-height: 760px` in system_info_window.slint).
+    let target_w = tw.clamp(760.0, (iw - 24.0).max(760.0));
+    let target_h = th.clamp(520.0, (ih - 24.0).max(520.0));
+    let x = ox + (iw - target_w).max(0.0) / 2.0;
+    let y = oy + (ih - target_h).max(0.0) / 2.0;
 
     // Use the Slint window API instead of the winit handle: hidden windows are
     // no longer materialized eagerly (they map on Wayland and pollute the
@@ -588,29 +608,64 @@ pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow)
     sys.window().set_position(slint::LogicalPosition::new(x as f32, y as f32));
 }
 
-/// Center the process monitor on the same physical monitor as the main window.
-/// Physical coordinates avoid logical/physical rounding errors when the two
-/// displays use different DPI scale factors. Keep the user's current process
-/// window size; opening it should reposition, not reset a manual resize.
+/// Centre the process monitor on the **content area** of the main AppWindow
+/// (not the OS outer bounds) — see the long comment on `place_system_info_window`
+/// for why inner_size matters. On first open the winit handle may not exist
+/// yet (`outer_size()` returns `(0, 0)`), which would push the window to the
+/// right half — the "process popup appears bottom-right" complaint. We size
+/// the winit window to the panel's preferred size on first open, then centre
+/// it on the main window's content area in logical coordinates.
 pub(super) fn place_process_window(main: &AppWindow, process: &ProcWindow) {
-    let monitor = main
+    let Some(((ox, oy), (iw, ih), _tw, _th)) = main
         .window()
-        .with_winit_window(|ww| ww.current_monitor().or_else(|| ww.primary_monitor()))
-        .flatten();
-    let Some(monitor) = monitor else { return };
-    let origin = monitor.position();
-    let monitor_size = monitor.size();
+        .with_winit_window(|ww| {
+            let scale = ww.scale_factor().max(0.01);
+            let outer_pos = ww
+                .outer_position()
+                .ok()
+                .or_else(|| ww.inner_position().ok())
+                .unwrap_or_default();
+            let inner_size = ww.inner_size();
+            Some((
+                (outer_pos.x as f64 / scale, outer_pos.y as f64 / scale),
+                (inner_size.width as f64 / scale, inner_size.height as f64 / scale),
+                640.0_f64, 520.0_f64, // ProcWindow preferred size
+            ))
+        })
+        .flatten()
+    else {
+        return;
+    };
+    if iw <= 0.0 || ih <= 0.0 {
+        return;
+    }
 
-    // The winit window may not exist yet on the first open (deferred creation,
-    // see place_system_info_window); fall back to a zero size, which anchors
-    // the window's top-left at the monitor center until the next open.
-    // Wayland ignores client-side positioning entirely, so this only affects
-    // X11/Windows first-open placement.
-    let window_size = process
+    // (cw, ch) is the width/height we use for the centre calculation. First
+    // open sees `(0, 0)` from the winit handle, so we apply the panel's
+    // preferred size before computing position — otherwise the window's
+    // top-left lands at the centre and the window itself fills the right
+    // half.
+    let outer = process
         .window()
         .with_winit_window(|ww| ww.outer_size())
         .unwrap_or_default();
-    let x = origin.x + monitor_size.width.saturating_sub(window_size.width) as i32 / 2;
-    let y = origin.y + monitor_size.height.saturating_sub(window_size.height) as i32 / 2;
-    process.window().set_position(slint::PhysicalPosition::new(x, y));
+    let (cw, ch) = if outer.width == 0 || outer.height == 0 {
+        // ProcWindow component declares `preferred-width: 640px` /
+        // `preferred-height: 520px` (proc_window.slint); hard-coded here so
+        // we don't depend on the (possibly not-yet-materialised) Slint window
+        // API for a value we already know.
+        const PREFERRED_W: u32 = 640;
+        const PREFERRED_H: u32 = 520;
+        let tw = ((iw * 0.5) as u32).clamp(PREFERRED_W, (iw as u32).saturating_sub(24).max(PREFERRED_W));
+        let th = ((ih * 0.5) as u32).clamp(PREFERRED_H, (ih as u32).saturating_sub(24).max(PREFERRED_H));
+        process
+            .window()
+            .set_size(slint::LogicalSize::new(tw as f32, th as f32));
+        (tw, th)
+    } else {
+        (outer.width, outer.height)
+    };
+    let x = ox + (iw - cw as f64).max(0.0) / 2.0;
+    let y = oy + (ih - ch as f64).max(0.0) / 2.0;
+    process.window().set_position(slint::LogicalPosition::new(x as f32, y as f32));
 }

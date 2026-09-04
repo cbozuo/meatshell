@@ -531,33 +531,13 @@ export component TerminalView inherits Rectangle {
     VerticalLayout {
         spacing: 0;
 
-        // --- Status strip ---------------------------------------------------
-        Rectangle {
-            visible: !root.zen-mode;
-            height: root.zen-mode ? 0px : 24px;
-            background: Theme.bg-panel-alt;
-            HorizontalLayout {
-                padding-left: 10px; padding-right: 10px;
-                Text {
-                    text: root.status-line;
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                // Alt-screen indicator only.  IMPORTANT: never put cell-w / cell-h
-                // (a Text's preferred-size) inside another Text's `text` — doing so
-                // makes Slint compute one text layout *inside* another, which
-                // re-enters parley's FontContext RefCell and panics ("already
-                // borrowed").  A plain bool flag is safe.
-                if root.is-alt-screen : Text {
-                    text: "[ALT]";
-                    color: Theme.success;
-                    font-size: Theme.fs-xs;
-                    vertical-alignment: center;
-                }
-            }
-        }
+        // [ALT] alt-screen indicator is now a root-level absolute overlay (see
+        // the bottom of this component) rather than a VerticalLayout child: the
+        // old strip toggled its 0↔24px height with is-alt-screen and Rust
+        // rewrites is-alt-screen on every terminal rebuild (terminal_ui.rs
+        // rebuild_tab_display → row.is_alt_screen = b.is_alt), so that height
+        // jump made the whole shell block jitter vertically on connect/focus.
+        // An absolute overlay never changes the pane layout height (#alt-indicator-overlay).
 
         // SFTP docking region — terminal + command-bar (central) on one side,
         // the SFTP panel docked to the chosen edge. Absolute geometry, mirroring
@@ -1324,7 +1304,10 @@ export component TerminalView inherits Rectangle {
             HorizontalLayout {
                 padding-left: 8px; padding-right: 8px;
                 padding-top: 4px; padding-bottom: 4px;
-                spacing: 6px;
+                // Equalise the "Quick commands" button's gap to the cmd-bar's left
+                // edge (padding-left: 8px) and to the command input on its right,
+                // so the button sits symmetrically (#wip).
+                spacing: 8px;
 
                 // Quick-command toggle. Once the sidebar has been docked, the
                 // sidebar/icon strip becomes its only entry point (#215).
@@ -1981,8 +1964,10 @@ export component TerminalView inherits Rectangle {
              : 0px;
             width:  root.sftp-horizontal ? 4px : parent.width;
             height: root.sftp-horizontal ? parent.height : 4px;
-            background: divider-ta.has-hover || root.sftp-dragging
-                ? Theme.accent : Theme.border-subtle;
+            // Fill the 4px hit-area with the same panel tone as the command bar
+            // above and the SFTP toolbar below, so the splitter reads as a clean
+            // 1px line instead of a 4px window-background band (#wip).
+            background: Theme.bg-panel-alt;
             divider-ta := TouchArea {
                 // Hit area extends a few px past the thin visual bar so it's easy
                 // to grab without landing on the terminal / SFTP edge.
@@ -2022,6 +2007,23 @@ export component TerminalView inherits Rectangle {
                                 60px, max(80px, dock-region.height - 80px)));
                         }
                     }
+                }
+                // 1px visible line, flush against the shell side so it hugs the
+                // panel boundary; the 4px hit-area extends outward over the SFTP
+                // panel and is filled with bg-panel-alt (matches the command bar
+                // above and the SFTP toolbar below) so no window-bg band shows
+                // (#wip). Lights up in the theme accent on hover / drag.
+                Rectangle {
+                    x: root.sftp-horizontal
+                        ? (root.sftp-dock == "right" ? 0px : parent.width - 1px)
+                        : 0px;
+                    y: root.sftp-horizontal
+                        ? 0px
+                        : (root.sftp-dock == "bottom" ? 0px : parent.height - 1px);
+                    width:  root.sftp-horizontal ? 1px : parent.width;
+                    height: root.sftp-horizontal ? parent.height : 1px;
+                    background: divider-ta.has-hover || root.sftp-dragging
+                        ? Theme.accent : Theme.border-subtle;
                 }
             }
         }
@@ -2128,13 +2130,23 @@ export component TerminalView inherits Rectangle {
             }
         }
 
-        // Collapsed → a ToolStrip icon bar at the docked edge (M5), filling the
-        // 36px slot the panel shrank to; click the icon to re-expand.
-        if root.sftp-collapsed : ToolStrip {
-            x: root.sftp-dock == "right"  ? parent.width - parent.sf-w : 0px;
-            y: root.sftp-dock == "bottom" ? parent.height - parent.sf-h : 0px;
-            width:  root.sftp-horizontal ? parent.sf-w : parent.width;
-            height: root.sftp-horizontal ? parent.height : parent.sf-h;
+        // Collapsed:
+        //   - **Bottom / top dock** → the SftpPanel itself shrinks to 36px
+        //     (`sf-h`) and its 34px toolbar (with the `min-ta` "expand" button)
+        //     stays visible. We render nothing extra here.
+        //   - **Left / right dock** → `compact: sftp-collapsed && sftp-horizontal`
+        //     hides the *whole* SftpPanel (toolbar + content) so the panel
+        //     collapses to a clean side strip. Without an external entry the
+        //     user would have no way to re-expand, so this ToolStrip is the
+        //     expand button for the side-docked collapsed case. The earlier
+        //     "always render a ToolStrip here" caused a duplicate expand entry
+        //     over the bottom toolbar (#sftp-collapsed-side-only), so we now
+        //     gate the ToolStrip on `sftp-horizontal`.
+        if root.sftp-collapsed && root.sftp-horizontal : ToolStrip {
+            x: root.sftp-dock == "right" ? parent.width - parent.sf-w : 0px;
+            y: 0px;
+            width:  parent.sf-w;
+            height: parent.height;
             dock-edge: root.sftp-dock;
             glyph: "\u{E2C7}";   // folder — SFTP
             tooltip: root.sftp-available ? "SFTP" : @tr("SFTP not available");
@@ -2146,6 +2158,30 @@ export component TerminalView inherits Rectangle {
             }
         }
 
+        }
+    }
+
+    // [ALT] full-screen-app indicator — absolute overlay (top-right), a direct
+    // child of the TerminalView root Rectangle (NOT the VerticalLayout, which
+    // forbids x/y on its children).  It replaces the old status strip whose
+    // 0↔24px height toggled with is-alt-screen; since Rust rewrites
+    // is-alt-screen on every terminal rebuild, that height jump made the whole
+    // shell block jitter vertically on connect/focus.  An absolute overlay
+    // never changes the pane layout height, so the jitter is gone
+    // (#alt-indicator-overlay).
+    if !root.zen-mode && root.is-alt-screen : Rectangle {
+        x: parent.width - 56px;
+        y: 4px;
+        width: 52px;
+        height: 20px;
+        background: Theme.bg-panel-alt;
+        border-radius: Theme.radius-sm;
+        Text {
+            text: "[ALT]";
+            color: Theme.success;
+            font-size: Theme.fs-xs;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 }

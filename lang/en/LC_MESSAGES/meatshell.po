@@ -614,3 +614,6 @@ msgstr "Download one by one"
 
 msgid "Download as archive"
 msgstr "Download as archive"
+
+msgid "System information"
+msgstr "System information"

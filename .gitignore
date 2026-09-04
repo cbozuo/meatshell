@@ -24,3 +24,10 @@ Cargo.lock
 /meatshell-*-win64.exe
 /meatshell-win-verify.zip
 /meatshell-win-verify/
+
+# Local build logs (wip builds) — ephemeral, never tracked.
+build_wip*.log
+
+# WorkBuddy project data lives inside the repo dir; it is tool-internal and
+# must never be committed to the code fork.
+/.workbuddy/
