@@ -195,6 +195,8 @@ fn build_session_rows(
         collapsed: group_is_collapsed(group),
         builtin: false,
         conn_state: 0,
+        note: "".into(),
+        group_index: 0,
         group_size: 0,
     };
 
@@ -216,8 +218,10 @@ fn build_session_rows(
             group: "system".into(),
             group_header: if i == 0 { "system".into() } else { "".into() },
             collapsed: group_is_collapsed("system"),
+            note: "".into(),
             builtin: true,
             conn_state: 0,
+            group_index: i as i32,
             group_size: if i == 0 { builtin_matched.len() as i32 } else { 0 },
         });
     }
@@ -250,6 +254,7 @@ fn build_session_rows(
                     port: s.port as i32,
                     user: s.user.clone().into(),
                     auth: s.auth.as_str().into(),
+                    note: s.note.clone().into(),
                     last_used: s
                         .last_used
                         .clone()
@@ -264,6 +269,7 @@ fn build_session_rows(
                     collapsed: group_is_collapsed(group),
                     builtin: false,
                     conn_state: 0,
+                    group_index: i as i32,
                     group_size: if i == 0 { gs.len() as i32 } else { 0 },
                 });
             }

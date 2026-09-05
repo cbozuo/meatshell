@@ -4141,6 +4141,42 @@ fn wire_session_callbacks(
         });
     }
     {
+        // (#session-drag-smooth 2026-09-05) 平滑拖拽落位:拖动过程只做视觉
+        // 让位(Slint 侧),松手时按累计偏移 delta 循环相邻换位到目标位。
+        // 单步失败(组边界/搜索)即停,已移的步数保留。
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        let sessions_dirty = sessions_dirty.clone();
+        window.on_move_session_delta(move |id: SharedString, delta: i32| {
+            let Some(window) = weak.upgrade() else { return };
+            let dir = if delta < 0 { -1i32 } else { 1i32 };
+            let mut remaining = delta.abs();
+            let query = window.get_host_search_query().to_string();
+            while remaining > 0 {
+                let moved = {
+                    let mut s = store.borrow_mut();
+                    s.reorder_session(id.as_str(), dir as isize)
+                };
+                if !moved {
+                    break;
+                }
+                sessions_dirty.set(true);
+                if !refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query) {
+                    // 行数变化(不该发生在同组移动):全量重建兜底。
+                    window.set_sessions_revision(window.get_sessions_revision() + 1);
+                }
+                remaining -= 1;
+            }
+            if remaining != delta.abs() {
+                if let Err(err) = store.borrow_mut().save() {
+                    tracing::warn!("failed to save config after session drag: {err:#?}");
+                }
+                refresh_session_markers_win(&window);
+            }
+        });
+    }
+    {
         let weak = window.as_weak();
         let store = store.clone();
         let sessions_model = sessions_model.clone();

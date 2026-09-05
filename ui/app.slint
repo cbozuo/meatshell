@@ -473,6 +473,13 @@ export component AppWindow inherits Window {
     // 菜单据此锚定(右对齐按钮右缘)。
     in-out property <length> topbar-set-x: 0px;
     in-out property <length> topbar-set-w: 0px;
+    // (#session-hover-card) 成员行悬停信息卡片的集中渲染槽(SessionRow 经
+    // Welcome 中转写入,浮层声明在窗口根尾部)。
+    in-out property <string> session-card-name;
+    in-out property <string> session-card-host;
+    in-out property <string> session-card-note;
+    in-out property <length> session-card-x;
+    in-out property <length> session-card-y;
     // macOS immersive title bar: Rust makes the native bar transparent and lets
     // content render under it, so we reserve this much space at the top for the
     // traffic-light buttons + a clean drag strip (0 elsewhere). See setup_macos_platform.
@@ -996,6 +1003,7 @@ export component AppWindow inherits Window {
     callback duplicate-session(string /* session-id */);
     callback move-session(string /* session-id */, string /* group */);
     callback reorder-session(string /* session-id */, int /* dir: -1 up, 1 down */) -> bool;
+    callback move-session-delta(string /* session-id */, int /* delta: 累计让位行数 */);   // (#session-drag-smooth) 拖拽一次落位
     callback reorder-session-end();
     callback toggle-group(string /* group */);
     callback remove-session(string /* session-id */);
@@ -1536,6 +1544,12 @@ export component AppWindow inherits Window {
                 background: Theme.bg-panel;
                 clip: true;
                 Welcome {
+                    card-out-name <=> root.session-card-name;
+                    card-out-host <=> root.session-card-host;
+                    card-out-note <=> root.session-card-note;
+                    card-out-x <=> root.session-card-x;
+                    card-out-y <=> root.session-card-y;
+                    move-session-delta(id, dn) => { root.move-session-delta(id, dn); }
                     width: parent.width;
                     height: parent.height;
                     compact: true;
@@ -2011,6 +2025,13 @@ export component AppWindow inherits Window {
                         import-hint: root.ssh-import-hint;
                         search-query <=> root.host-search-query;
                         sessions-revision: root.sessions-revision;
+                        // (#session-drag-smooth) 信息卡片/拖拽落位中转(同侧栏实例)。
+                        card-out-name <=> root.session-card-name;
+                        card-out-host <=> root.session-card-host;
+                        card-out-note <=> root.session-card-note;
+                        card-out-x <=> root.session-card-x;
+                        card-out-y <=> root.session-card-y;
+                        move-session-delta(id, dn) => { root.move-session-delta(id, dn); }
                         search-changed(query) => { root.host-search-changed(query); }
                         new-session => { root.new-session-clicked(); }
                         import-ssh-config => { root.import-ssh-config(); }
@@ -2518,6 +2539,85 @@ export component AppWindow inherits Window {
             vertical-alignment: center;
             width: parent.width;
             height: parent.height;
+        }
+    }
+
+    // (#session-hover-card 2026-09-05) 成员行悬停信息卡片的集中浮层:
+    // SessionRow 经 Welcome 中转写入(名称/主机/备注 + 坐标),窗口根尾部
+    // 渲染 = 最顶层且不被列表裁剪;普通元素不拦截鼠标,hover 离开即消失。
+    // (#session-hover-card-r2) 键值逐行排版(名称/主机/备注各一行,标签
+    // 固定宽左列对齐),备注有内容才显示。
+    if session-card-name != "" : Rectangle {
+        x: parent.session-card-x;
+        y: parent.session-card-y;
+        // 卡宽 = 名称/主机行内容宽 + 内边距(备注行更长时 elide;sc-note 在
+        // 条件元素内不可外引,故不参与宽度计算)。上限钳到窗宽内。
+        width: min(parent.width - 60px,
+            Math.max(sc-host.preferred-width, sc-name.preferred-width) + 92px);
+        height: session-card-note != "" ? 70px : 52px;
+        background: Theme.popup-bg;
+        border-radius: Theme.radius-md;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 10px;
+        drop-shadow-color: #00000070;
+        VerticalLayout {
+            padding: 9px;
+            spacing: 4px;
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: root.lang-en ? "Name" : "名称";
+                    color: Theme.text-muted;
+                    font-size: Theme.fs-xs;
+                    width: 34px;
+                    vertical-alignment: center;
+                }
+                sc-name := Text {
+                    text: root.session-card-name;
+                    color: Theme.text-primary;
+                    font-size: Theme.fs-xs;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: root.lang-en ? "Host" : "主机";
+                    color: Theme.text-muted;
+                    font-size: Theme.fs-xs;
+                    width: 34px;
+                    vertical-alignment: center;
+                }
+                sc-host := Text {
+                    text: root.session-card-host;
+                    color: Theme.text-primary;
+                    font-size: Theme.fs-xs;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+            }
+            if session-card-note != "" : HorizontalLayout {
+                spacing: 4px;
+                Text {
+                    text: root.lang-en ? "Note" : "备注";
+                    color: Theme.text-muted;
+                    font-size: Theme.fs-xs;
+                    width: 34px;
+                    vertical-alignment: center;
+                }
+                sc-note := Text {
+                    text: root.session-card-note;
+                    color: Theme.text-primary;
+                    font-size: Theme.fs-xs;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+            }
         }
     }
 

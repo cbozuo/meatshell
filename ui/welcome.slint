@@ -19,7 +19,13 @@ export struct SessionInfo {
     conn-state: int,
     // (#group-count-badge 2026-09-05) 组内成员数:仅组头行非 0(Rust 在
     // build_session_rows 时按过滤后的组成员数填),用于组头行尾的计数徽章。
+    group-index: int,
     group-size: int,
+    // (#session-hover-card-r2 2026-09-05) 会话备注(可选):悬停信息卡片
+    // 的"备注"行,有内容才显示。
+    note: string,
+    // (#session-drag-smooth 2026-09-05) 组内序(0..n,Rust 按过滤后顺序填):
+    // 拖拽让位计算用——被拖行越过的同组成员向反方向平移一行高。
 }
 
 // --- SessionRow ------------------------------------------------------------
@@ -54,6 +60,14 @@ component SessionRow inherits Rectangle {
     // drag (the grab was lost when a hop changed the row count and rebuilt
     // the model) and clear it instead of leaving the card lifted.
     in property <bool> list-dragging: false;
+    // (#session-drag-smooth 2026-09-05) 拖动共享状态(Welcome 级,实例绑定):
+    // 被拖行写入,所有成员行读取以计算让位偏移。
+    in property <string> drag-group;
+    in property <int> drag-gi;
+    in property <int> drag-size;
+    in property <length> drag-dy;
+    in property <string> drag-id;
+    in property <int> drag-dn;
     property <bool> system-row: root.session.builtin;
     // (#session-tree-hierarchy 2026-09-04) 树形层级:成员行相对分组头缩进
     // content-indent,并可选显示树形引导竖线——每行画一段(border-subtle,
@@ -74,6 +88,12 @@ component SessionRow inherits Rectangle {
 
     touch := TouchArea {
         mouse-cursor: root.grab-dragging ? move : pointer;
+        // (#session-hover-card) 悬停离开时清掉信息卡片(写入在 info-delay)。
+        changed has-hover => {
+            if (!self.has-hover && root.card-out-name != "") {
+                root.card-out-name = "";
+            }
+        }
         // Connect is handled in pointer-event below so a finished drag never
         // counts as a click.
         pointer-event(e) => {
@@ -129,23 +149,40 @@ component SessionRow inherits Rectangle {
                     root.grab-y = touch.mouse-y;
                     root.drag-start();
                 }
-            } else {
-                // Swap at the neighbour's midpoint, then shift the anchor by a
-                // full slot (row + 2px spacing) — NOT back to the cursor — so
-                // overshoot carries over and the drag stays glued to the
-                // pointer across consecutive hops. Only advance the anchor
-                // when the swap happened: at list boundaries reorder fails,
-                // and advancing anyway would drift the anchor out of sync.
-                if (touch.mouse-y - root.grab-y > (root.height + 2px) / 2) {
-                    if (root.reorder(1)) {
-                        root.grab-y = root.grab-y + root.height + 2px;
-                    }
-                } else if (root.grab-y - touch.mouse-y > (root.height + 2px) / 2) {
-                    if (root.reorder(-1)) {
-                        root.grab-y = root.grab-y - root.height - 2px;
-                    }
-                }
             }
+            // (#session-drag-smooth 2026-09-05) 拖动过程不再逐行换位(旧 hop
+            // 交换无过渡、很僵硬):只持续上报指针偏移,卡片跟手浮起、其他
+            // 成员行平滑让位,松手由 drag-end 一次性落位。
+            root.drag-out-dy = touch.mouse-y - root.grab-y;
+        }
+    }
+
+    // (#session-hover-card 2026-09-05) 悬停 0.45s 后把主机信息写给 Welcome
+    // 的 card-out-*(经 Welcome 中转到 AppWindow 根的集中浮层,同 topbar-tip
+    // 机制,不受行裁剪/模态影响);移开即清。行内副标题在悬停期间隐藏
+    // (见 info-sub 的 visible 绑定)。
+    // (#session-hover-card-r2) 改为结构化三字段(名称/主机/备注),浮层按
+    // "标签: 值"逐行渲染,备注可选。
+    in-out property <string> card-out-name;
+    in-out property <string> card-out-host;
+    in-out property <string> card-out-note;
+    in-out property <length> card-out-x;
+    in-out property <length> card-out-y;
+    in-out property <length> drag-out-dy;   // (#session-drag-smooth) 拖动中的指针偏移输出
+    info-delay := Timer {
+        interval: 450ms;
+        running: touch.has-hover;
+        triggered => {
+            root.card-out-name = root.session.name;
+            root.card-out-host = root.session.builtin
+                ? root.session.host
+                : (root.session.user != "" ? root.session.user + "@" : "")
+                    + (root.session.port > 0
+                        ? root.session.host + ":" + root.session.port
+                        : root.session.host);
+            root.card-out-note = root.session.note;
+            root.card-out-x = touch.absolute-position.x + touch.width + 6px;
+            root.card-out-y = touch.absolute-position.y;
         }
     }
 
@@ -256,6 +293,16 @@ component SessionRow inherits Rectangle {
         }
     }
 
+    // (#session-drag-smooth) 让位偏移:同组成员行在拖动期间向被拖行原位
+    // 方向平移一行高(38px),空出落点;被拖行自身走跟手 dy。行步长 =
+    // 行高 38 + 行距 2 = 40。组外/非拖动时为 0。
+    property <length> shift-y:
+        !root.list-dragging || session.id == root.drag-id
+            || session.group != root.drag-group || root.drag-dn == 0 ? 0px
+        : session.group-index > root.drag-gi && session.group-index <= root.drag-gi + root.drag-dn ? -40px
+        : session.group-index < root.drag-gi && session.group-index >= root.drag-gi + root.drag-dn ? 40px
+        : 0px;
+
     // Row content — wrapped in a card so the dragged row can lift (shadow +
     // highlight) while the grabbing TouchArea keeps its grab. The card stays
     // in its slot: row swaps alone convey the reorder.
@@ -263,6 +310,13 @@ component SessionRow inherits Rectangle {
         // (#session-list-inset-revert 2026-09-05) 撤销 4px 内缩,恢复全宽:
         // 内缩后与右侧资源面板的行高亮宽度不一致,左右不协调(用户反馈);
         // 全宽时组头/成员/右侧面板三处高亮语言重新统一。
+        // (#session-drag-follow → #session-drag-smooth 2026-09-05) 拖动改
+        // tabs 式:被拖行卡片跟手浮起(dy,0ms 不延迟);**同组其他成员行**
+        // 读取 shift-y 让位平移(150ms 过渡);松手回弹归位。模型在落位时
+        // 一次性移动,拖动中不 mutate。
+        y: root.grab-dragging ? (touch.mouse-y - root.grab-y) : shift-y;
+        animate y { duration: root.grab-dragging ? 0ms : 150ms; easing: ease-out; }
+        opacity: root.grab-dragging ? 0.92 : 1.0;
         width: parent.width;
         height: parent.height;
         border-radius: Theme.radius-sm;
@@ -320,24 +374,16 @@ component SessionRow inherits Rectangle {
             }
         }
 
-        if root.compact : VerticalLayout {
+        // (#session-hover-card-r2 2026-09-05) 成员行单行化:只显示名称,
+        // 与图标垂直居中对齐(主机/用户/备注等详情移至悬停信息卡片)。
+        // 原双行(名称+副标题)布局废弃,行高与组头一致更整齐。
+        if root.compact : Text {
             horizontal-stretch: 1;
-            alignment: center;
-            spacing: 1px;
-            Text {
-                text: session.name;
-                color: Theme.text-primary;
-                font-size: Theme.fs-sm;
-                overflow: elide;
-            }
-            Text {
-                text: session.builtin ? session.host
-                    : (session.user != "" ? session.user + "@" : "")
-                        + (session.port > 0 ? session.host + ":" + session.port : session.host);
-                color: Theme.text-muted;
-                font-size: Theme.fs-xs;
-                overflow: elide;
-            }
+            text: session.name;
+            color: Theme.text-primary;
+            font-size: Theme.fs-sm;
+            vertical-alignment: center;
+            overflow: elide;
         }
         if !root.compact : Text {
             text: session.name;
@@ -392,7 +438,25 @@ export component Welcome inherits Rectangle {
     in property <[SessionInfo]> sessions;
     in property <string> import-hint;        // result text after an import
     in-out property <string> search-query;
+    // (#session-hover-card) 成员行 hover 信息卡片的中转槽:SessionRow 写入,
+    // 实例侧绑定到 AppWindow 根的集中浮层(链路 SessionRow→Welcome→根)。
+    in-out property <string> card-out-name;
+    in-out property <string> card-out-host;
+    in-out property <string> card-out-note;
+    in-out property <length> card-out-x;
+    in-out property <length> card-out-y;
+    in-out property <length> drag-out-dy;   // (#session-drag-smooth) 拖动中的指针偏移输出
+    // (#session-drag-smooth 2026-09-05) 平滑拖拽的共享状态:被拖行写入
+    // (组名 / 组内序 / 组大小 / 指针偏移),其他成员行据此计算让位偏移;
+    // 拖动过程不 mutate 模型,松手按 drag-dn 一次落位(move-session-delta)。
+    in-out property <string> drag-group: "";
+    in-out property <int> drag-gi: 0;
+    in-out property <int> drag-size: 1;
+    in-out property <length> drag-dy: 0px;
+    property <int> drag-dn: clamp(Math.round(root.drag-dy / 40px),
+        0 - root.drag-gi, root.drag-size - 1 - root.drag-gi);
     callback new-session();
+    callback move-session-delta(string /* session-id */, int /* delta */);   // (#session-drag-smooth) 转发给 AppWindow
     callback import-ssh-config();
     callback connect-session(string);
     callback edit-session(string);
@@ -780,6 +844,9 @@ export component Welcome inherits Rectangle {
                                 padding-top: 0;
                                 padding-bottom: 0;
                                 padding-left: 4px;
+                                // (#group-count-badge-r6) 右缘留白:计数徽章不
+                                // 再被组头 hover 圆角收腰切割。
+                                padding-right: 10px;
                                 spacing: 4px;
                                 // Collapse chevron — shown for every group, empty
                                 // folders included, so they line up and can be
@@ -817,20 +884,21 @@ export component Welcome inherits Rectangle {
                                 // (#group-count-badge-r4) 徽章与组名垂直对齐:
                                 // HorizontalLayout 中固定高度的子项默认顶对
                                 // 齐,外包 alignment: center 的 VL 强制居中。
-                                // (#group-count-badge-r5 2026-09-05) 水平方向
-                                // 同理改为显式:徽章宽 = 数字实际宽 + 左右各
-                                // 5px 固定内边距,数字绝对定位 x=5——左右间
-                                // 隙严格相等,多位数时徽章自动加宽。
+                                // (#group-count-badge-r6 2026-09-05) 切割修复:
+                                // 徽章原本贴到组头行右缘,而组头 hover 高亮的
+                                // 圆角在右缘"收腰",视觉上把徽章右端切掉一块
+                                // (用户反馈)。组头布局补 padding-right: 10px
+                                // 让徽章内收;内边距 5→6px 给数字更多余量。
                                 VerticalLayout {
                                     alignment: center;
-                                    if session.group-size > 0 : Rectangle {
+                                    Rectangle {
                                         height: 16px;
-                                        width: num.preferred-width + 10px;
+                                        width: num.preferred-width + 12px;
                                         border-radius: 8px;
                                         background: grp-ta.has-hover ? Theme.bg-active : Theme.bg-elevated;
                                         animate background { duration: 120ms; }
                                         num := Text {
-                                            x: 5px;
+                                            x: 6px;
                                             height: parent.height;
                                             text: "\{session.group-size}";
                                             // 数字用等宽字体:行盒比 CJK UI 字
@@ -918,6 +986,21 @@ export component Welcome inherits Rectangle {
                         if session.id != "" && !session.collapsed : SessionRow {
                             session: session;
                             compact: root.compact;
+                            // (#session-hover-card) 信息卡片坐标/文本中转到
+                            // Welcome,再由实例侧绑到 AppWindow 根浮层。
+                            card-out-name <=> root.card-out-name;
+                            card-out-host <=> root.card-out-host;
+                            card-out-note <=> root.card-out-note;
+                            card-out-x <=> root.card-out-x;
+                            card-out-y <=> root.card-out-y;
+                            // (#session-drag-smooth) 拖动共享状态下行分发。
+                            drag-out-dy <=> root.drag-dy;
+                            drag-group <=> root.drag-group;
+                            drag-gi <=> root.drag-gi;
+                            drag-size <=> root.drag-size;
+                            drag-dy <=> root.drag-dy;
+                            drag-id <=> root.drag-id;
+                            drag-dn <=> root.drag-dn;
                             // (#session-tree-hierarchy) 成员缩进 18px + 树形
                             // 引导线:文本起点在组头文字右侧,竖线沿缩进区中点
                             // 逐行延伸,构成"组头 → 成员"的父子层级。
@@ -940,6 +1023,12 @@ export component Welcome inherits Rectangle {
                             drag-end => {
                                 root.list-dragging = false;
                                 root.drag-id = "";
+                                // (#session-drag-smooth) 一次落位:按拖动中
+                                // 累计的让位行数移动(0 = 原地,无操作)。
+                                if (root.drag-dn != 0) {
+                                    root.move-session-delta(session.id, root.drag-dn);
+                                }
+                                root.drag-dy = 0px;
                                 root.reorder-end();
                             }
                             remove => { root.remove-session(session.id); }
