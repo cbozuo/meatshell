@@ -296,6 +296,17 @@ component SessionRow inherits Rectangle {
     // (#session-drag-smooth) 让位偏移:同组成员行在拖动期间向被拖行原位
     // 方向平移一行高(38px),空出落点;被拖行自身走跟手 dy。行步长 =
     // 行高 38 + 行距 2 = 40。组外/非拖动时为 0。
+    // (#session-drag-placeholder 2026-09-05) 拖动中原槽位占位框:accent 半
+    // 透明底 + 边框,明确行被空出的落点(卡片跟手浮起后原位不空白)。
+    Rectangle {
+        visible: root.grab-dragging;
+        width: parent.width;
+        height: parent.height;
+        border-radius: Theme.radius-sm;
+        background: Theme.accent.with-alpha(0.06);
+        border-width: 1px;
+        border-color: Theme.accent.with-alpha(0.6);
+    }
     property <length> shift-y:
         !root.list-dragging || session.id == root.drag-id
             || session.group != root.drag-group || root.drag-dn == 0 ? 0px
@@ -453,10 +464,11 @@ export component Welcome inherits Rectangle {
     in-out property <int> drag-gi: 0;
     in-out property <int> drag-size: 1;
     in-out property <length> drag-dy: 0px;
-    property <int> drag-dn: clamp(Math.round(root.drag-dy / 40px),
-        0 - root.drag-gi, root.drag-size - 1 - root.drag-gi);
+    // (#session-drag-smooth-r2) dn 不再钳制:超出本组范围的值由 Rust 端解
+    // 释为跨组意图(dn < -gi → 上一组;dn > size-1-gi → 下一组)。
+    property <int> drag-dn: Math.round(root.drag-dy / 40px);
     callback new-session();
-    callback move-session-delta(string /* session-id */, int /* delta */);   // (#session-drag-smooth) 转发给 AppWindow
+    callback move-session-delta(string /* session-id */, int /* dn */, int /* gi */, int /* size */);   // (#session-drag-smooth) 转发给 AppWindow
     callback import-ssh-config();
     callback connect-session(string);
     callback edit-session(string);
@@ -1019,14 +1031,24 @@ export component Welcome inherits Rectangle {
                             duplicate => { root.duplicate-session(session.id); }
                             move-to-group(g) => { root.move-session(session.id, g); }
                             reorder(dir) => { return root.reorder-session(root.drag-id, dir); }
-                            drag-start => { root.drag-id = session.id; root.list-dragging = true; }
+                            drag-start => {
+                                root.drag-id = session.id;
+                                root.list-dragging = true;
+                                // (#session-drag-smooth-r2) 补写让位/落位所需
+                                // 的组上下文(此前漏写 → drag-dn 被钳为 0,
+                                // 组内排序与跨组拖动双双失效——用户反馈根因)。
+                                root.drag-group = session.group;
+                                root.drag-gi = session.group-index;
+                                root.drag-size = session.group-size;
+                                root.drag-dy = 0px;
+                            }
                             drag-end => {
                                 root.list-dragging = false;
                                 root.drag-id = "";
                                 // (#session-drag-smooth) 一次落位:按拖动中
                                 // 累计的让位行数移动(0 = 原地,无操作)。
                                 if (root.drag-dn != 0) {
-                                    root.move-session-delta(session.id, root.drag-dn);
+                                    root.move-session-delta(session.id, root.drag-dn, root.drag-gi, root.drag-size);
                                 }
                                 root.drag-dy = 0px;
                                 root.reorder-end();

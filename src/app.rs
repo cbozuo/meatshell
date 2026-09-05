@@ -4148,30 +4148,97 @@ fn wire_session_callbacks(
         let store = store.clone();
         let sessions_model = sessions_model.clone();
         let sessions_dirty = sessions_dirty.clone();
-        window.on_move_session_delta(move |id: SharedString, delta: i32| {
+        let registry = registry.clone();
+        // (#session-drag-smooth-r2 2026-09-05) 落位分派:dn 在本组范围内 →
+        // 组内排序(循环相邻换位);越界 → 跨组移动到显示顺序的相邻组
+        // (dn < -gi → 上一组;dn > size-1-gi → 下一组,落点:上一组末尾 /
+        // 下一组开头)。跨组经 store.upsert 改 group 并全量刷新。
+        window.on_move_session_delta(move |id: SharedString, dn: i32, gi: i32, size: i32| {
             let Some(window) = weak.upgrade() else { return };
-            let dir = if delta < 0 { -1i32 } else { 1i32 };
-            let mut remaining = delta.abs();
+            let in_group = dn >= -gi && dn <= size - 1 - gi;
             let query = window.get_host_search_query().to_string();
-            while remaining > 0 {
-                let moved = {
-                    let mut s = store.borrow_mut();
-                    s.reorder_session(id.as_str(), dir as isize)
-                };
-                if !moved {
-                    break;
+            if in_group {
+                let dir = if dn < 0 { -1i32 } else { 1i32 };
+                let mut remaining = dn.abs();
+                while remaining > 0 {
+                    let moved = {
+                        let mut s = store.borrow_mut();
+                        s.reorder_session(id.as_str(), dir as isize)
+                    };
+                    if !moved {
+                        break;
+                    }
+                    sessions_dirty.set(true);
+                    if !refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query) {
+                        // 行数变化(不该发生在同组移动):全量重建兜底。
+                        window.set_sessions_revision(window.get_sessions_revision() + 1);
+                    }
+                    remaining -= 1;
                 }
-                sessions_dirty.set(true);
-                if !refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query) {
-                    // 行数变化(不该发生在同组移动):全量重建兜底。
-                    window.set_sessions_revision(window.get_sessions_revision() + 1);
-                }
-                remaining -= 1;
-            }
-            if remaining != delta.abs() {
                 if let Err(err) = store.borrow_mut().save() {
                     tracing::warn!("failed to save config after session drag: {err:#?}");
                 }
+                refresh_session_markers_win(&window);
+                return;
+            }
+            // ---- 跨组:目标 = 显示顺序的相邻组 ----
+            let target_group = {
+                let s = store.borrow();
+                let Some(session) = s.sessions().iter().find(|x| x.id == id.as_str()) else {
+                    return;
+                };
+                let cur_raw = if session.group.is_empty() {
+                    "default".to_string()
+                } else {
+                    session.group.clone()
+                };
+                let builtin = session_models::builtin_local_sessions(s.wsl_profiles());
+                let mut order: Vec<String> = Vec::new();
+                if !builtin.is_empty() {
+                    order.push("system".into());
+                }
+                order.extend(named_display_groups(
+                    &s.groups().clone(),
+                    s.sessions(),
+                ));
+                let cur = if is_reserved_session_group(cur_raw.trim()) {
+                    "default".to_string()
+                } else {
+                    cur_raw
+                };
+                let pos = order.iter().position(|g| g == &cur);
+                match pos {
+                    Some(p) if dn > size - 1 - gi && p + 1 < order.len() => {
+                        Some(order[p + 1].clone())
+                    }
+                    Some(p) if dn < -gi && p > 0 => Some(order[p - 1].clone()),
+                    _ => None,
+                }
+            };
+            let Some(target_group) = target_group else { return };
+            let mut moved = false;
+            {
+                let mut s = store.borrow_mut();
+                if let Some(orig) = s.get(&id.to_string()).cloned() {
+                    let mut target_sess = orig;
+                    // "default" 是未分组显示名 → 存空串;system 组仅内置会话。
+                    target_sess.group = if target_group.eq_ignore_ascii_case("default") {
+                        String::new()
+                    } else if is_reserved_session_group(target_group.trim()) {
+                        return;
+                    } else {
+                        target_group.clone()
+                    };
+                    s.upsert(target_sess);
+                    moved = true;
+                }
+            }
+            if moved {
+                if let Err(err) = store.borrow_mut().save() {
+                    tracing::warn!("failed to save config after cross-group drag: {err:#?}");
+                }
+                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
+                registry.broadcast_config_changed();
                 refresh_session_markers_win(&window);
             }
         });

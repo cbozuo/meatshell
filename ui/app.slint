@@ -1003,7 +1003,7 @@ export component AppWindow inherits Window {
     callback duplicate-session(string /* session-id */);
     callback move-session(string /* session-id */, string /* group */);
     callback reorder-session(string /* session-id */, int /* dir: -1 up, 1 down */) -> bool;
-    callback move-session-delta(string /* session-id */, int /* delta: 累计让位行数 */);   // (#session-drag-smooth) 拖拽一次落位
+    callback move-session-delta(string /* session-id */, int /* dn */, int /* gi */, int /* size */);   // (#session-drag-smooth) 拖拽落位(组内排序或跨组移动)
     callback reorder-session-end();
     callback toggle-group(string /* group */);
     callback remove-session(string /* session-id */);
@@ -1549,7 +1549,7 @@ export component AppWindow inherits Window {
                     card-out-note <=> root.session-card-note;
                     card-out-x <=> root.session-card-x;
                     card-out-y <=> root.session-card-y;
-                    move-session-delta(id, dn) => { root.move-session-delta(id, dn); }
+                    move-session-delta(id, dn, gi, size) => { root.move-session-delta(id, dn, gi, size); }
                     width: parent.width;
                     height: parent.height;
                     compact: true;
@@ -2031,7 +2031,7 @@ export component AppWindow inherits Window {
                         card-out-note <=> root.session-card-note;
                         card-out-x <=> root.session-card-x;
                         card-out-y <=> root.session-card-y;
-                        move-session-delta(id, dn) => { root.move-session-delta(id, dn); }
+                        move-session-delta(id, dn, gi, size) => { root.move-session-delta(id, dn, gi, size); }
                         search-changed(query) => { root.host-search-changed(query); }
                         new-session => { root.new-session-clicked(); }
                         import-ssh-config => { root.import-ssh-config(); }
