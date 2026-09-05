@@ -195,14 +195,16 @@ fn build_session_rows(
         collapsed: group_is_collapsed(group),
         builtin: false,
         conn_state: 0,
+        group_size: 0,
     };
 
     let mut rows: Vec<SessionInfo> = Vec::new();
-    for (i, s) in builtin_sessions
+    // (#group-count-badge) 先收集再计数:组头行要带"组内成员数"。
+    let builtin_matched: Vec<&Session> = builtin_sessions
         .iter()
         .filter(|session| matches(session))
-        .enumerate()
-    {
+        .collect();
+    for (i, s) in builtin_matched.iter().enumerate() {
         rows.push(SessionInfo {
             id: s.id.clone().into(),
             name: s.name.clone().into(),
@@ -216,6 +218,7 @@ fn build_session_rows(
             collapsed: group_is_collapsed("system"),
             builtin: true,
             conn_state: 0,
+            group_size: if i == 0 { builtin_matched.len() as i32 } else { 0 },
         });
     }
     for group in &display_groups {
@@ -261,6 +264,7 @@ fn build_session_rows(
                     collapsed: group_is_collapsed(group),
                     builtin: false,
                     conn_state: 0,
+                    group_size: if i == 0 { gs.len() as i32 } else { 0 },
                 });
             }
         }
