@@ -17,6 +17,9 @@ export struct SessionInfo {
     // 写):0 无点 / 1 未连接(黄,含连接中与已断开,与标签页黄点同语义)/
     // 2 已连接(绿)。成员行图标右上角点亮对应徽章。
     conn-state: int,
+    // (#group-count-badge 2026-09-05) 组内成员数:仅组头行非 0(Rust 在
+    // build_session_rows 时按过滤后的组成员数填),用于组头行尾的计数徽章。
+    group-size: int,
 }
 
 // --- SessionRow ------------------------------------------------------------
@@ -298,18 +301,19 @@ component SessionRow inherits Rectangle {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
-            // (#session-status-dot-r2/r3) 三态徽章:黄 = 未连接(连接中/已断开),
-            // 绿 = 已连接;压在方块右上角。
+            // (#session-status-dot-r4 2026-09-05) 徽章位置:贴在图标方块左侧
+            // 垂直中心(右缘与图标左缘搭接 2px),像信号灯挂在侧边,不再压角
+            // 溢出,与左侧树引导线也保持距离(树线 x≈19,点 24..30)。
             if root.session.conn-state == 1 : Rectangle {
-                x: 11px;
-                y: -3px;
+                x: -4px;
+                y: (parent.height - self.height) / 2;
                 width: 6px; height: 6px;
                 border-radius: 3px;
                 background: Theme.warning;
             }
             if root.session.conn-state == 2 : Rectangle {
-                x: 11px;
-                y: -3px;
+                x: -4px;
+                y: (parent.height - self.height) / 2;
                 width: 6px; height: 6px;
                 border-radius: 3px;
                 background: Theme.success;
@@ -790,7 +794,10 @@ export component Welcome inherits Rectangle {
                                     vertical-alignment: center;
                                 }
                                 Text {
-                                    text: "\u{E2C7}";   // folder glyph
+                                    // (#folder-open-state 2026-09-05) 文件夹随
+                                    // 分组状态切换:闭合 E2C7 / 打开 E2C8,与
+                                    // chevron(▸/▾)同向联动。
+                                    text: session.collapsed ? "\u{E2C7}" : "\u{E2C8}";
                                     font-family: "Material Icons";
                                     color: grp-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
                                     animate color { duration: 120ms; }
@@ -806,6 +813,35 @@ export component Welcome inherits Rectangle {
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;       // fill → text stays left
                                     horizontal-alignment: left;
+                                }
+                                // (#group-count-badge-r4) 徽章与组名垂直对齐:
+                                // HorizontalLayout 中固定高度的子项默认顶对
+                                // 齐,外包 alignment: center 的 VL 强制居中。
+                                // (#group-count-badge-r5 2026-09-05) 水平方向
+                                // 同理改为显式:徽章宽 = 数字实际宽 + 左右各
+                                // 5px 固定内边距,数字绝对定位 x=5——左右间
+                                // 隙严格相等,多位数时徽章自动加宽。
+                                VerticalLayout {
+                                    alignment: center;
+                                    if session.group-size > 0 : Rectangle {
+                                        height: 16px;
+                                        width: num.preferred-width + 10px;
+                                        border-radius: 8px;
+                                        background: grp-ta.has-hover ? Theme.bg-active : Theme.bg-elevated;
+                                        animate background { duration: 120ms; }
+                                        num := Text {
+                                            x: 5px;
+                                            height: parent.height;
+                                            text: "\{session.group-size}";
+                                            // 数字用等宽字体:行盒比 CJK UI 字
+                                            // 体小得多,宽度也可预测。
+                                            font-family: Theme.font-mono;
+                                            color: Theme.text-secondary;
+                                            font-size: Theme.fs-xs;
+                                            vertical-alignment: center;
+                                            y: 1px;
+                                        }
+                                    }
                                 }
                             }
                             grp-menu := PopupWindow {
