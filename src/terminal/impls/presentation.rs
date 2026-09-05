@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
 
 use crate::terminal::{CompiledOutputRule, HistSpan, OutputHighlightPreset};
 use crate::ui::TermSpan;
@@ -345,200 +343,27 @@ fn ascii_word_boundary(bytes: &[u8], start: usize, end: usize) -> bool {
         && bytes.get(end).map_or(true, |b| !is_word(*b))
 }
 
-thread_local! {
-    /// Decoded images are retained only for emoji actually seen in terminal
-    /// output. A full 72x72 RGBA Twemoji is ~20 KiB; this avoids decoding on
-    /// every redraw without eagerly allocating the entire emoji collection.
-    static TWEMOJI_CACHE: RefCell<HashMap<String, Option<slint::Image>>> =
-        RefCell::new(HashMap::new());
-}
-
-fn twemoji_image(grapheme: &str) -> Option<slint::Image> {
-    TWEMOJI_CACHE.with(|cache| {
-        if let Some(image) = cache.borrow().get(grapheme) {
-            return image.clone();
-        }
-
-        // U+FE0E explicitly requests text presentation. U+FE0F requests emoji
-        // presentation, but Twemoji stores some legacy symbols (for example
-        // ❤️) under a key without VS16, so retry lookup with VS16 removed.
-        let normalized;
-        let asset = if grapheme.contains('\u{fe0e}') {
-            None
-        } else {
-            normalized = grapheme.replace('\u{fe0f}', "");
-            twemoji_assets::png::PngTwemojiAsset::from_emoji(grapheme).or_else(|| {
-                (normalized != grapheme)
-                    .then(|| twemoji_assets::png::PngTwemojiAsset::from_emoji(&normalized))
-                    .flatten()
-            })
-        };
-        let image = asset
-            .and_then(|asset| image::load_from_memory(asset.data.0).ok())
-            .map(|decoded| {
-                let rgba = decoded.into_rgba8();
-                let (width, height) = rgba.dimensions();
-                let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
-                pixels.make_mut_bytes().copy_from_slice(rgba.as_raw());
-                slint::Image::from_rgba8(pixels)
-            });
-        cache
-            .borrow_mut()
-            .insert(grapheme.to_string(), image.clone());
-        image
-    })
-}
-
-/// Split a styled terminal run only at complete Unicode grapheme boundaries.
-/// Ordinary graphemes remain grouped into large Text spans; emoji with a
-/// Twemoji asset become image spans so color survives Slint's monochrome font
-/// rasterizers. Columns still come from terminal cells, not image pixels.
+/// Split a styled terminal run into a single TermSpan for the UI grid.
+/// (#twemoji-removal 2026-09-05) 彩色 emoji 渲染(Twemoji 图像 span)已移除:
+/// 集成测试与体积评估认定 34MB 的全集嵌入不值(占 exe 体积约九成),emoji
+/// 交由 Slint 的字体回退渲染单色轮廓。终端列数仍来自网格(span.cells),
+/// 这里只做配色解析与 CJK 标记。
 pub(crate) fn render_term_span(span: &HistSpan, row: i32, is_dark: bool) -> Vec<TermSpan> {
-    use unicode_segmentation::UnicodeSegmentation as _;
-    use unicode_width::UnicodeWidthStr as _;
-
-    let graphemes: Vec<&str> = span.text.graphemes(true).collect();
-    if graphemes.is_empty() {
+    if span.cells <= 0 || span.text.is_empty() {
         return Vec::new();
     }
-
     let (fg, bg) = vt_span_colors(span.fg, span.bg, span.bold, span.inverse, is_dark);
-    let mut result = Vec::new();
-    let mut col = span.col;
-    let mut remaining_cells = span.cells.max(0);
-    let mut plain = String::new();
-    let mut plain_col = col;
-    let mut plain_cells = 0;
-
-    for (index, grapheme) in graphemes.iter().enumerate() {
-        let following = (graphemes.len() - index - 1) as i32;
-        let desired = (*grapheme).width().clamp(1, 2) as i32;
-        let cells = if following == 0 {
-            remaining_cells.max(1)
-        } else {
-            desired.min((remaining_cells - following).max(1))
-        };
-        remaining_cells = remaining_cells.saturating_sub(cells);
-
-        if let Some(emoji_image) = twemoji_image(grapheme) {
-            if !plain.is_empty() {
-                let plain_cjk = contains_cjk(&plain);
-                result.push(TermSpan {
-                    text: std::mem::take(&mut plain).into(),
-                    fg: fg.clone(),
-                    bg: bg.clone(),
-                    bold: span.bold,
-                    row,
-                    col: plain_col,
-                    cells: plain_cells,
-                    cjk: plain_cjk,
-                    emoji: false,
-                    emoji_image: slint::Image::default(),
-                });
-                plain_cells = 0;
-            }
-            result.push(TermSpan {
-                text: "".into(),
-                fg: fg.clone(),
-                bg: bg.clone(),
-                bold: span.bold,
-                row,
-                col,
-                cells,
-                cjk: false,
-                emoji: true,
-                emoji_image,
-            });
-            plain_col = col + cells;
-        } else {
-            if plain.is_empty() {
-                plain_col = col;
-            }
-            plain.push_str(grapheme);
-            plain_cells += cells;
-        }
-        col += cells;
-    }
-
-    if !plain.is_empty() {
-        let cjk = contains_cjk(&plain);
-        result.push(TermSpan {
-            text: plain.into(),
-            fg,
-            bg,
-            bold: span.bold,
-            row,
-            col: plain_col,
-            cells: plain_cells,
-            cjk,
-            emoji: false,
-            emoji_image: slint::Image::default(),
-        });
-    }
-    result
-}
-
-#[cfg(test)]
-mod color_emoji_tests {
-    use super::*;
-
-    fn run(text: &str, cells: i32) -> HistSpan {
-        HistSpan {
-            text: text.to_string(),
-            fg: vt100::Color::Default,
-            bg: vt100::Color::Default,
-            bold: false,
-            inverse: false,
-            col: 4,
-            cells,
-        }
-    }
-
-    #[test]
-    fn replaces_emoji_without_changing_terminal_columns() {
-        let spans = render_term_span(&run("A😀B", 4), 2, true);
-        assert_eq!(spans.len(), 3);
-        assert_eq!((spans[0].col, spans[0].cells), (4, 1));
-        assert!(!spans[0].emoji);
-        assert_eq!((spans[1].col, spans[1].cells), (5, 2));
-        assert!(spans[1].emoji);
-        assert_eq!((spans[2].col, spans[2].cells), (7, 1));
-        assert!(!spans[2].emoji);
-    }
-
-    #[test]
-    fn keeps_zwj_sequence_as_one_color_image() {
-        let spans = render_term_span(&run("👨‍👩‍👧‍👦", 2), 0, true);
-        assert_eq!(spans.len(), 1);
-        assert!(spans[0].emoji);
-        assert_eq!(spans[0].cells, 2);
-    }
-
-    #[test]
-    fn supports_common_composed_emoji_sequences() {
-        for emoji in ["👍🏽", "🇨🇳", "👨‍💻", "❤️"] {
-            let spans = render_term_span(&run(emoji, 2), 0, true);
-            assert_eq!(spans.len(), 1, "unexpected split for {emoji}");
-            assert!(spans[0].emoji, "missing color asset for {emoji}");
-            assert_eq!(spans[0].cells, 2);
-        }
-    }
-
-    #[test]
-    fn respects_explicit_text_presentation_selector() {
-        let spans = render_term_span(&run("♥\u{fe0e}", 1), 0, true);
-        assert_eq!(spans.len(), 1);
-        assert!(!spans[0].emoji);
-        assert_eq!(spans[0].text.as_str(), "♥\u{fe0e}");
-    }
-
-    #[test]
-    fn keeps_plain_text_grouped() {
-        let spans = render_term_span(&run("plain text", 10), 0, true);
-        assert_eq!(spans.len(), 1);
-        assert!(!spans[0].emoji);
-        assert_eq!(spans[0].text.as_str(), "plain text");
-    }
+    let cjk = contains_cjk(&span.text);
+    vec![TermSpan {
+        text: span.text.clone().into(),
+        fg,
+        bg,
+        bold: span.bold,
+        row,
+        col: span.col,
+        cells: span.cells,
+        cjk,
+    }]
 }
 
 /// True if a terminal span contains any CJK character — ideograph, kana, or

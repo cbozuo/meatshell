@@ -104,9 +104,6 @@ open /Applications/meatshell.app
 - [x] 多标签页终端分屏
 - [x] 多窗口：Ctrl+Shift+N（macOS ⌘⇧N）或系统入口“新建窗口”（Windows 任务栏 / Linux 桌面右键），Chrome 式单进程管理
 
-彩色 emoji 图形来自 [Twemoji](https://github.com/jdecked/twemoji)，按
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 使用；完整署名见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ### 计划中
 

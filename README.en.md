@@ -109,10 +109,6 @@ open /Applications/meatshell.app
 - [x] Split panes for tabbed terminals
 - [x] Multiple windows: Ctrl+Shift+N (macOS ⌘⇧N) or the system "New window" entry (Windows taskbar / Linux desktop right-click), managed as a single Chrome-style process
 
-Color emoji graphics are provided by [Twemoji](https://github.com/jdecked/twemoji)
-under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full attribution.
-
 ### Planned
 
 - [ ] Store session passwords in the OS keychain

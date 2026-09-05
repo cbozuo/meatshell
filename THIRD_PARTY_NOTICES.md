@@ -1,12 +1,7 @@
 # Third-Party Notices
 
-## Twemoji
+No third-party notices at this time.
 
-Color emoji graphics are provided by Twemoji.
-
-Copyright 2020 Twitter, Inc. and other contributors.
-
-The graphics are licensed under the Creative Commons Attribution 4.0
-International License: https://creativecommons.org/licenses/by/4.0/
-
-Twemoji project: https://github.com/jdecked/twemoji
+The previous Twemoji attribution was removed together with the terminal
+color-emoji feature (#twemoji-removal 2026-09-05); emoji now render through
+the platform font fallback as monochrome outlines.

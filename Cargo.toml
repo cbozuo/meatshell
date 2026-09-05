@@ -65,15 +65,11 @@ vt100 = "0.15"
 portable-pty = "0.8"
 # East Asian width detection for terminal copy/find column math. Pinned to the
 # same version vt100 uses so "is this glyph 2 cells wide?" agrees with how vt100
-# lays CJK glyphs on the grid 鈥?otherwise selection/find columns drift (#132).
+# lays CJK glyphs on the grid — otherwise selection/find columns drift (#132).
 unicode-width = "0.1.14"
-# Split terminal output into complete emoji grapheme clusters (ZWJ sequences,
-# flags, skin tones, variation selectors) before replacing them with images.
-unicode-segmentation = "1.12"
-# Slint's software/femtovg text rasterizers flatten color-font glyphs to a
-# monochrome mask. Embedded 72px Twemoji PNGs keep emoji colored on every
-# renderer without switching the whole Windows application to Skia (#269).
-twemoji-assets = { version = "1.5", default-features = false, features = ["png"] }
+# (#twemoji-removal 2026-09-05) 终端彩色 emoji(Twemoji 图像 span)已移除:
+# 全集 72px PNG 嵌入占 exe 体积约九成(34MB/38MB),emoji 交由字体回退渲
+# 染单色轮廓。unicode-segmentation 与 twemoji-assets 依赖一并移除。
 russh-sftp = "2"
 rfd = "0.15"
 arboard = "3"
