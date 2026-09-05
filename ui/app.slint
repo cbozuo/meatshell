@@ -79,6 +79,9 @@ export struct TerminalState {
     sftp-panel-height: length,  // SFTP panel extent (bottom dock) — per session
     sftp-panel-width: length,   // SFTP panel extent (side dock) — per session
     sftp-saved-height: length,  // height to restore on un-collapse — per session
+    // (#polish-topbar-r4 2026-09-05) 命令栏显隐改为每会话独立(原为全局总开
+    // 关):顶栏"命令栏"按钮只切换当前活动终端,切标签时各自记忆。
+    cmd-bar-hidden: bool,
 }
 
 // One leaf pane of the split layout (v0.5). Geometry (x/y/w/h) is computed in Rust
@@ -173,11 +176,30 @@ component IconBtn inherits Rectangle {
     // Replaces the previous `ta.has-hover || root.active` branch of the
     // combined background expression so opening a popup no longer keeps the
     // animate background loop running (#breathing-light).
+    // (#polish-topbar 2026-09-05) 激活态统一规范:开启中的按钮用 accent 半透
+    // 明底 + 底部指示条 + 图标 accent(见 active-bar 与 Text),替代原先与
+    // hover 同色的 bg-hover——四个开合型按钮(命令栏/同步/传输/设置)语言
+    // 一致,一眼可辨"哪些开关开着"。
     static-bg := Rectangle {
         x: 0px; y: 0px;
         width: 100%; height: 100%;
         border-radius: Theme.radius-sm;
-        background: ta.has-hover || root.active ? Theme.bg-hover : transparent;
+        background: ta.pressed ? Theme.bg-active
+            : root.active ? Theme.accent.with-alpha(0.15)
+            : ta.has-hover ? Theme.bg-hover
+            : transparent;
+    }
+
+    // Layer 1.5 — 激活指示条(#polish-topbar):底部 2px accent,与标签页
+    // 激活指示条同一视觉语言。
+    active-bar := Rectangle {
+        x: 4px;
+        y: parent.height - 3px;
+        width: parent.width - 8px;
+        height: 2px;
+        border-radius: 1px;
+        background: root.active ? Theme.accent : transparent;
+        animate background { duration: 120ms; }
     }
 
     // Layer 2 — breathing pulse, only while `breathe=true`.
@@ -225,30 +247,40 @@ component IconBtn inherits Rectangle {
     Text {
         text: root.icon;
         font-family: "Material Icons";
-        color: root.icon-color;
+        // (#polish-topbar) 激活态图标转 accent,与背景/指示条一体。
+        color: root.active ? Theme.accent : root.icon-color;
         font-size: Theme.fs-md;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
-    if ta.has-hover && root.tooltip != "" : Rectangle {
-        y: parent.height + 5px;
-        x: parent.width - self.width;   // align right edge with the icon
-        width: tip-txt.preferred-width + 16px;
-        height: 22px;
-        background: Theme.bg-elevated;
-        border-radius: Theme.radius-sm;
-        border-width: 1px;
-        border-color: Theme.border-strong;
-        drop-shadow-blur: 8px;
-        drop-shadow-color: #00000070;
-        tip-txt := Text {
-            text: root.tooltip;
-            color: Theme.text-primary;
-            font-size: Theme.fs-xs;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            width: parent.width;
-            height: parent.height;
+    // (#polish-topbar) tooltip 输出机制:按钮不自己渲染气泡,而是把
+    // (文本, 右缘 x, 顶 y) 写到 AppWindow 根的 topbar-tip-* 属性,由窗口
+    // 根的统一浮层渲染——浮层声明在所有内容之后,天然最顶层,不被标签行
+    // /弹层遮挡;普通元素不拦截鼠标,hover 离开即时隐藏(PopupWindow 模
+    // 态会冻结下层 hover 且多弹窗定位互扰,已弃用)。清空 text 即隐藏,
+    // 仅清"自己正在显示的"提示,避免多按钮竞态。
+    in-out property <string> tip-out-text;
+    in-out property <length> tip-out-x;
+    in-out property <length> tip-out-y;
+    property <bool> tip-hover: ta.has-hover && root.tooltip != "";
+    tip-delay := Timer {
+        interval: 300ms;
+        triggered => {
+            // 注意:Timer 回调内 self 指向 Timer 自身,这里必须用 root
+            // (IconBtn 组件根)读写 tip-out-* 输出属性。
+            root.tip-out-text = root.tooltip;
+            root.tip-out-x = ta.absolute-position.x + ta.width;
+            root.tip-out-y = ta.absolute-position.y + ta.height + 5px;
+        }
+    }
+    changed tip-hover => {
+        if (root.tip-hover) {
+            tip-delay.restart();
+        } else {
+            tip-delay.running = false;
+            if (root.tip-out-text == root.tooltip) {
+                root.tip-out-text = "";
+            }
         }
     }
 
@@ -278,6 +310,62 @@ component IconBtn inherits Rectangle {
     // static-bg layer (above) is also painting `Theme.bg-hover`, so opacity
     // ramps collapsed into a single grey. Retinted to `Theme.accent` so the
     // pulse is visible against the grey backdrop in every state.
+}
+
+// (#polish-topbar-r3 2026-09-05) 标题栏工具按钮:DBeaver 式「图标 + 文字」,
+// 文字自明故无 tooltip;宽度随内容自适应(不设 width,取子项 preferred 和)。
+// 激活态与 IconBtn 同规范:accent 半透明底 + 图标/文字转 accent + 底部 2px
+// 指示条;传输按钮支持 breathe 呼吸层。
+component TopbarBtn inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> active;
+    in property <bool> breathe: false;
+    callback clicked();
+    // 全行高在实例化处绑定(height: parent.height)——组件根不可引用
+    // parent。hover/激活高亮整行,也规避 HL 固定高子项的顶对齐问题;
+    // horizontal-stretch: 0 防止 HL 把按钮拉伸变宽。
+    horizontal-stretch: 0;
+    border-radius: Theme.radius-sm;
+    background: ta.pressed ? Theme.bg-active
+        : root.active ? Theme.accent.with-alpha(0.15)
+        : ta.has-hover ? Theme.bg-hover
+        : transparent;
+    animate background { duration: 120ms; }
+    // 激活指示条已移除(#polish-topbar-r5,用户反馈下划线冗余):激活态由
+    // accent 半透明底 + 图标/文字 accent 色表达。
+    breathe-layer := Rectangle {
+        width: 100%; height: 100%;
+        border-radius: Theme.radius-sm;
+        background: Theme.accent;
+        visible: root.breathe;
+        opacity: root.breathe ? 0.55 : 0;
+        animate opacity { duration: 1400ms; iteration-count: -1; direction: alternate; }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
+        spacing: 6px;
+        Text {
+            text: root.icon;
+            font-family: "Material Icons";
+            color: root.active ? Theme.accent
+                : ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            font-size: 16px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.accent
+                : ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+            font-size: Theme.fs-sm;
+            vertical-alignment: center;
+        }
+    }
 }
 
 // One row in the keyboard-shortcuts dialog: a key chip + a description (#103).
@@ -374,6 +462,17 @@ export component AppWindow inherits Window {
     // Default true so the window is frameless from creation (no native-bar flash);
     // Rust sets it false on macOS, which keeps native decorations.
     in-out property <bool> custom-titlebar: true;
+    // (#polish-topbar) 标题栏按钮 tooltip 的集中渲染槽:按钮把(文本,右缘
+    // x,顶 y)写进来,由窗口根尾部的统一浮层显示。
+    in-out property <string> topbar-tip-text;
+    in-out property <length> topbar-tip-x;
+    in-out property <length> topbar-tip-y;
+    // (#polish-topbar-r3) 设置按钮的位置桥:标题栏按钮在条件块(if
+    // custom-titlebar)内,弹层(窗口根)无法直接引用其 id;按钮把自身的
+    // absolute-position / 宽度经 changed 回写到这两个属性,设置菜单与下载
+    // 菜单据此锚定(右对齐按钮右缘)。
+    in-out property <length> topbar-set-x: 0px;
+    in-out property <length> topbar-set-w: 0px;
     // macOS immersive title bar: Rust makes the native bar transparent and lets
     // content render under it, so we reserve this much space at the top for the
     // traffic-light buttons + a clean drag strip (0 elsewhere). See setup_macos_platform.
@@ -642,8 +741,12 @@ export component AppWindow inherits Window {
     in-out property <bool> sftp-follow-cd: true;
     callback set-sftp-follow-cd(bool);             // apply + persist
     // Hide the quick-command bar under the terminal; toolbar toggle persists it.
+    // (#polish-topbar-r4 2026-09-05) 语义变更:此属性现在是"当前活动终端的
+    // 命令栏隐藏"镜像(真源在各 TerminalState.cmd-bar-hidden),由 Rust 在
+    // 切换标签/切换开关时刷新;每个终端各自记忆,不再是全局总开关。
     in-out property <bool> cmd-bar-hidden: false;
-    callback set-cmd-bar-hidden(bool);             // apply + persist
+    callback toggle-cmd-bar-active();              // 切换活动终端的命令栏显隐
+    callback sync-active-cmd-bar();                // 切标签后把活动终端状态刷进镜像
     // Zen (focus) mode toggle shortcut: Ctrl+Alt+Z (⌘⌥Z on macOS).
     callback toggle-zen-key();
     // Always ask where to save on each download (#87); default off.
@@ -826,6 +929,8 @@ export component AppWindow inherits Window {
     in property <[PaneInfo]> panes;
     in property <[SplitterInfo]> splitters;
     in-out property <string> active-tab-id: "welcome";
+    // (#polish-topbar-r4) 切换标签后,把新活动终端的命令栏状态刷进全局镜像
+    // (顶栏按钮的激活态随之联动)。
     in property <[TerminalState]> terminals;
 
     // --- Dialog state ------------------------------------------------------
@@ -975,6 +1080,9 @@ export component AppWindow inherits Window {
     callback refresh-sidebar();
     changed active-tab-id => {
         root.refresh-sidebar();
+        // (#polish-topbar-r4) 切标签后把新活动终端的命令栏状态刷进全局镜像,
+        // 顶栏"命令栏"按钮的激活态随之联动。
+        root.sync-active-cmd-bar();
         // Closing the last session destroys the terminal's IME focus anchor
         // and nothing else re-claims focus — with no focused item, Slint
         // delivers keys nowhere, stranding the zen escape shortcut (and every
@@ -1191,14 +1299,71 @@ export component AppWindow inherits Window {
                     double-clicked => { root.win-maximize-toggle(); }
                 }
                 HorizontalLayout {
-                    padding-left: 8px;
-                    // Left-corner icon removed; "meatshell" alone sits at the
-                    // start of the titlebar, padded in from the edge (#ui-titlebar).
-                    Text {
-                        text: "meatshell";
-                        color: Theme.text-secondary;
-                        font-size: Theme.fs-sm;
-                        vertical-alignment: center;
+                    // (#polish-topbar-r5) 贴合窗口左缘:去掉标题栏左 padding,
+                    // 呼吸空间由按钮自身的 padding-left(8px)提供。
+                    spacing: 8px;
+                    // (#polish-topbar-r3 2026-09-05) DBeaver 式「图标 + 文字」
+                    // 工具栏:品牌名移除(窗口标题/任务栏已可辨),文字自明故
+                    // 无 tooltip;按钮组左对齐,右侧弹性,窗口控制靠右。
+                    // 新建会话 —— 打开会话对话框(与左侧"+ 新建会话"入口
+                    // 对等,DBeaver"新建连接"同型;#polish-topbar-r5)。
+                    TopbarBtn { height: parent.height;
+                        icon: "\u{E145}";   // add —— "新建"
+                        label: root.lang-en ? "New session" : "新建会话";
+                        // 会话对话框(新建/编辑)打开期间保持选中(#polish-topbar-r5)。
+                        active: root.dialog-open;
+                        clicked => { root.new-session-clicked(); }
+                    }
+                    // 命令栏开关 —— 每会话独立(#polish-topbar-r4):只切换
+                    // 当前活动终端,状态由 Rust 维护并在切标签时联动。
+                    TopbarBtn { height: parent.height;
+                        icon: "\u{EA34}";   // terminal
+                        label: root.lang-en ? "Command" : "命令栏";
+                        active: !root.cmd-bar-hidden;
+                        clicked => { root.toggle-cmd-bar-active(); }
+                    }
+                    // 会话同步 —— 激活 = 广播输入中。
+                    TopbarBtn { height: parent.height;
+                        icon: "\u{E627}";
+                        label: root.lang-en ? "Sync" : "同步";
+                        active: root.sync-input;
+                        clicked => { root.sync-input = !root.sync-input; root.set-sync-input(root.sync-input); }
+                    }
+                    // 主题切换 —— 单色图标(去彩色特例)。
+                    TopbarBtn { height: parent.height;
+                        icon: Theme.dark ? "\u{E518}" : "\u{E51C}";
+                        label: root.lang-en ? "Theme" : "主题";
+                        clicked => { root.toggle-theme(); }
+                    }
+                    // 传输管理 —— 呼吸灯 + 下载弹层锚点(transfer-btn)。
+                    transfer-btn := TopbarBtn { height: parent.height;
+                        icon: "\u{E8D5}";
+                        label: root.lang-en ? "Transfers" : "传输";
+                        active: root.download-open;
+                        breathe: root.has-active-transfers;
+                        clicked => {
+                            // 位置桥(#polish-topbar-r3):菜单打开必经点击,
+                            // 此刻布局已定,写入锚点位置最可靠(changed 对布
+                            // 局驱动的 x 不触发)。下载菜单与设置菜单共用
+                            // 右锚(set-btn 右缘),故写 set-btn 的位置。
+                            root.topbar-set-x = set-btn.absolute-position.x;
+                            root.topbar-set-w = set-btn.width;
+                            root.download-open = !root.download-open; root.settings-open = false;
+                        }
+                    }
+                    // 更多 —— 设置菜单弹层锚点(菜单内第一项才是真正的设置)。
+                    // 激活态:菜单开着,或从菜单进入的界面设置弹窗开着——
+                    // "更多"在整条链路中保持选中(#polish-topbar-r5)。
+                    set-btn := TopbarBtn { height: parent.height;
+                        icon: "\u{E5D4}";   // more_vert —— "更多"语义(码点已验证)
+                        label: root.lang-en ? "More" : "更多";
+                        active: root.settings-open || root.interface-open;
+                        clicked => {
+                            // 位置桥:打开菜单前刷新锚点(见 transfer-btn)。
+                            root.topbar-set-x = self.absolute-position.x;
+                            root.topbar-set-w = self.width;
+                            root.settings-open = !root.settings-open; root.download-open = false; root.ssh-import-hint = "";
+                        }
                     }
                     // Draggable spacer (no TouchArea → clicks fall to tb-drag).
                     Rectangle { horizontal-stretch: 1; }
@@ -1768,7 +1933,9 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 1;
                         // Reserve room for the top-right toolbar icons that sit over
                         // this row so tabs don't slide underneath them (#122).
-                        reserve-right: pane.reserve-right;
+                        // (#polish-topbar) 方案 B:工具组迁入标题栏后,frameless
+                        // 无需预留,标签全宽;macOS 浮动按钮仍需预留。
+                        reserve-right: root.custom-titlebar ? 0px : pane.reserve-right;
                         show-new-tab: !root.welcome-as-sidebar;
                         can-merge-pane: root.panes.length > 1;
                         tabs: pane.tabs;
@@ -1923,7 +2090,7 @@ export component AppWindow inherits Window {
                         quick-commands: root.quick-commands;
                         quick-sidebar-enabled: root.quick-commands-as-sidebar;
                         quick-panel-docked: root.quick-panel-open;
-                        cmd-bar-hidden: root.cmd-bar-hidden;
+                        cmd-bar-hidden: term.cmd-bar-hidden;   // (#polish-topbar-r4) 每会话独立
                         quick-external-command: root.quick-external-command;
                         quick-external-send-enter: root.quick-external-send-enter;
                         quick-external-sequence: root.quick-external-sequence;
@@ -2270,7 +2437,11 @@ export component AppWindow inherits Window {
     // App toolbar icons (settings/download/theme/sync). They sit at the top-right
     // of the tab row — below the custom title bar when frameless (y offset), or
     // at the very top on macOS where the native title bar is separate (#119).
+    // (#polish-topbar 2026-09-05) 方案 B:应用工具组迁入标题栏(见品牌区),
+    // 这组浮动按钮仅在 macOS(非自定义标题栏)平台保留原位;frameless 下
+    // 隐藏,标签行全宽让位给标签。
     IconBtn {
+        visible: !root.custom-titlebar;
         x: root.width - 34px - root.toolbar-x-off; y: root.toolbar-y;
         icon: "\u{E8B8}";
         tooltip: root.lang-en ? "Settings" : "设置";
@@ -2278,6 +2449,7 @@ export component AppWindow inherits Window {
         clicked => { root.settings-open = !root.settings-open; root.download-open = false; root.ssh-import-hint = ""; }
     }
     IconBtn {
+        visible: !root.custom-titlebar;
         x: root.width - 64px - root.toolbar-x-off; y: root.toolbar-y;
         icon: "\u{E8D5}";   // Material "swap_vert" — symmetrical up+down arrows, clearer "transfer" semantic
         tooltip: @tr("Transfers manager");
@@ -2293,13 +2465,16 @@ export component AppWindow inherits Window {
     // own background via `breathe: root.has-active-transfers` above, so the
     // icon stays clean and no stray dot shows over the toolbar (#breathing-light).
     IconBtn {
+        visible: !root.custom-titlebar;
         x: root.width - 94px - root.toolbar-x-off; y: root.toolbar-y;
         icon: Theme.dark ? "\u{E518}" : "\u{E51C}";
-        icon-color: Theme.dark ? #f5c542 : #5856d6;
+        // (#polish-topbar) 去彩色(原黄/紫特例),统一单色图标体系。
+        icon-color: Theme.text-secondary;
         tooltip: root.lang-en ? "Toggle theme" : "切换主题";
         clicked => { root.toggle-theme(); }
     }
     IconBtn {
+        visible: !root.custom-titlebar;
         x: root.width - 124px - root.toolbar-x-off; y: root.toolbar-y;
         icon: "\u{E627}";
         icon-color: root.sync-input ? Theme.accent : Theme.text-secondary;
@@ -2310,13 +2485,40 @@ export component AppWindow inherits Window {
         clicked => { root.sync-input = !root.sync-input; root.set-sync-input(root.sync-input); }
     }
     IconBtn {
+        visible: !root.custom-titlebar;
         x: root.width - 154px - root.toolbar-x-off; y: root.toolbar-y;
-        icon: "\u{E86F}";   // Material "code" — command bar
+        icon: "\u{EA34}";   // (#polish-topbar) Material "terminal" — 比 code(</>) 更直观
         active: !root.cmd-bar-hidden;
         tooltip: root.lang-en
             ? (root.cmd-bar-hidden ? "Show command bar" : "Hide command bar")
             : (root.cmd-bar-hidden ? "显示命令栏" : "隐藏命令栏");
-        clicked => { root.cmd-bar-hidden = !root.cmd-bar-hidden; root.set-cmd-bar-hidden(root.cmd-bar-hidden); }
+        clicked => { root.toggle-cmd-bar-active(); }   // (#polish-topbar-r4) 每会话独立
+    }
+
+    // (#polish-topbar-r3) 工具组已改回标题栏内布局(DBeaver 式图标+文字按
+    // 钮,见标题栏块),此前的居中浮层方案移除。macOS 浮动按钮保留纯图标。
+
+    // (#polish-topbar 2026-09-05) 标题栏按钮 tooltip 的统一浮层:声明在窗
+    if topbar-tip-text != "" : Rectangle {
+        x: parent.topbar-tip-x - self.width;
+        y: parent.topbar-tip-y;
+        width: topbar-tip-txt.preferred-width + 16px;
+        height: 22px;
+        background: Theme.bg-elevated;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #00000070;
+        topbar-tip-txt := Text {
+            text: root.topbar-tip-text;
+            color: Theme.text-primary;
+            font-size: Theme.fs-xs;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
     }
 
     // Frameless resize edges (#119): thin hit-zones that start an OS-level
@@ -2772,8 +2974,15 @@ export component AppWindow inherits Window {
     Rectangle {
         // Follow the download button (shifts with the toolbar when the resource
         // panel docks right/top) (#dock).
-        x: parent.width - 364px - root.toolbar-x-off;
-        y: (root.custom-titlebar ? 78px : 40px + root.titlebar-inset) + root.toolbar-y-off;
+        // (#polish-topbar-r3) 下载菜单与设置菜单共用右锚(set-btn 右缘):
+        // 右对齐后菜单自然覆盖左侧传输按钮下方区域;transfer-btn 的跨条
+        // 件引用被 Slint 拒绝,故不复用。macOS 保持 toolbar 定位。
+        x: root.custom-titlebar
+            ? root.topbar-set-x + root.topbar-set-w - self.width
+            : parent.width - 364px - root.toolbar-x-off;
+        y: root.custom-titlebar
+            ? 42px
+            : (40px + root.titlebar-inset) + root.toolbar-y-off;
         width: root.dl-w;
         height: root.dl-h;
         visible: root.download-open;
@@ -3054,8 +3263,15 @@ export component AppWindow inherits Window {
         // Follow the gear button: it shifts by toolbar-x/y-off when the resource
         // panel docks right/top, so the menu must shift the same amount or it ends
         // up floating over the resource panel (#dock).
-        x: parent.width - 196px - root.toolbar-x-off;
-        y: (root.custom-titlebar ? 78px : 40px + root.titlebar-inset) + root.toolbar-y-off;
+        // (#polish-topbar-r3) 菜单锚定到标题栏的设置按钮(set-btn)左下角:
+        // 按钮自带文字标签后位置随语言/字体变化,元素引用比公式可靠。
+        // macOS(浮动按钮,无 set-btn)保持 toolbar-x/y-off 跟随定位。
+        x: root.custom-titlebar
+            ? root.topbar-set-x + root.topbar-set-w - self.width
+            : parent.width - 196px - root.toolbar-x-off;
+        y: root.custom-titlebar
+            ? 42px
+            : (40px + root.titlebar-inset) + root.toolbar-y-off;
         width: 198px;
         // Size to the menu's content so adding/removing items (or the
         // ~/.ssh/config import hint expanding) never overflows the card (#150-fix).
@@ -3090,7 +3306,7 @@ export component AppWindow inherits Window {
                     Text { text: "\u{E429}"; font-family: "Material Icons"; // tune
                            color: Theme.text-secondary; font-size: Theme.fs-sm;
                            vertical-alignment: center; }
-                    Text { text: root.lang-en ? "Interface" : "界面";
+                    Text { text: root.lang-en ? "Settings" : "设置";
                            color: Theme.text-primary; font-size: Theme.fs-md;
                            vertical-alignment: center; horizontal-stretch: 1; }
                 }

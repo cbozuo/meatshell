@@ -953,15 +953,53 @@ fn open_window(
 
     // Toolbar toggle: hide/show the quick-command bar (persisted globally).
     window.set_cmd_bar_hidden(store.borrow().cmd_bar_hidden());
+    // (#polish-topbar-r4 2026-09-05) 命令栏显隐改为每会话独立:TerminalState
+    // .cmd_bar_hidden 是真源,cmd-bar-hidden 全局属性退化为"活动终端的镜像"
+    // (顶栏按钮激活态与 3221 处的坐标换算都读它)。切换开关 = 改活动终端行;
+    // 切换标签 = 把新活动终端的值刷进镜像。
     {
-        let store = store.clone();
-        let registry = registry.clone();
-        window.on_set_cmd_bar_hidden(move |hidden| {
-            let mut s = store.borrow_mut();
-            s.set_cmd_bar_hidden(hidden);
-            let _ = s.save();
-            drop(s);
-            registry.broadcast_config_changed();
+        let weak = window.as_weak();
+        let weak2 = weak.clone();
+        window.on_toggle_cmd_bar_active(move || {
+            use slint::Model as _;
+            let Some(window) = weak.upgrade() else { return };
+            let active = window.get_active_tab_id().to_string();
+            let terminals = window.get_terminals();
+            let Some(model) =
+                terminals.as_any().downcast_ref::<VecModel<TerminalState>>()
+            else {
+                return;
+            };
+            for i in 0..model.row_count() {
+                if let Some(mut row) = model.row_data(i) {
+                    if row.id.as_str() == active {
+                        row.cmd_bar_hidden = !row.cmd_bar_hidden;
+                        let new_hidden = row.cmd_bar_hidden;
+                        model.set_row_data(i, row);
+                        window.set_cmd_bar_hidden(new_hidden);
+                        break;
+                    }
+                }
+            }
+        });
+        window.on_sync_active_cmd_bar(move || {
+            use slint::Model as _;
+            let Some(window) = weak2.upgrade() else { return };
+            let active = window.get_active_tab_id().to_string();
+            let terminals = window.get_terminals();
+            let Some(model) =
+                terminals.as_any().downcast_ref::<VecModel<TerminalState>>()
+            else {
+                return;
+            };
+            for i in 0..model.row_count() {
+                if let Some(row) = model.row_data(i) {
+                    if row.id.as_str() == active {
+                        window.set_cmd_bar_hidden(row.cmd_bar_hidden);
+                        break;
+                    }
+                }
+            }
         });
     }
 
@@ -4754,6 +4792,8 @@ fn wire_session_callbacks(
             terminals_model.push(TerminalState {
                 id: tab_id.clone().into(),
                 status: t("连接中...", "Connecting...").into(),
+                // (#polish-topbar-r4) 新会话命令栏默认显示,继承当前镜像值。
+                cmd_bar_hidden: false,
                 spans: ModelRc::from(std::rc::Rc::new(VecModel::<TermSpan>::default())),
                 cursor_row: 0,
                 cursor_col: 0,
