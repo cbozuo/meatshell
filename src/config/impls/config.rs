@@ -2000,6 +2000,12 @@ mod tests {
     #[test]
     fn reorder_session_lands_in_empty_explicit_folder() {
         let mut store = reorder_store();
+        // (#drag-cross-group-fix 2026-09-06) named_display_groups 已改为存储
+        // 序(#group-drag-reorder):explicit 组按存储顺序渲染、session-only
+        // 组按首次出现附后。空文件夹要渲染在 beta 之后,必须先把 alpha/beta
+        // 按显示顺序显式注册,再追加 gamma;否则 gamma(explicit)渲染在隐式
+        // 组之前,b2(末组)向下没有相邻组,换位失败。
+        store.cache.groups = vec!["alpha".into(), "beta".into()];
         store.cache.groups.push("gamma".into());
         assert!(store.reorder_session(&id_of(&store, "b2"), 1));
         let last = store.sessions().iter().find(|s| s.name == "b2").unwrap();

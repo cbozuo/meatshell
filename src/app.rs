@@ -154,7 +154,7 @@ use tokio::runtime::Runtime;
 
 use crate::app::core::{AppCore, TabRoute, TabRoutes, WindowRegistry, WindowState};
 use crate::config::{
-    is_reserved_session_group, named_display_groups, AuthMethod, ConfigStore,
+    is_reserved_session_group, AuthMethod, ConfigStore,
     OutputHighlightRule, Secret, Session, SessionKind,
 };
 use crate::i18n::t;
@@ -4181,69 +4181,22 @@ fn wire_session_callbacks(
                 refresh_session_markers_win(&window);
                 return;
             }
-            // ---- 跨组:目标 = 显示顺序的相邻组 ----
-            let target_group = {
-                let s = store.borrow();
-                let Some(session) = s.sessions().iter().find(|x| x.id == id.as_str()) else {
-                    return;
-                };
-                let cur_raw = if session.group.is_empty() {
-                    "default".to_string()
-                } else {
-                    session.group.clone()
-                };
-                let builtin = session_models::builtin_local_sessions(s.wsl_profiles());
-                let mut order: Vec<String> = Vec::new();
-                if !builtin.is_empty() {
-                    order.push("system".into());
-                }
-                order.extend(named_display_groups(
-                    &s.groups().clone(),
-                    s.sessions(),
-                ));
-                let cur = if is_reserved_session_group(cur_raw.trim()) {
-                    "default".to_string()
-                } else {
-                    cur_raw
-                };
-                let pos = order.iter().position(|g| g == &cur);
-                match pos {
-                    Some(p) if dn > size - 1 - gi && p + 1 < order.len() => {
-                        Some(order[p + 1].clone())
-                    }
-                    Some(p) if dn < -gi && p > 0 => Some(order[p - 1].clone()),
-                    _ => None,
-                }
-            };
-            let Some(target_group) = target_group else { return };
-            let mut moved = false;
-            {
+            // ---- 跨组:委托 reorder_session 做一次相邻换位 ----
+            // (#drag-cross-group-fix 2026-09-06) 旧实现在这里自建目标组序
+            // [system]+named_display_groups:缺 "default" 段、不跳折叠组,且
+            // 与 build_session_rows 的显示顺序(当时仍按字母排序)不一致——
+            // 向上拖动经常被判进保留组 system,再被保留组检查静默拒绝,用户
+            // 看到的就是"首行靠近组别就停住,永远跨不进上面的组"。
+            // reorder_session 已内建全部正确语义,直接委托:
+            //  - 同组邻位优先(走到这里必然越界,同向无同组邻居,必然走跨组);
+            //  - 跨组按显示顺序(default → named 存储序)取最近**未折叠**组;
+            //  - 落点 = 上一组末尾 / 下一组开头;
+            //  - 拖空的隐式源组保留为空文件夹(补注册进 explicit groups)。
+            let dir = if dn < 0 { -1i32 } else { 1i32 };
+            let moved = {
                 let mut s = store.borrow_mut();
-                if let Some(orig) = s.get(&id.to_string()).cloned() {
-                    // (#group-keep-empty 2026-09-06) 源组若不在 explicit groups
-                    // (会话手输组名产生的隐式组),拖空后会从列表消失——补注册
-                    // 进 explicit,空组保留显示(计数 0)。
-                    let src = orig.group.trim().to_string();
-                    if !src.is_empty()
-                        && !src.eq_ignore_ascii_case("default")
-                        && !is_reserved_session_group(&src)
-                        && !s.groups().iter().any(|g| g == &src)
-                    {
-                        s.add_group(src);
-                    }
-                    let mut target_sess = orig;
-                    // "default" 是未分组显示名 → 存空串;system 组仅内置会话。
-                    target_sess.group = if target_group.eq_ignore_ascii_case("default") {
-                        String::new()
-                    } else if is_reserved_session_group(target_group.trim()) {
-                        return;
-                    } else {
-                        target_group.clone()
-                    };
-                    s.upsert(target_sess);
-                    moved = true;
-                }
-            }
+                s.reorder_session(id.as_str(), dir as isize)
+            };
             if moved {
                 if let Err(err) = store.borrow_mut().save() {
                     tracing::warn!("failed to save config after cross-group drag: {err:#?}");

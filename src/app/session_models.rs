@@ -1,4 +1,7 @@
 use super::*;
+// (#drag-cross-group-fix 2026-09-06) 显式导入:此前经 `use super::*` 隐式
+// 继承 app.rs 的 use 项,app.rs 内不再直接使用该函数后需在此声明。
+use crate::config::named_display_groups;
 
 pub(super) fn wsl_profile_model(store: &ConfigStore) -> ModelRc<WslProfileInfo> {
     let rows = store
@@ -171,8 +174,23 @@ fn build_session_rows(
     } else {
         named_display_groups(explicit_groups, sessions)
     };
-    named.sort_by_key(|g| g.to_lowercase());
-    named.dedup();
+    // (#drag-cross-group-fix 2026-09-06) 不再按字母排序:显示顺序必须与
+    // named_display_groups 的存储顺序(用户组头拖动换位维护的顺序)完全一致。
+    // 旧代码在这里重新按字母排序,导致三处组序互相矛盾:
+    //  1) 组头拖动排序(reorder-group 改存储顺序)视觉上无效——显示仍按字母序;
+    //  2) 跨组拖动(move-session-delta)按存储顺序找"相邻组",与显示相邻组
+    //     不符:存储序为 [测试, Test] 而显示为 [Test, 测试] 时,把"测试"里
+    //     的会话向上拖,被判定落到保留组 system,再被保留组检查静默拒绝
+    //     ——表现为"首行靠近组别就卡住,永远跨不进上面的组"。
+    //  3) 与 reorder_session 的显示序(存储序)不一致,同病。
+    // 改为按首次出现去重、保持存储顺序(搜索路径收集的会话组序同样保留)。
+    let mut unique: Vec<String> = Vec::new();
+    for group in named {
+        if !unique.contains(&group) {
+            unique.push(group);
+        }
+    }
+    named = unique;
 
     let mut display_groups: Vec<String> = Vec::new();
     if has_default {
@@ -222,7 +240,12 @@ fn build_session_rows(
             builtin: true,
             conn_state: 0,
             group_index: i as i32,
-            group_size: if i == 0 { builtin_matched.len() as i32 } else { 0 },
+            // (#drag-cross-group-fix 2026-09-06) 组大小写入每一行:拖拽起拖时
+            // drag-size 取自"被拖行"的 session.group-size,旧代码只有首行有值
+            // (徽章用途),非首行拖拽时 size=0 → Rust 端组内窗口
+            // dn∈[-gi, size-1-gi] 塌缩为空,组内排序被误判成跨组移动。
+            // 计数徽章只在组头行渲染,非首行带值无副作用。
+            group_size: builtin_matched.len() as i32,
         });
     }
     for group in &display_groups {
@@ -270,7 +293,9 @@ fn build_session_rows(
                     builtin: false,
                     conn_state: 0,
                     group_index: i as i32,
-                    group_size: if i == 0 { gs.len() as i32 } else { 0 },
+                    // (#drag-cross-group-fix 2026-09-06) 同上:非首行也带
+                    // 真实组大小,否则非首行拖拽的组内/跨组判定全部失真。
+                    group_size: gs.len() as i32,
                 });
             }
         }
@@ -567,5 +592,57 @@ mod search_tests {
         assert!(rows
             .iter()
             .any(|row| row.group.as_str() == "prod" && row.collapsed));
+    }
+}
+
+#[cfg(test)]
+mod drag_order_tests {
+    use super::*;
+
+    fn sess(id: &str, name: &str, group: &str) -> Session {
+        let mut value = Session::new_empty();
+        value.id = id.into();
+        value.name = name.into();
+        value.group = group.into();
+        value
+    }
+
+    /// (#drag-cross-group-fix 2026-09-06) 显示组序必须等于存储组序(组头拖动
+    /// 换位维护的顺序),不得按字母重排——否则跨组拖动的"相邻组"判定与显示
+    /// 相邻组不符,向上拖会被判进保留组 system 而静默 no-op(首行卡在组边
+    /// 界)。且每一行都要携带真实 group_size:非首行旧实现填 0,拖拽起拖时
+    /// drag-size 取自被拖行,组内窗口 dn∈[-gi, size-1-gi] 塌缩,组内排序
+    /// 被误判成跨组移动。
+    #[test]
+    fn group_rows_follow_stored_order_and_carry_group_size() {
+        let saved = vec![
+            sess("1", "202", "测试"),
+            sess("2", "s", "Test"),
+            sess("3", "t2", "Test"),
+        ];
+        // 存储顺序:测试 在 Test 之前(字母序会把它排到后面)。
+        let groups = vec!["测试".to_string(), "Test".to_string()];
+
+        let rows = build_session_rows(&saved, &groups, None, &[], "");
+
+        let headers: Vec<&str> = rows
+            .iter()
+            .filter(|r| !r.group_header.is_empty())
+            .map(|r| r.group_header.as_str())
+            .collect();
+        assert_eq!(headers, ["测试", "Test"]);
+
+        for row in rows.iter().filter(|r| r.group.as_str() == "Test") {
+            assert_eq!(row.group_size, 2, "every row must carry the real group size");
+        }
+        let first_test = rows.iter().find(|r| r.group.as_str() == "Test").unwrap();
+        assert_eq!(first_test.group_header.as_str(), "Test");
+        assert_eq!(first_test.group_index, 0);
+        let second_test = rows
+            .iter()
+            .filter(|r| r.group.as_str() == "Test")
+            .nth(1)
+            .unwrap();
+        assert_eq!(second_test.group_index, 1);
     }
 }
