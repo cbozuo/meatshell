@@ -3706,7 +3706,9 @@ export component AppWindow inherits Window {
                     font-family: Theme.ui-font-family; // CJK-capable (#54)
                     placeholder-text: @tr("Session name");
                     // Focus the text the moment the dialog opens.
-                    init => { tr-input.focus(); }
+                    // (#drag-smooth-fix) 用 self.focus():在自身 init 里按 id
+                    // 引用本元素,编译器不认其为可聚焦元素(构建期报错)。
+                    init => { self.focus(); }
                     accepted => {
                         root.rename-tab(root.tab-rename-id, root.tab-rename-value);
                     }

@@ -68,6 +68,11 @@ component SessionRow inherits Rectangle {
     in property <length> drag-dy;
     in property <string> drag-id;
     in property <int> drag-dn;
+    // (#drag-smooth-fix 2026-09-06) 真实行距 = 本行高 + 组内 spacing 2px。
+    // 旧实现在 drag-dn / shift-y / landing-dy 三处写死 40px(仅 compact 行高
+    // 38+2 成立);非 compact 行高 36 → 真实行距 38,每让位一格多算 2px,
+    // 多次拖动错位累积 → 间距忽大忽小。改由被拖行起拖时上报真实行距。
+    in-out property <length> drag-pitch: 40px;
     in property <bool> landing-all;
     in property <string> landing-id;
     in property <length> landing-dy;
@@ -150,6 +155,8 @@ component SessionRow inherits Rectangle {
                 if (root.reorder-enabled && abs(touch.mouse-y - root.grab-y) > 5px) {
                     root.grab-dragging = true;
                     root.grab-y = touch.mouse-y;
+                    // (#drag-smooth-fix) 上报真实行距,供 dn 阈值 / 让位 / 落位共用。
+                    root.drag-pitch = root.height + 2px;
                     root.drag-start();
                 }
             }
@@ -309,12 +316,17 @@ component SessionRow inherits Rectangle {
         background: Theme.accent.with-alpha(0.06);
         border-width: 1px;
         border-color: Theme.accent.with-alpha(0.6);
+        // (#drag-smooth-fix) 占位框跟随落点而非钉在原槽:起拖时(未进位)仍在
+        // 原位,一旦 dn 变化就整体平移到目标格,原槽彻底空出——消除"底下
+        // 那一格总被自己占着"的观感。
+        y: root.drag-dn * root.drag-pitch;
+        animate y { duration: root.grab-dragging ? 120ms : 0ms; easing: ease-out; }
     }
     property <length> shift-y:
         !root.list-dragging || session.id == root.drag-id
             || session.group != root.drag-group || root.drag-dn == 0 ? 0px
-        : session.group-index > root.drag-gi && session.group-index <= root.drag-gi + root.drag-dn ? -40px
-        : session.group-index < root.drag-gi && session.group-index >= root.drag-gi + root.drag-dn ? 40px
+        : session.group-index > root.drag-gi && session.group-index <= root.drag-gi + root.drag-dn ? -root.drag-pitch
+        : session.group-index < root.drag-gi && session.group-index >= root.drag-gi + root.drag-dn ? root.drag-pitch
         : 0px;
 
     // Row content — wrapped in a card so the dragged row can lift (shadow +
@@ -342,7 +354,9 @@ component SessionRow inherits Rectangle {
         border-radius: Theme.radius-sm;
         background: root.drag-target ? Theme.bg-elevated
             : (touch.has-hover ? Theme.bg-hover : transparent);
-        drop-shadow-blur: root.drag-target ? 14px : 0px;
+        // (#drag-smooth-fix) 跟手时阴影降一档:模糊半径每帧重算,是软件渲染
+        // 下拖动掉帧的主要开销;静止的 drag-target 仍保留 14px 抬升感。
+        drop-shadow-blur: root.drag-target ? (root.grab-dragging ? 8px : 14px) : 0px;
         drop-shadow-color: root.drag-target ? #00000060 : transparent;
         animate background { duration: 120ms; }
         animate drop-shadow-blur { duration: 120ms; }
@@ -475,7 +489,14 @@ export component Welcome inherits Rectangle {
     in-out property <length> drag-dy: 0px;
     // (#session-drag-smooth-r2) dn 不再钳制:超出本组范围的值由 Rust 端解
     // 释为跨组意图(dn < -gi → 上一组;dn > size-1-gi → 下一组)。
-    property <int> drag-dn: Math.round(root.drag-dy / 40px);
+    // (#drag-smooth-fix) 1) 行距改用被拖行上报的 drag-pitch(不再写死 40);
+    // 2) 加滞后带:向下需越过 0.62×pitch 才进位、向上需退回 0.38×pitch 才退位,
+    // 消除指针在边界抖动时让位动画来回翻(旧 round() 在 ±0.5×pitch 处反复横跳)。
+    in-out property <length> drag-pitch: 40px;
+    property <int> drag-dn: root.drag-pitch <= 0px ? 0
+        : root.drag-dy >= 0px
+            ? Math.floor((root.drag-dy + root.drag-pitch * 0.38) / root.drag-pitch)
+            : Math.ceil((root.drag-dy - root.drag-pitch * 0.38) / root.drag-pitch);
     // (#session-landing 2026-09-06) 落位动画序列(修复松手后其余行抖动):
     // 阶段1 landing-all:全部行 y 动画关闭,模型换位瞬时生效(内容瞬切,
     // 无交叉乱飞);阶段2(0ms Timer 后)landing-id/landing-dy 指向目标行,
@@ -493,7 +514,7 @@ export component Welcome inherits Rectangle {
         triggered => {
             root.landing-all = false;
             root.landing-id = root.release-id;
-            root.landing-dy = root.release-dy - root.release-dn * 40px;
+            root.landing-dy = root.release-dy - root.release-dn * root.drag-pitch;
             land-clear.restart();
         }
     }
@@ -506,6 +527,10 @@ export component Welcome inherits Rectangle {
     property <bool> group-dragging: false;
     property <string> group-drag-id: "";
     property <length> group-dy: 0px;
+    // (#drag-smooth-fix) 组头换位阈值 = 本组块高 × 0.6(下限 24px)。旧值固定
+    // 20px 与真实块高(折叠 46px / 展开 46 + n×行距)无关:大组轻抖就换位、
+    // 折叠组又难触发,多次拖动后顺序与手感都不一致。
+    property <length> group-step: 24px;
     callback reorder-group(string /* group */, int /* dir */);
     callback new-session();
     callback move-session-delta(string /* session-id */, int /* dn */, int /* gi */, int /* size */);   // (#session-drag-smooth) 转发给 AppWindow
@@ -902,9 +927,10 @@ export component Welcome inherits Rectangle {
                                         parent.g-was-drag = false;
                                     } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
                                         if (root.group-dragging && session.group == root.group-drag-id) {
-                                            // 松手落位:±20px 阈值,一次一位。
+                                            // 松手落位:按本组块高换算的阈值,一次一位。
                                             root.reorder-group(session.group,
-                                                root.group-dy > 20px ? 1 : (root.group-dy < -20px ? -1 : 0));
+                                                root.group-dy > root.group-step ? 1
+                                                : (root.group-dy < -root.group-step ? -1 : 0));
                                             root.group-dragging = false;
                                             root.group-drag-id = "";
                                             root.group-dy = 0px;
@@ -926,6 +952,9 @@ export component Welcome inherits Rectangle {
                                         root.group-dragging = true;
                                         root.group-drag-id = session.group;
                                         root.group-dy = 0px;
+                                        root.group-step = max(24px, (46px
+                                            + (session.collapsed ? 0px
+                                                : session.group-size * root.drag-pitch)) * 0.6);
                                         parent.g-was-drag = true;
                                     }
                                     if (root.group-dragging && session.group == root.group-drag-id) {
@@ -1103,6 +1132,7 @@ export component Welcome inherits Rectangle {
                             landing-id <=> root.landing-id;
                             landing-dy <=> root.landing-dy;
                             drag-dn <=> root.drag-dn;
+                            drag-pitch <=> root.drag-pitch;
                             // (#session-tree-hierarchy) 成员缩进 18px + 树形
                             // 引导线:文本起点在组头文字右侧,竖线沿缩进区中点
                             // 逐行延伸,构成"组头 → 成员"的父子层级。
