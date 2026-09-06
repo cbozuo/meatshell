@@ -1003,7 +1003,7 @@ export component AppWindow inherits Window {
     callback duplicate-session(string /* session-id */);
     callback move-session(string /* session-id */, string /* group */);
     callback reorder-session(string /* session-id */, int /* dir: -1 up, 1 down */) -> bool;
-    callback move-session-delta(string /* session-id */, int /* dn */, int /* gi */, int /* size */);   // (#session-drag-smooth) 拖拽落位(组内排序或跨组移动)
+    callback move-session-to(string /* session-id */, string /* target-id */, bool /* after */);   // (#drag-ghost-pointer) 几何落位:移到目标行前/后并继承其组
     callback reorder-group(string /* group */, int /* dir */);   // (#group-drag-reorder) 组头拖动换位
     callback reorder-session-end();
     callback toggle-group(string /* group */);
@@ -1550,7 +1550,7 @@ export component AppWindow inherits Window {
                     card-out-note <=> root.session-card-note;
                     card-out-x <=> root.session-card-x;
                     card-out-y <=> root.session-card-y;
-                    move-session-delta(id, dn, gi, size) => { root.move-session-delta(id, dn, gi, size); }
+                    move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     reorder-group(g, dir) => { root.reorder-group(g, dir); }
                     width: parent.width;
                     height: parent.height;
@@ -2033,7 +2033,7 @@ export component AppWindow inherits Window {
                         card-out-note <=> root.session-card-note;
                         card-out-x <=> root.session-card-x;
                         card-out-y <=> root.session-card-y;
-                        move-session-delta(id, dn, gi, size) => { root.move-session-delta(id, dn, gi, size); }
+                        move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                         reorder-group(g, dir) => { root.reorder-group(g, dir); }
                         search-changed(query) => { root.host-search-changed(query); }
                         new-session => { root.new-session-clicked(); }
@@ -3705,12 +3705,15 @@ export component AppWindow inherits Window {
                     text <=> root.tab-rename-value;
                     font-family: Theme.ui-font-family; // CJK-capable (#54)
                     placeholder-text: @tr("Session name");
-                    // Focus the text the moment the dialog opens.
-                    // (#drag-ghost 2026-09-06) 聚焦写回 tr-input.focus():编译器
-                    // 对 LineEdit.focus() 的可解析性依赖 inner_components 处理
-                    // 顺序(ui 文件增删元素会翻转),self/tr-input 两种写法都在
-                    // 不同顺序下翻过车;以 cargo check 实测通过者为准。
-                    init => { tr-input.focus(); }
+                    // (#drag-ghost-pointer 2026-09-06) 曾尝试打开时自动聚焦
+                    // (tr-input.focus()/self.focus() 两种写法):Slint 编译器
+                    // 对 LineEdit.focus() 的可解析性依赖 inner_components 处
+                    // 理顺序,ui 任意增删元素即翻转(两种写法各自在不同序爆
+                    // "focus() can only be called on focusable elements",
+                    // 见 passes/focus_handling.rs 的 gen_focus_functions 时
+                    // 序)。可靠替代 = 聚焦原生 TextInput(内置 accepts_
+                    // focus,session_dialog/terminal_view 均如此);本框暂
+                    // 保留 LineEdit 视觉,自动聚焦让位给点击输入。
                     accepted => {
                         root.rename-tab(root.tab-rename-id, root.tab-rename-value);
                     }

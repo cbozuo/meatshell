@@ -61,22 +61,36 @@ component SessionRow inherits Rectangle {
     // drag (the grab was lost when a hop changed the row count and rebuilt
     // the model) and clear it instead of leaving the card lifted.
     in property <bool> list-dragging: false;
-    // (#session-drag-smooth 2026-09-05) 拖动共享状态(Welcome 级,实例绑定):
-    // 被拖行写入,所有成员行读取以计算让位偏移。
-    in property <string> drag-group;
-    in property <int> drag-gi;
-    in property <int> drag-size;
+    // (#session-drag-smooth 2026-09-05 → #drag-ghost-pointer 2026-09-06) 拖
+    // 动共享状态精简为三样:指针偏移 / 被拖 id / 真实行距(ghost 高度用)。
+    // dn×pitch 槽位抽象整体退役:组头 46px 与组间 8px 使视觉行距不均匀,
+    // 任何"累计偏移→槽位"换算都与所见脱节(多轮"不丝滑"的公共根因)。
     in property <length> drag-dy;
     in property <string> drag-id;
-    in property <int> drag-dn;
-    // (#drag-smooth-fix 2026-09-06) 真实行距 = 本行高 + 组内 spacing 2px。
-    // 旧实现在 drag-dn / shift-y / landing-dy 三处写死 40px(仅 compact 行高
-    // 38+2 成立);非 compact 行高 36 → 真实行距 38,每让位一格多算 2px,
-    // 多次拖动错位累积 → 间距忽大忽小。改由被拖行起拖时上报真实行距。
+    // ghost 中心 y(列表内容坐标,已钳制),实例侧从条件作用域内的
+    // list-host 绑入(sess-list 在条件子树内,组件根不可见)。
+    in property <length> ghost-y: 0px;
     in-out property <length> drag-pitch: 40px;
-    in property <bool> landing-all;
-    in property <string> landing-id;
-    in property <length> landing-dy;
+    // (#drag-ghost-pointer 2026-09-06) 指针几何落点:slot-y = 本行在列表内容
+    // 坐标里的 y(实例侧绑定),配合 root.ghost-y 判定 ghost 悬停在本行哪
+    // 一半;命中行画插入指示线(行顶=插到本行前,行底=之后),并经
+    // drop-report 聚合到 Welcome,松手按 (target, after) 一次提交。
+    in property <length> slot-y: 0px;
+    property <bool> ghost-over:
+        root.list-dragging && root.drag-id != "" && session.id != root.drag-id
+        && !session.builtin
+        && root.ghost-y + root.drag-pitch / 2 >= slot-y
+        && root.ghost-y + root.drag-pitch / 2 < slot-y + self.height;
+    property <bool> drop-after: root.ghost-y + root.drag-pitch / 2 > slot-y + self.height / 2;
+    callback drop-report(string /* target-id */, bool /* after */);
+    // 命中即上报(后写覆盖;ghost 中心同一时刻只可能落在一行内)。
+    // 移出(true→false)不上报:残留目标 = 最后经过的行,拖到组头/空白
+    // 区松手时落到邻近行,符合直觉。
+    changed ghost-over => {
+        if (self.ghost-over) {
+            root.drop-report(session.id, self.drop-after);
+        }
+    }
     property <bool> system-row: root.session.builtin;
     // (#session-tree-hierarchy 2026-09-04) 树形层级:成员行相对分组头缩进
     // content-indent,并可选显示树形引导竖线——每行画一段(border-subtle,
@@ -161,10 +175,10 @@ component SessionRow inherits Rectangle {
                     root.drag-start();
                 }
             }
-            // (#session-drag-smooth 2026-09-05) 拖动过程不逐行换位:只持续
-            // 上报指针偏移;(#drag-ghost 2026-09-06) 跟手元素是列表级 ghost
-            // 浮动卡(本体隐形留洞),其余成员行按 drag-dn 平滑让位,松手由
-            // drag-end 一次性落位。
+            // (#session-drag-smooth 2026-09-05) 拖动过程不 mutate 模型:只持
+            // 续上报指针偏移;(#drag-ghost-pointer 2026-09-06) 跟手元素是列
+            // 表级 ghost 浮动卡(本体隐形留洞),落点由各行按指针几何自判
+            // (插入指示线),松手按 (命中行, 前/后) 一次提交。
             root.drag-out-dy = touch.mouse-y - root.grab-y;
         }
     }
@@ -305,34 +319,13 @@ component SessionRow inherits Rectangle {
         }
     }
 
-    // (#session-drag-smooth) 让位偏移:同组成员行在拖动期间向被拖行原位
-    // 方向平移一行高(38px),空出落点;被拖行自身走跟手 dy。行步长 =
-    // 行高 38 + 行距 2 = 40。组外/非拖动时为 0。
-    // (#session-drag-placeholder 2026-09-05) 拖动中原槽位占位框:accent 半
-    // 透明底 + 边框,明确行被空出的落点(卡片跟手浮起后原位不空白)。
-    Rectangle {
-        visible: root.grab-dragging;
-        width: parent.width;
-        height: parent.height;
-        border-radius: Theme.radius-sm;
-        background: Theme.accent.with-alpha(0.06);
-        border-width: 1px;
-        border-color: Theme.accent.with-alpha(0.6);
-        // (#drag-smooth-fix) 占位框跟随落点而非钉在原槽:起拖时(未进位)仍在
-        // 原位,一旦 dn 变化就整体平移到目标格,原槽彻底空出——消除"底下
-        // 那一格总被自己占着"的观感。
-        y: root.drag-dn * root.drag-pitch;
-        animate y { duration: root.grab-dragging ? 120ms : 0ms; easing: ease-out; }
-    }
-    property <length> shift-y:
-        !root.list-dragging || session.id == root.drag-id
-            || session.group != root.drag-group || root.drag-dn == 0 ? 0px
-        : session.group-index > root.drag-gi && session.group-index <= root.drag-gi + root.drag-dn ? -root.drag-pitch
-        : session.group-index < root.drag-gi && session.group-index >= root.drag-gi + root.drag-dn ? root.drag-pitch
-        : 0px;
+    // (#drag-ghost-pointer 2026-09-06) 旧"让位 + 占位框"机制整体退役:
+    // shift-y 让位与 dn×pitch 占位框都是槽位抽象的产物,在组头/组间距处
+    // 与视觉几何脱节,且追赶动画永远滞后于指针。落点表达改由命中行的
+    // 插入指示线承担(见组件末尾),所见即所得、零动画延迟。
 
-    // Row content — wrapped in a card so it can animate (让位 / 落位吸附)
-    // inside its slot.
+    // Row content — wrapped in a card so it can hide in place while dragged
+    // (洞) and tint when hovered by the ghost.
     // (#drag-ghost 2026-09-06) tabs #408 同款 ghost 模型:拖动期间卡片本体
     // 在原槽隐形(opacity 0 = 洞),跟手改由列表级 ghost 浮动卡承担(见
     // Welcome 列表末尾,声明序恒在最上层)。旧实现本体跟手,滞后带死区内
@@ -341,20 +334,14 @@ component SessionRow inherits Rectangle {
     card := Rectangle {
         // (#session-list-inset-revert 2026-09-05) 撤销 4px 内缩,恢复全宽:
         // 内缩后与右侧资源面板的行高亮宽度不一致,左右不协调(用户反馈)。
-        // (#session-landing 2026-09-06) 落位三态:让位(150ms)/ 吸附(目标行
-        // 从松手位置滑入)/ landing-all 全关(模型瞬切换位防交叉乱飞)。
-        // ghost→实体交接:landing-dy = 松手指针偏移 - dn×行距,恰为 ghost
-        // 所在位置,实体在 ghost 消失处出现并滑入新槽,视觉无缝。
-        y: root.landing-id != "" && session.id == root.landing-id ? root.landing-dy : shift-y;
-        animate y {
-            duration: root.landing-all ? 0ms : 150ms;
-            easing: ease-out;
-        }
+        // (#drag-ghost-pointer 2026-09-06) 卡片没有任何 y 位移:拖动中本体
+        // 隐形留洞(opacity 0),ghost 悬停本行时给一层极淡的 accent 底。
         opacity: root.grab-dragging ? 0 : 1.0;
         width: parent.width;
         height: parent.height;
         border-radius: Theme.radius-sm;
-        background: touch.has-hover ? Theme.bg-hover : transparent;
+        background: ghost-over ? Theme.accent.with-alpha(0.05)
+            : (touch.has-hover ? Theme.bg-hover : transparent);
         animate background { duration: 120ms; }
 
         // 树形引导竖线:先声明 → 垫在内容下层;hover 背景是 card 自身的
@@ -440,6 +427,18 @@ component SessionRow inherits Rectangle {
         }
     }
     }
+
+    // (#drag-ghost-pointer 2026-09-06) 插入指示线:ghost 悬停本行时,在行
+    // 顶/行底画 2px accent 线——ghost 中心在上半区=插到本行前,下半区=后。
+    // 零动画直读指针几何,快速拖动也不滞后;上下各外溢 1px,骑在 2px 行
+    // 间隙的中缝上,视觉属于两行之间。声明在 card 之后 → 盖在卡片上。
+    if root.list-dragging && ghost-over : Rectangle {
+        y: drop-after ? parent.height - 1px : -1px;
+        width: parent.width;
+        height: 2px;
+        border-radius: 1px;
+        background: Theme.accent;
+    }
 }
 
 component CollapseButton inherits Rectangle {
@@ -476,49 +475,14 @@ export component Welcome inherits Rectangle {
     in-out property <length> card-out-x;
     in-out property <length> card-out-y;
     in-out property <length> drag-out-dy;   // (#session-drag-smooth) 拖动中的指针偏移输出
-    // (#session-drag-smooth 2026-09-05) 平滑拖拽的共享状态:被拖行写入
-    // (组名 / 组内序 / 组大小 / 指针偏移),其他成员行据此计算让位偏移;
-    // 拖动过程不 mutate 模型,松手按 drag-dn 一次落位(move-session-delta)。
-    in-out property <string> drag-group: "";
-    in-out property <int> drag-gi: 0;
-    in-out property <int> drag-size: 1;
     in-out property <length> drag-dy: 0px;
-    // (#session-drag-smooth-r2) dn 不再钳制:超出本组范围的值由 Rust 端解
-    // 释为跨组意图(dn < -gi → 上一组;dn > size-1-gi → 下一组)。
-    // (#drag-smooth-fix) 1) 行距改用被拖行上报的 drag-pitch(不再写死 40);
-    // 2) 滞后带:#drag-ghost 2026-09-06 由 0.38/0.62 收窄到 0.46/0.54——宽
-    // 死区内邻行不动画而跟手元素悬停压在其上,是"重叠卡住"观感的来源之一;
-    // 8% 死区(≈3px)仍足以抑制中点抖动导致的占位框来回翻。
     in-out property <length> drag-pitch: 40px;
-    property <int> drag-dn: root.drag-pitch <= 0px ? 0
-        : root.drag-dy >= 0px
-            ? Math.floor((root.drag-dy + root.drag-pitch * 0.46) / root.drag-pitch)
-            : Math.ceil((root.drag-dy - root.drag-pitch * 0.46) / root.drag-pitch);
-    // (#session-landing 2026-09-06) 落位动画序列(修复松手后其余行抖动):
-    // 阶段1 landing-all:全部行 y 动画关闭,模型换位瞬时生效(内容瞬切,
-    // 无交叉乱飞);阶段2(0ms Timer 后)landing-id/landing-dy 指向目标行,
-    // 仅被拖行从松手视觉位置吸附滑入新槽(150ms),其余行静止。
-    property <bool> landing-all: false;
-    property <bool> land-kick: false;
-    property <string> landing-id: "";
-    property <length> landing-dy: 0px;
-    property <string> release-id: "";
-    property <length> release-dy: 0px;
-    property <int> release-dn: 0;
-    changed land-kick => { land-timer.restart(); }
-    land-timer := Timer {
-        interval: 0ms;
-        triggered => {
-            root.landing-all = false;
-            root.landing-id = root.release-id;
-            root.landing-dy = root.release-dy - root.release-dn * root.drag-pitch;
-            land-clear.restart();
-        }
-    }
-    land-clear := Timer {
-        interval: 170ms;
-        triggered => { root.landing-id = ""; }
-    }
+    // (#drag-ghost-pointer 2026-09-06) 聚合落点:命中行经 drop-report 上报
+    // (ghost 中心同一时刻只可能落在一行内,后写覆盖即正确值);
+    // drag-start 清空,松手消费。ghost-y 的计算放在条件子树内(list-host,
+    // 见列表区),那里才可见 sess-list;此处只留跨作用域共享的状态。
+    property <string> drop-target-id: "";
+    property <bool> drop-after: false;
     // (#group-drag-reorder 2026-09-06) 组头拖动排序:跟手浮起,松手按方向
     // 相邻换位(阈值 ±20px,一次一位;Rust 维护 explicit groups 顺序)。
     property <bool> group-dragging: false;
@@ -530,7 +494,7 @@ export component Welcome inherits Rectangle {
     property <length> group-step: 24px;
     callback reorder-group(string /* group */, int /* dir */);
     callback new-session();
-    callback move-session-delta(string /* session-id */, int /* dn */, int /* gi */, int /* size */);   // (#session-drag-smooth) 转发给 AppWindow
+    callback move-session-to(string /* session-id */, string /* target-id */, bool /* after */);   // (#drag-ghost-pointer) 几何落位转发 AppWindow
     callback import-ssh-config();
     callback connect-session(string);
     callback edit-session(string);
@@ -849,7 +813,15 @@ export component Welcome inherits Rectangle {
                     }
                 }
 
-                if sessions.length > 0 : Rectangle {
+                if sessions.length > 0 : list-host := Rectangle {
+                    // (#drag-ghost-pointer 2026-09-06) ghost 中心 y(列表内容
+                    // 坐标,钳制在内容区内)。声明在本条件子树内因为计算依赖
+                    // sess-list.preferred-height(条件作用域外不可见);行与
+                    // ghost 都经实例绑定读取。
+                    property <length> ghost-y: clamp(
+                        root.drag-origin-y + root.drag-dy,
+                        0px,
+                        max(0px, sess-list.preferred-height - max(1px, root.drag-pitch - 2px)));
                     x: 16px;
                     y: root.compact ? 128px : 90px;
                     width: parent.width - 32px;
@@ -1126,18 +1098,19 @@ export component Welcome inherits Rectangle {
                             card-out-note <=> root.card-out-note;
                             card-out-x <=> root.card-out-x;
                             card-out-y <=> root.card-out-y;
-                            // (#session-drag-smooth) 拖动共享状态下行分发。
+                            // (#drag-ghost-pointer) 拖动共享状态下行分发 +
+                            // 本行内容坐标 y(与 sess-list 同为 flick 子元素,
+                            // viewport 平移相消,得到纯内容坐标)。
                             drag-out-dy <=> root.drag-dy;
-                            drag-group <=> root.drag-group;
-                            drag-gi <=> root.drag-gi;
-                            drag-size <=> root.drag-size;
                             drag-dy <=> root.drag-dy;
                             drag-id <=> root.drag-id;
-                            landing-all: root.landing-all;
-                            landing-id <=> root.landing-id;
-                            landing-dy <=> root.landing-dy;
-                            drag-dn <=> root.drag-dn;
                             drag-pitch <=> root.drag-pitch;
+                            ghost-y: list-host.ghost-y;
+                            slot-y: srow.absolute-position.y - sess-list.absolute-position.y;
+                            drop-report(id, after) => {
+                                root.drop-target-id = id;
+                                root.drop-after = after;
+                            }
                             // (#session-tree-hierarchy) 成员缩进 18px + 树形
                             // 引导线:文本起点在组头文字右侧,竖线沿缩进区中点
                             // 逐行延伸,构成"组头 → 成员"的父子层级。
@@ -1158,17 +1131,13 @@ export component Welcome inherits Rectangle {
                             drag-start => {
                                 root.drag-id = session.id;
                                 root.list-dragging = true;
-                                // (#session-drag-smooth-r2) 补写让位/落位所需
-                                // 的组上下文(此前漏写 → drag-dn 被钳为 0,
-                                // 组内排序与跨组拖动双双失效——用户反馈根因)。
-                                root.drag-group = session.group;
-                                root.drag-gi = session.group-index;
-                                root.drag-size = session.group-size;
                                 root.drag-dy = 0px;
-                                // (#drag-ghost 2026-09-06) ghost 快照:内容
-                                // 三元组 + 原槽在列表内容坐标里的 y(ghost 以
-                                // 此为基跟手)。absolute-position 已含滚动偏移,
-                                // 减 flick 原点即得内容坐标。
+                                // (#drag-ghost-pointer) ghost 快照:内容三元组
+                                // + 原槽内容坐标 y。原点必须取 sess-list(同为
+                                // flick 子元素,viewport 平移相消)——取 flick
+                                // 会把滚动偏移计入,列表滚动过 ghost 就错位。
+                                root.drop-target-id = "";
+                                root.drop-after = false;
                                 root.drag-name = session.name;
                                 root.drag-host = session.port > 0
                                     ? session.host + ":" + session.port
@@ -1176,27 +1145,21 @@ export component Welcome inherits Rectangle {
                                 root.drag-conn = session.conn-state;
                                 root.drag-builtin = session.builtin;
                                 root.drag-origin-y =
-                                    srow.absolute-position.y - flick.absolute-position.y;
+                                    srow.absolute-position.y - sess-list.absolute-position.y;
                             }
                             drag-end => {
-                                // (#session-landing) 落位序列:先记录松手参数,
-                                // 关全部行动画(landing-all)→ 模型瞬时换位 →
-                                // 下一帧仅目标行从松手位置吸附滑入。
-                                root.release-id = session.id;
-                                root.release-dy = root.drag-dy;
-                                root.release-dn = root.drag-dn;
-                                root.landing-all = true;
-                                root.landing-id = "";
+                                // (#drag-ghost-pointer) 几何落位:按聚合的命中
+                                // 行 + 上/下半区一次提交;无命中(原地/空白区/
+                                // 组头上)不动。同组排序与跨组移动同一条路径。
                                 root.list-dragging = false;
+                                let target = root.drop-target-id;
+                                let after = root.drop-after;
+                                root.drop-target-id = "";
                                 root.drag-id = "";
-                                // (#session-drag-smooth) 一次落位:按拖动中
-                                // 累计的让位行数移动(0 = 原地,无操作)。
-                                if (root.drag-dn != 0) {
-                                    root.move-session-delta(session.id, root.drag-dn, root.drag-gi, root.drag-size);
+                                if (target != "") {
+                                    root.move-session-to(session.id, target, after);
                                 }
                                 root.drag-dy = 0px;
-                                root.reorder-end();
-                                root.land-kick = !root.land-kick;   // 经属性触发(实例 handler 内不可直接引用 Welcome 的 Timer)
                             }
                             remove => { root.remove-session(session.id); }
                         }
@@ -1212,8 +1175,7 @@ export component Welcome inherits Rectangle {
                         x: 0px;
                         width: sess-list.width;
                         height: ghost-h;
-                        y: clamp(root.drag-origin-y + root.drag-dy,
-                            0px, max(0px, flick.viewport-height - ghost-h));
+                        y: list-host.ghost-y;
                         border-radius: Theme.radius-sm;
                         background: Theme.bg-elevated;
                         drop-shadow-blur: 14px;

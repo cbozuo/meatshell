@@ -4141,69 +4141,29 @@ fn wire_session_callbacks(
         });
     }
     {
-        // (#session-drag-smooth 2026-09-05) 平滑拖拽落位:拖动过程只做视觉
-        // 让位(Slint 侧),松手时按累计偏移 delta 循环相邻换位到目标位。
-        // 单步失败(组边界/搜索)即停,已移的步数保留。
+        // (#drag-ghost-pointer 2026-09-06) 几何落位:Slint 侧按真实行几何解析
+        // 落点(ghost 悬停行 + 上/下半区),这里把会话移动到目标行前/后并继承
+        // 目标组——同组重排与跨组移动共用一条精确路径,取代旧的 dn/gi/size
+        // 槽位协议(pitch 抽象在组头 46px / 组间 8px 处与视觉几何脱节,是
+        // 多轮"不丝滑"反馈的公共根因)。
         let weak = window.as_weak();
         let store = store.clone();
         let sessions_model = sessions_model.clone();
-        let sessions_dirty = sessions_dirty.clone();
         let registry = registry.clone();
-        // (#session-drag-smooth-r2 2026-09-05) 落位分派:dn 在本组范围内 →
-        // 组内排序(循环相邻换位);越界 → 跨组移动到显示顺序的相邻组
-        // (dn < -gi → 上一组;dn > size-1-gi → 下一组,落点:上一组末尾 /
-        // 下一组开头)。跨组经 store.upsert 改 group 并全量刷新。
-        window.on_move_session_delta(move |id: SharedString, dn: i32, gi: i32, size: i32| {
-            let Some(window) = weak.upgrade() else { return };
-            let in_group = dn >= -gi && dn <= size - 1 - gi;
-            let query = window.get_host_search_query().to_string();
-            if in_group {
-                let dir = if dn < 0 { -1i32 } else { 1i32 };
-                let mut remaining = dn.abs();
-                while remaining > 0 {
-                    let moved = {
-                        let mut s = store.borrow_mut();
-                        s.reorder_session(id.as_str(), dir as isize)
-                    };
-                    if !moved {
-                        break;
-                    }
-                    sessions_dirty.set(true);
-                    if !refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query) {
-                        // 行数变化(不该发生在同组移动):全量重建兜底。
-                        window.set_sessions_revision(window.get_sessions_revision() + 1);
-                    }
-                    remaining -= 1;
-                }
-                if let Err(err) = store.borrow_mut().save() {
-                    tracing::warn!("failed to save config after session drag: {err:#?}");
-                }
-                refresh_session_markers_win(&window);
-                return;
-            }
-            // ---- 跨组:委托 reorder_session 做一次相邻换位 ----
-            // (#drag-cross-group-fix 2026-09-06) 旧实现在这里自建目标组序
-            // [system]+named_display_groups:缺 "default" 段、不跳折叠组,且
-            // 与 build_session_rows 的显示顺序(当时仍按字母排序)不一致——
-            // 向上拖动经常被判进保留组 system,再被保留组检查静默拒绝,用户
-            // 看到的就是"首行靠近组别就停住,永远跨不进上面的组"。
-            // reorder_session 已内建全部正确语义,直接委托:
-            //  - 同组邻位优先(走到这里必然越界,同向无同组邻居,必然走跨组);
-            //  - 跨组按显示顺序(default → named 存储序)取最近**未折叠**组;
-            //  - 落点 = 上一组末尾 / 下一组开头;
-            //  - 拖空的隐式源组保留为空文件夹(补注册进 explicit groups)。
-            let dir = if dn < 0 { -1i32 } else { 1i32 };
+        window.on_move_session_to(move |id: SharedString, target: SharedString, after: bool| {
             let moved = {
                 let mut s = store.borrow_mut();
-                s.reorder_session(id.as_str(), dir as isize)
+                s.move_session_relative(id.as_str(), target.as_str(), after)
             };
             if moved {
                 if let Err(err) = store.borrow_mut().save() {
-                    tracing::warn!("failed to save config after cross-group drag: {err:#?}");
+                    tracing::warn!("failed to save config after session drag: {err:#?}");
                 }
                 sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
                 registry.broadcast_config_changed();
-                refresh_session_markers_win(&window);
+                if let Some(w) = weak.upgrade() {
+                    refresh_session_markers_win(&w);
+                }
             }
         });
     }

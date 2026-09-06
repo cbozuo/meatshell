@@ -664,6 +664,50 @@ impl ConfigStore {
         true
     }
 
+    /// Move session `id` to sit directly before/after `target_id` in stored
+    /// order, inheriting the target's display group (#drag-ghost-pointer
+    /// 2026-09-06). Replaces the dn/gi/size slot protocol: the Slint side now
+    /// resolves the drop against real row geometry (hovered row + upper/lower
+    /// half), so same-group reordering and cross-group moves share one precise,
+    /// geometry-driven path. A source group emptied by the move is kept as an
+    /// explicit empty folder (same convention as reorder_session).
+    pub fn move_session_relative(&mut self, id: &str, target_id: &str, after: bool) -> bool {
+        if id == target_id {
+            return false;
+        }
+        let Some(idx) = self.cache.sessions.iter().position(|s| s.id == id) else {
+            return false;
+        };
+        let Some(t_idx) = self.cache.sessions.iter().position(|s| s.id == target_id) else {
+            return false;
+        };
+        let source_group = self.cache.sessions[idx].group.clone();
+        let mut moved = self.cache.sessions.remove(idx);
+        // Target index shifts left when the dragged row sat before it.
+        let t_idx = if idx < t_idx { t_idx - 1 } else { t_idx };
+        moved.group = self.cache.sessions[t_idx].group.clone();
+        let insert_at = t_idx + usize::from(after);
+        self.cache.sessions.insert(insert_at, moved);
+
+        // A named source group that just lost its last member would vanish
+        // from the list; keep it as an empty explicit folder (mirrors
+        // reorder_session).
+        let display_source = if source_group.is_empty()
+            || is_reserved_session_group(source_group.trim())
+        {
+            "default".to_string()
+        } else {
+            source_group.clone()
+        };
+        if display_source != "default"
+            && !self.cache.sessions.iter().any(|s| s.group == source_group)
+            && !self.cache.groups.iter().any(|g| g == &source_group)
+        {
+            self.cache.groups.push(source_group);
+        }
+        true
+    }
+
     pub fn upsert(&mut self, mut session: Session) {
         if is_reserved_session_group(session.group.trim()) {
             session.group.clear();
@@ -2010,6 +2054,34 @@ mod tests {
         assert!(store.reorder_session(&id_of(&store, "b2"), 1));
         let last = store.sessions().iter().find(|s| s.name == "b2").unwrap();
         assert_eq!(last.group, "gamma");
+    }
+
+    /// (#drag-ghost-pointer 2026-09-06) 几何落位:同组前/后插、跨组继承目标
+    /// 组、拖空源组保留、自定位与未知 id 均为 no-op。
+    #[test]
+    fn move_session_relative_places_relative_to_target() {
+        let mut store = reorder_store();
+
+        // Same group: b2 moves before b1.
+        assert!(store.move_session_relative(&id_of(&store, "b2"), &id_of(&store, "b1"), false));
+        assert_eq!(
+            order_of(&store)[3..5],
+            [
+                ("b2".to_string(), "beta".to_string()),
+                ("b1".to_string(), "beta".to_string())
+            ]
+        );
+
+        // Cross group: a1 moves after d2 (last ungrouped row), inheriting "".
+        assert!(store.move_session_relative(&id_of(&store, "a1"), &id_of(&store, "d2"), true));
+        assert_eq!(order_of(&store)[2], ("a1".to_string(), "".to_string()));
+
+        // Emptied implicit source group survives as an explicit folder.
+        assert!(store.groups().iter().any(|g| g == "alpha"));
+
+        // Self-target and unknown ids are no-ops.
+        assert!(!store.move_session_relative(&id_of(&store, "b1"), &id_of(&store, "b1"), true));
+        assert!(!store.move_session_relative("nope", &id_of(&store, "b1"), true));
     }
 
     #[test]
