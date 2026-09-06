@@ -321,6 +321,9 @@ pub(crate) fn is_reserved_session_group(name: &str) -> bool {
 /// group dropdown; if these ever drift, drop targets and rendered rows
 /// disagree (#41).
 pub(crate) fn named_display_groups(explicit: &[String], sessions: &[Session]) -> Vec<String> {
+    // (#group-drag-reorder 2026-09-06) 不再按字母排序:explicit groups 的
+    // 存储顺序就是用户手动排列的组顺序(组头拖动换位维护它),session-
+    // only 组按首次出现顺序附在后面。dedup 保留(explicit 优先)。
     let mut named: Vec<String> = explicit
         .iter()
         .filter(|group| !is_reserved_session_group(group.trim()))
@@ -334,7 +337,6 @@ pub(crate) fn named_display_groups(explicit: &[String], sessions: &[Session]) ->
                 .map(|session| session.group.clone()),
         )
         .collect();
-    named.sort_by_key(|group| group.to_lowercase());
     named.dedup();
     named
 }
@@ -1479,6 +1481,22 @@ impl ConfigStore {
                 !session.group.trim().is_empty()
                     && session.group.trim().eq_ignore_ascii_case(target)
             })
+    }
+
+    /// (#group-drag-reorder 2026-09-06) 组头拖动换位:在 explicit groups
+    /// 的存储顺序中相邻移动一位(该顺序即列表显示顺序)。越界/不存在返
+    /// 回 false(default/system 不在此 vec,天然不参与)。
+    pub fn reorder_group(&mut self, name: &str, dir: isize) -> bool {
+        let gs = &mut self.cache.groups;
+        let Some(pos) = gs.iter().position(|g| g == name) else {
+            return false;
+        };
+        let target = pos as isize + dir;
+        if dir == 0 || target < 0 || target as usize >= gs.len() {
+            return false;
+        }
+        gs.swap(pos, target as usize);
+        true
     }
 
     /// Create an empty group. Ignores blank/reserved names and duplicates.

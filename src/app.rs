@@ -4220,6 +4220,17 @@ fn wire_session_callbacks(
             {
                 let mut s = store.borrow_mut();
                 if let Some(orig) = s.get(&id.to_string()).cloned() {
+                    // (#group-keep-empty 2026-09-06) 源组若不在 explicit groups
+                    // (会话手输组名产生的隐式组),拖空后会从列表消失——补注册
+                    // 进 explicit,空组保留显示(计数 0)。
+                    let src = orig.group.trim().to_string();
+                    if !src.is_empty()
+                        && !src.eq_ignore_ascii_case("default")
+                        && !is_reserved_session_group(&src)
+                        && !s.groups().iter().any(|g| g == &src)
+                    {
+                        s.add_group(src);
+                    }
                     let mut target_sess = orig;
                     // "default" 是未分组显示名 → 存空串;system 组仅内置会话。
                     target_sess.group = if target_group.eq_ignore_ascii_case("default") {
@@ -4241,6 +4252,28 @@ fn wire_session_callbacks(
                 registry.broadcast_config_changed();
                 refresh_session_markers_win(&window);
             }
+        });
+    }
+    {
+        // (#group-drag-reorder 2026-09-06) 组头拖动换位:explicit groups 相
+        // 邻移动一位(存储顺序 = 显示顺序),保存后全量刷新列表。
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        let registry = registry.clone();
+        window.on_reorder_group(move |group: SharedString, dir: i32| {
+            let moved = store.borrow_mut().reorder_group(group.as_str(), dir as isize);
+            if !moved {
+                return;
+            }
+            if let Err(err) = store.borrow_mut().save() {
+                tracing::warn!("failed to save config after group reorder: {err:#?}");
+            }
+            if let Some(w) = weak.upgrade() {
+                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
+                refresh_session_markers_win(&w);
+            }
+            registry.broadcast_config_changed();
         });
     }
     {

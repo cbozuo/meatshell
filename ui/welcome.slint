@@ -68,6 +68,9 @@ component SessionRow inherits Rectangle {
     in property <length> drag-dy;
     in property <string> drag-id;
     in property <int> drag-dn;
+    in property <bool> landing-all;
+    in property <string> landing-id;
+    in property <length> landing-dy;
     property <bool> system-row: root.session.builtin;
     // (#session-tree-hierarchy 2026-09-04) 树形层级:成员行相对分组头缩进
     // content-indent,并可选显示树形引导竖线——每行画一段(border-subtle,
@@ -171,7 +174,7 @@ component SessionRow inherits Rectangle {
     in-out property <length> drag-out-dy;   // (#session-drag-smooth) 拖动中的指针偏移输出
     info-delay := Timer {
         interval: 450ms;
-        running: touch.has-hover;
+        running: touch.has-hover && !root.list-dragging;   // 拖动中不弹信息卡
         triggered => {
             root.card-out-name = root.session.name;
             root.card-out-host = root.session.builtin
@@ -323,10 +326,16 @@ component SessionRow inherits Rectangle {
         // 全宽时组头/成员/右侧面板三处高亮语言重新统一。
         // (#session-drag-follow → #session-drag-smooth 2026-09-05) 拖动改
         // tabs 式:被拖行卡片跟手浮起(dy,0ms 不延迟);**同组其他成员行**
-        // 读取 shift-y 让位平移(150ms 过渡);松手回弹归位。模型在落位时
-        // 一次性移动,拖动中不 mutate。
-        y: root.grab-dragging ? (touch.mouse-y - root.grab-y) : shift-y;
-        animate y { duration: root.grab-dragging ? 0ms : 150ms; easing: ease-out; }
+        // 读取 shift-y 让位平移(150ms 过渡);模型在落位时一次性移动。
+        // (#session-landing 2026-09-06) 落位三态:跟手 / 吸附(目标行从松手
+        // 位置滑入)/ 让位。landing-all 期间全部行动画关闭(模型瞬切换位,
+        // 修复松手后其余行交叉乱飞的抖动)。
+        y: root.landing-id != "" && session.id == root.landing-id ? root.landing-dy
+            : root.grab-dragging ? (touch.mouse-y - root.grab-y) : shift-y;
+        animate y {
+            duration: root.grab-dragging || root.landing-all ? 0ms : 150ms;
+            easing: ease-out;
+        }
         opacity: root.grab-dragging ? 0.92 : 1.0;
         width: parent.width;
         height: parent.height;
@@ -467,6 +476,37 @@ export component Welcome inherits Rectangle {
     // (#session-drag-smooth-r2) dn 不再钳制:超出本组范围的值由 Rust 端解
     // 释为跨组意图(dn < -gi → 上一组;dn > size-1-gi → 下一组)。
     property <int> drag-dn: Math.round(root.drag-dy / 40px);
+    // (#session-landing 2026-09-06) 落位动画序列(修复松手后其余行抖动):
+    // 阶段1 landing-all:全部行 y 动画关闭,模型换位瞬时生效(内容瞬切,
+    // 无交叉乱飞);阶段2(0ms Timer 后)landing-id/landing-dy 指向目标行,
+    // 仅被拖行从松手视觉位置吸附滑入新槽(150ms),其余行静止。
+    property <bool> landing-all: false;
+    property <bool> land-kick: false;
+    property <string> landing-id: "";
+    property <length> landing-dy: 0px;
+    property <string> release-id: "";
+    property <length> release-dy: 0px;
+    property <int> release-dn: 0;
+    changed land-kick => { land-timer.restart(); }
+    land-timer := Timer {
+        interval: 0ms;
+        triggered => {
+            root.landing-all = false;
+            root.landing-id = root.release-id;
+            root.landing-dy = root.release-dy - root.release-dn * 40px;
+            land-clear.restart();
+        }
+    }
+    land-clear := Timer {
+        interval: 170ms;
+        triggered => { root.landing-id = ""; }
+    }
+    // (#group-drag-reorder 2026-09-06) 组头拖动排序:跟手浮起,松手按方向
+    // 相邻换位(阈值 ±20px,一次一位;Rust 维护 explicit groups 顺序)。
+    property <bool> group-dragging: false;
+    property <string> group-drag-id: "";
+    property <length> group-dy: 0px;
+    callback reorder-group(string /* group */, int /* dir */);
     callback new-session();
     callback move-session-delta(string /* session-id */, int /* dn */, int /* gi */, int /* size */);   // (#session-drag-smooth) 转发给 AppWindow
     callback import-ssh-config();
@@ -818,39 +858,85 @@ export component Welcome inherits Rectangle {
                         // Group header on the first row of each group (#41).
                         // Click anywhere on it to collapse / expand the group.
                         if session.group-header != "" : Rectangle {
-                            // (#session-tree-hierarchy-r4 2026-09-05) 用户反馈
-                            // 三连修:1) hover 背景恢复行本体、全宽 38px——与
-                            // 成员行同高同宽(此前内层条 4px 内缩 + 32px 高,
-                            // 高亮块比成员小一圈,与右侧面板也不协调);2) 组名
-                            // 升 fs-lg、图标 fs-xl,明确大于成员名(fs-sm);
-                            // 3) chevron 恢复双字形切换——transform-rotation
-                            // 在 Slint 1.16 软件渲染下不生效(收展图标不变),
-                            // 双字形是此前验证过的可靠路径。
+                            // 外壳:在 VerticalLayout 里占位(38px);跟手位移、
+                            // 背景等全部在内层 gh-card 上(布局子项不可设 y)。
+                            // (#group-drag-reorder 2026-09-06) 组头可拖动排序:
+                            // 垂直拖动 >5px 启动,内层卡片跟手浮起,松手按方向
+                            // 相邻换位(±20px 阈值,一次一位;explicit groups
+                            // 的存储顺序即显示顺序)。拖动后不触发折叠 toggle。
                             height: 38px;
-                            border-radius: Theme.radius-sm;
-                            background: grp-ta.has-hover ? Theme.bg-hover : transparent;
-                            animate background { duration: 120ms; }
+                            gh-card := Rectangle {
+                                y: root.group-dragging && session.group == root.group-drag-id
+                                    ? root.group-dy : 0px;
+                                animate y { duration: root.group-dragging ? 0ms : 150ms; easing: ease-out; }
+                                opacity: root.group-dragging && session.group == root.group-drag-id ? 0.92 : 1.0;
+                                drop-shadow-blur: root.group-dragging && session.group == root.group-drag-id ? 14px : 0px;
+                                drop-shadow-color: root.group-dragging && session.group == root.group-drag-id ? #00000060 : transparent;
+                                border-radius: Theme.radius-sm;
+                                background: grp-ta.has-hover ? Theme.bg-hover : transparent;
+                                animate background { duration: 120ms; }
+                                width: 100%;
+                                height: 100%;
+                                clip: true;
                             // Right-click popup anchor.
                             property <length> gmx;
                             property <length> gmy;
+                            // 拖动手势状态(本组头局部):按下 y / 是否拖动。
+                            property <length> g-press-y: 0px;
+                            property <bool> g-was-drag: false;
                             // TouchArea 前置声明:后面的 Text 引用它的 hover 态
                             // (Slint 不允许向前引用 id)。
                             grp-ta := TouchArea {
-                                mouse-cursor: pointer;
+                                mouse-cursor: root.group-dragging ? move : pointer;
                                 // Left-click toggles collapse (any group, incl.
                                 // empty); right-click opens the group menu.
+                                // 拖动过的 up 不触发折叠(g-was-drag 抑制)。
                                 clicked => {
-                                    if root.search-query == "" {
+                                    if (!parent.g-was-drag && root.search-query == "") {
                                         root.toggle-group(session.group);
                                     }
                                 }
                                 pointer-event(e) => {
-                                    if (!session.builtin && e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        parent.g-press-y = self.mouse-y;
+                                        parent.g-was-drag = false;
+                                    } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
+                                        if (root.group-dragging && session.group == root.group-drag-id) {
+                                            // 松手落位:±20px 阈值,一次一位。
+                                            root.reorder-group(session.group,
+                                                root.group-dy > 20px ? 1 : (root.group-dy < -20px ? -1 : 0));
+                                            root.group-dragging = false;
+                                            root.group-drag-id = "";
+                                            root.group-dy = 0px;
+                                            // 延迟清 g-was-drag:clicked 在
+                                            // pointer-up 之后派发,需保持抑制。
+                                            g-reset.restart();
+                                        } else {
+                                            parent.g-was-drag = false;
+                                        }
+                                    } else if (!session.builtin && e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
                                         gmx = self.mouse-x;
                                         gmy = self.mouse-y;
                                         grp-menu.show();
                                     }
                                 }
+                                moved => {
+                                    if (self.pressed && !root.group-dragging
+                                            && abs(self.mouse-y - parent.g-press-y) > 5px) {
+                                        root.group-dragging = true;
+                                        root.group-drag-id = session.group;
+                                        root.group-dy = 0px;
+                                        parent.g-was-drag = true;
+                                    }
+                                    if (root.group-dragging && session.group == root.group-drag-id) {
+                                        root.group-dy = self.mouse-y - parent.g-press-y;
+                                    }
+                                }
+                            }
+                            // 180ms 后复位 g-was-drag(clicked 已派发完毕)。
+                            g-reset := Timer {
+                                interval: 180ms;
+                                triggered => { parent.g-was-drag = false; }
                             }
                             HorizontalLayout {
                                 padding-top: 0;
@@ -980,6 +1066,7 @@ export component Welcome inherits Rectangle {
                                 }
                             }
                         }
+                        }
                         // (#empty-group-hint 2026-09-05) 空分组展开时显示占位,
                         // 消除"点击分组却什么都没发生"的困惑。blank 行(组头
                         // 且 id == "")只在非搜索路径生成(session_models)。
@@ -1012,6 +1099,9 @@ export component Welcome inherits Rectangle {
                             drag-size <=> root.drag-size;
                             drag-dy <=> root.drag-dy;
                             drag-id <=> root.drag-id;
+                            landing-all: root.landing-all;
+                            landing-id <=> root.landing-id;
+                            landing-dy <=> root.landing-dy;
                             drag-dn <=> root.drag-dn;
                             // (#session-tree-hierarchy) 成员缩进 18px + 树形
                             // 引导线:文本起点在组头文字右侧,竖线沿缩进区中点
@@ -1043,6 +1133,14 @@ export component Welcome inherits Rectangle {
                                 root.drag-dy = 0px;
                             }
                             drag-end => {
+                                // (#session-landing) 落位序列:先记录松手参数,
+                                // 关全部行动画(landing-all)→ 模型瞬时换位 →
+                                // 下一帧仅目标行从松手位置吸附滑入。
+                                root.release-id = session.id;
+                                root.release-dy = root.drag-dy;
+                                root.release-dn = root.drag-dn;
+                                root.landing-all = true;
+                                root.landing-id = "";
                                 root.list-dragging = false;
                                 root.drag-id = "";
                                 // (#session-drag-smooth) 一次落位:按拖动中
@@ -1052,6 +1150,7 @@ export component Welcome inherits Rectangle {
                                 }
                                 root.drag-dy = 0px;
                                 root.reorder-end();
+                                root.land-kick = !root.land-kick;   // 经属性触发(实例 handler 内不可直接引用 Welcome 的 Timer)
                             }
                             remove => { root.remove-session(session.id); }
                         }
