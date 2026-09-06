@@ -55,7 +55,8 @@ component SessionRow inherits Rectangle {
     // dragged. The lifted card follows the dragged session's DATA, not the
     // component holding the pointer grab — rows swap contents under the grab
     // on every hop.
-    in property <bool> drag-target: false;
+    // (#drag-ghost 2026-09-06) 原 drag-target(被拖行抬升态)随本体跟手
+    // 一并废弃:拖动中本体隐形,抬升观感由 ghost 浮动卡承担。
     // List-level drag state, mirrored here so a press can detect a stale
     // drag (the grab was lost when a hop changed the row count and rebuilt
     // the model) and clear it instead of leaving the card lifted.
@@ -160,9 +161,10 @@ component SessionRow inherits Rectangle {
                     root.drag-start();
                 }
             }
-            // (#session-drag-smooth 2026-09-05) 拖动过程不再逐行换位(旧 hop
-            // 交换无过渡、很僵硬):只持续上报指针偏移,卡片跟手浮起、其他
-            // 成员行平滑让位,松手由 drag-end 一次性落位。
+            // (#session-drag-smooth 2026-09-05) 拖动过程不逐行换位:只持续
+            // 上报指针偏移;(#drag-ghost 2026-09-06) 跟手元素是列表级 ghost
+            // 浮动卡(本体隐形留洞),其余成员行按 drag-dn 平滑让位,松手由
+            // drag-end 一次性落位。
             root.drag-out-dy = touch.mouse-y - root.grab-y;
         }
     }
@@ -329,37 +331,31 @@ component SessionRow inherits Rectangle {
         : session.group-index < root.drag-gi && session.group-index >= root.drag-gi + root.drag-dn ? root.drag-pitch
         : 0px;
 
-    // Row content — wrapped in a card so the dragged row can lift (shadow +
-    // highlight) while the grabbing TouchArea keeps its grab. The card stays
-    // in its slot: row swaps alone convey the reorder.
+    // Row content — wrapped in a card so it can animate (让位 / 落位吸附)
+    // inside its slot.
+    // (#drag-ghost 2026-09-06) tabs #408 同款 ghost 模型:拖动期间卡片本体
+    // 在原槽隐形(opacity 0 = 洞),跟手改由列表级 ghost 浮动卡承担(见
+    // Welcome 列表末尾,声明序恒在最上层)。旧实现本体跟手,滞后带死区内
+    // 邻行不动,卡片以 ~60% 重叠悬停压住邻行(用户截图);本体不再跟手后
+    // 此类重叠在几何上不可能出现。
     card := Rectangle {
         // (#session-list-inset-revert 2026-09-05) 撤销 4px 内缩,恢复全宽:
-        // 内缩后与右侧资源面板的行高亮宽度不一致,左右不协调(用户反馈);
-        // 全宽时组头/成员/右侧面板三处高亮语言重新统一。
-        // (#session-drag-follow → #session-drag-smooth 2026-09-05) 拖动改
-        // tabs 式:被拖行卡片跟手浮起(dy,0ms 不延迟);**同组其他成员行**
-        // 读取 shift-y 让位平移(150ms 过渡);模型在落位时一次性移动。
-        // (#session-landing 2026-09-06) 落位三态:跟手 / 吸附(目标行从松手
-        // 位置滑入)/ 让位。landing-all 期间全部行动画关闭(模型瞬切换位,
-        // 修复松手后其余行交叉乱飞的抖动)。
-        y: root.landing-id != "" && session.id == root.landing-id ? root.landing-dy
-            : root.grab-dragging ? (touch.mouse-y - root.grab-y) : shift-y;
+        // 内缩后与右侧资源面板的行高亮宽度不一致,左右不协调(用户反馈)。
+        // (#session-landing 2026-09-06) 落位三态:让位(150ms)/ 吸附(目标行
+        // 从松手位置滑入)/ landing-all 全关(模型瞬切换位防交叉乱飞)。
+        // ghost→实体交接:landing-dy = 松手指针偏移 - dn×行距,恰为 ghost
+        // 所在位置,实体在 ghost 消失处出现并滑入新槽,视觉无缝。
+        y: root.landing-id != "" && session.id == root.landing-id ? root.landing-dy : shift-y;
         animate y {
-            duration: root.grab-dragging || root.landing-all ? 0ms : 150ms;
+            duration: root.landing-all ? 0ms : 150ms;
             easing: ease-out;
         }
-        opacity: root.grab-dragging ? 0.92 : 1.0;
+        opacity: root.grab-dragging ? 0 : 1.0;
         width: parent.width;
         height: parent.height;
         border-radius: Theme.radius-sm;
-        background: root.drag-target ? Theme.bg-elevated
-            : (touch.has-hover ? Theme.bg-hover : transparent);
-        // (#drag-smooth-fix) 跟手时阴影降一档:模糊半径每帧重算,是软件渲染
-        // 下拖动掉帧的主要开销;静止的 drag-target 仍保留 14px 抬升感。
-        drop-shadow-blur: root.drag-target ? (root.grab-dragging ? 8px : 14px) : 0px;
-        drop-shadow-color: root.drag-target ? #00000060 : transparent;
+        background: touch.has-hover ? Theme.bg-hover : transparent;
         animate background { duration: 120ms; }
-        animate drop-shadow-blur { duration: 120ms; }
 
         // 树形引导竖线:先声明 → 垫在内容下层;hover 背景是 card 自身的
         // background,不会盖住它。
@@ -490,13 +486,14 @@ export component Welcome inherits Rectangle {
     // (#session-drag-smooth-r2) dn 不再钳制:超出本组范围的值由 Rust 端解
     // 释为跨组意图(dn < -gi → 上一组;dn > size-1-gi → 下一组)。
     // (#drag-smooth-fix) 1) 行距改用被拖行上报的 drag-pitch(不再写死 40);
-    // 2) 加滞后带:向下需越过 0.62×pitch 才进位、向上需退回 0.38×pitch 才退位,
-    // 消除指针在边界抖动时让位动画来回翻(旧 round() 在 ±0.5×pitch 处反复横跳)。
+    // 2) 滞后带:#drag-ghost 2026-09-06 由 0.38/0.62 收窄到 0.46/0.54——宽
+    // 死区内邻行不动画而跟手元素悬停压在其上,是"重叠卡住"观感的来源之一;
+    // 8% 死区(≈3px)仍足以抑制中点抖动导致的占位框来回翻。
     in-out property <length> drag-pitch: 40px;
     property <int> drag-dn: root.drag-pitch <= 0px ? 0
         : root.drag-dy >= 0px
-            ? Math.floor((root.drag-dy + root.drag-pitch * 0.38) / root.drag-pitch)
-            : Math.ceil((root.drag-dy - root.drag-pitch * 0.38) / root.drag-pitch);
+            ? Math.floor((root.drag-dy + root.drag-pitch * 0.46) / root.drag-pitch)
+            : Math.ceil((root.drag-dy - root.drag-pitch * 0.46) / root.drag-pitch);
     // (#session-landing 2026-09-06) 落位动画序列(修复松手后其余行抖动):
     // 阶段1 landing-all:全部行 y 动画关闭,模型换位瞬时生效(内容瞬切,
     // 无交叉乱飞);阶段2(0ms Timer 后)landing-id/landing-dy 指向目标行,
@@ -562,6 +559,14 @@ export component Welcome inherits Rectangle {
     // component that owns the grab.
     property <string> drag-id;
     property <bool> list-dragging: false;
+    // (#drag-ghost 2026-09-06) ghost 浮动卡的内容快照与原槽 y(列表内容
+    // 坐标),drag-start 时一次性捕获;ghost 元素见列表末尾(tabs #408 同款:
+    // 本体隐形留洞,唯一跟手元素是 ghost)。
+    property <string> drag-name: "";
+    property <string> drag-host: "";
+    property <int> drag-conn: 0;
+    property <bool> drag-builtin: false;
+    property <length> drag-origin-y: 0px;
     callback toggle-group(string /* group */);
     callback new-group();
     callback edit-group(string /* current-name */);
@@ -1111,7 +1116,7 @@ export component Welcome inherits Rectangle {
                                 vertical-alignment: center;
                             }
                         }
-                        if session.id != "" && !session.collapsed : SessionRow {
+                        if session.id != "" && !session.collapsed : srow := SessionRow {
                             session: session;
                             compact: root.compact;
                             // (#session-hover-card) 信息卡片坐标/文本中转到
@@ -1144,7 +1149,6 @@ export component Welcome inherits Rectangle {
                             // (Whitespace-only queries never reach here: the
                             // search handler normalizes them to "".)
                             reorder-enabled: root.search-query == "" && !session.builtin;
-                            drag-target: root.list-dragging && root.drag-id == session.id;
                             list-dragging: root.list-dragging;
                             connect => { root.connect-session(session.id); }
                             edit => { root.edit-session(session.id); }
@@ -1161,6 +1165,18 @@ export component Welcome inherits Rectangle {
                                 root.drag-gi = session.group-index;
                                 root.drag-size = session.group-size;
                                 root.drag-dy = 0px;
+                                // (#drag-ghost 2026-09-06) ghost 快照:内容
+                                // 三元组 + 原槽在列表内容坐标里的 y(ghost 以
+                                // 此为基跟手)。absolute-position 已含滚动偏移,
+                                // 减 flick 原点即得内容坐标。
+                                root.drag-name = session.name;
+                                root.drag-host = session.port > 0
+                                    ? session.host + ":" + session.port
+                                    : session.host;
+                                root.drag-conn = session.conn-state;
+                                root.drag-builtin = session.builtin;
+                                root.drag-origin-y =
+                                    srow.absolute-position.y - flick.absolute-position.y;
                             }
                             drag-end => {
                                 // (#session-landing) 落位序列:先记录松手参数,
@@ -1185,6 +1201,79 @@ export component Welcome inherits Rectangle {
                             remove => { root.remove-session(session.id); }
                         }
                     }
+                    }
+                    // (#drag-ghost 2026-09-06) tabs #408 同款 ghost:被拖行
+                    // 本体在原槽隐形(opacity 0 = 洞,落点由占位框标出),这张
+                    // 浮动卡是唯一跟手元素。声明在 sess-list 之后 → 恒在最
+                    // 上层(Slint 无运行时 z,叠放靠声明序),卡片本体从此不再
+                    // 压住未让位的邻行;位置钳制在列表内容区内,拖不出边界。
+                    if root.list-dragging && root.drag-id != "" : Rectangle {
+                        property <length> ghost-h: max(1px, root.drag-pitch - 2px);
+                        x: 0px;
+                        width: sess-list.width;
+                        height: ghost-h;
+                        y: clamp(root.drag-origin-y + root.drag-dy,
+                            0px, max(0px, flick.viewport-height - ghost-h));
+                        border-radius: Theme.radius-sm;
+                        background: Theme.bg-elevated;
+                        drop-shadow-blur: 14px;
+                        drop-shadow-color: #00000060;
+                        HorizontalLayout {
+                            padding-left: 10px + 18px;   // 成员行缩进,与原行一致
+                            padding-right: 10px;
+                            spacing: root.compact ? 8px : 12px;
+                            Rectangle {
+                                width: 16px; height: 16px;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: 3px;
+                                background: Theme.bg-hover;
+                                Text {
+                                    text: root.drag-builtin ? "\u{E30A}" : "\u{E875}";   // terminal / server
+                                    font-family: "Material Icons";
+                                    color: Theme.text-secondary;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                                if root.drag-conn == 1 : Rectangle {
+                                    x: -4px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 6px; height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.warning;
+                                }
+                                if root.drag-conn == 2 : Rectangle {
+                                    x: -4px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 6px; height: 6px;
+                                    border-radius: 3px;
+                                    background: Theme.success;
+                                }
+                            }
+                            if root.compact : Text {
+                                horizontal-stretch: 1;
+                                text: root.drag-name;
+                                color: Theme.text-primary;
+                                font-size: Theme.fs-sm;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            if !root.compact : Text {
+                                text: root.drag-name;
+                                color: Theme.text-primary;
+                                font-size: Theme.fs-md;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            if !root.compact : Text {
+                                text: root.drag-host;
+                                color: Theme.text-secondary;
+                                font-size: Theme.fs-sm;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
+                        }
                     }
                     }
                     // (#session-scrollbar) 自绘滚动条:右缘 4px overlay,仅
