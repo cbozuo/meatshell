@@ -72,15 +72,24 @@ component SessionRow inherits Rectangle {
     in property <length> ghost-y: 0px;
     in-out property <length> drag-pitch: 40px;
     // (#drag-ghost-pointer 2026-09-06) 指针几何落点:slot-y = 本行在列表内容
-    // 坐标里的 y(实例侧绑定),配合 root.ghost-y 判定 ghost 悬停在本行哪
+    // 坐标里的 y(实例侧拖拽中经 changed 钩子写入,非 init 绑定),配合
+    // root.ghost-y 判定 ghost 悬停在本行哪
     // 一半;命中行画插入指示线(行顶=插到本行前,行底=之后),并经
     // drop-report 聚合到 Welcome,松手按 (target, after) 一次提交。
-    in property <length> slot-y: 0px;
+    // (#drag-ghost-pointer 2026-09-06) 私有存储 + 实例侧可写:升为 in-out 是
+    // 为了让实例的 changed 钩子能写入(实例块里不能给私有 property 赋值)。
+    // 关键点:本属性【没有 init 绑定】,启动期恒为 0px;只在拖拽中经实例的
+    // changed list-dragging 钩子写入(见下方实例区),从而避免 init 期读自身
+    // 几何触发 Recursion detected 的 panic。
+    in-out property <length> slot-y: 0px;
     property <bool> ghost-over:
         root.list-dragging && root.drag-id != "" && session.id != root.drag-id
         && !session.builtin
         && root.ghost-y + root.drag-pitch / 2 >= slot-y
         && root.ghost-y + root.drag-pitch / 2 < slot-y + self.height;
+    // (#drag-ghost-pointer) 落点半区判定:指针(ghost 中心)越过本行中线即
+    // 视为"插到本行之后"。注意:本行不再直读 slot-y 的 absolute-position;
+    // 真正读几何只发生在拖拽中的 changed 钩子(见下方实例区),启动期安全。
     property <bool> drop-after: root.ghost-y + root.drag-pitch / 2 > slot-y + self.height / 2;
     callback drop-report(string /* target-id */, bool /* after */);
     // 命中即上报(后写覆盖;ghost 中心同一时刻只可能落在一行内)。
@@ -818,10 +827,18 @@ export component Welcome inherits Rectangle {
                     // 坐标,钳制在内容区内)。声明在本条件子树内因为计算依赖
                     // sess-list.preferred-height(条件作用域外不可见);行与
                     // ghost 都经实例绑定读取。
+                    // (#drag-ghost-pointer 2026-09-06) ghost-y 不再在 init 期读
+                    // sess-list.preferred-height —— 否则 ghost-over 在 init 被非
+                    // 短路 && 拉取 ghost-y → 读 preferred-height → 触发 sess-list
+                    // 布局 → 布局中又渲染 srow 再次求值 ghost-over → 重入
+                    // ghost-y/preferred-height → "Recursion detected" panic(本包
+                    // "无法打开"根因之二;slot-y 的 absolute-position 是根因之一)。
+                    // 改用 self.height(= 列表可视高度,父传,非递归)做钳制上限,
+                    // 几何稳定且语义正确(ghost 本就不该超出可视区)。
                     property <length> ghost-y: clamp(
                         root.drag-origin-y + root.drag-dy,
                         0px,
-                        max(0px, sess-list.preferred-height - max(1px, root.drag-pitch - 2px)));
+                        max(0px, self.height - max(1px, root.drag-pitch - 2px)));
                     x: 16px;
                     y: root.compact ? 128px : 90px;
                     width: parent.width - 32px;
@@ -1106,7 +1123,21 @@ export component Welcome inherits Rectangle {
                             drag-id <=> root.drag-id;
                             drag-pitch <=> root.drag-pitch;
                             ghost-y: list-host.ghost-y;
-                            slot-y: srow.absolute-position.y - sess-list.absolute-position.y;
+                            // (#drag-ghost-pointer 2026-09-06) slot-y 改为私有
+                            // 存储属性;此处不再绑 absolute-position —— 旧写法让
+                            // slot-y 在 init 期读自身几何(布局未定型),被
+                            // ghost-over(被 background/if 在 init 拉取)连带求值
+                            // → i-slint-core properties.rs "Recursion detected"
+                            // panic(本包"无法打开"根因)。改为仅在拖拽中经
+                            // changed 钩子写入:list-dragging 转 true 时对【所有
+                            // 可见行】广播一次性定位(行在拖拽中不移动,一次足
+                            // 矣)。absolute-position 只在几何稳定的拖拽期读取,
+                            // 启动期完全不碰,安全。
+                            changed list-dragging => {
+                                if (root.list-dragging) {
+                                    srow.slot-y = srow.absolute-position.y - sess-list.absolute-position.y;
+                                }
+                            }
                             drop-report(id, after) => {
                                 root.drop-target-id = id;
                                 root.drop-after = after;
