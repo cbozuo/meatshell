@@ -245,6 +245,7 @@ export component TerminalView inherits Rectangle {
     in property <string> quick-external-command;
     in property <bool> quick-external-send-enter;
     in property <int> quick-external-sequence;
+    in property <int> focus-sequence;
     in property <string> tab-id;
     in property <string> status-line: @tr("Not connected");
     in property <[TermSpan]> spans;     // coloured runs of the visible screen
@@ -430,6 +431,12 @@ export component TerminalView inherits Rectangle {
                 cmd-input.text = root.quick-external-command;
                 cmd-input.focus();
             }
+        }
+    }
+
+    changed focus-sequence => {
+        if (root.active) {
+            root.focus-pending = true;
         }
     }
 

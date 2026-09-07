@@ -883,6 +883,7 @@ export component AppWindow inherits Window {
     in-out property <string> paste-confirm-text;
     in-out property <string> paste-confirm-preview;
     in-out property <bool> paste-confirm-large: false;
+    property <int> terminal-focus-sequence;
     callback paste-confirmed(string /* tab-id */);
     callback paste-confirm-cancelled();
     callback connect-session(string /* session-id */);
@@ -1882,6 +1883,7 @@ export component AppWindow inherits Window {
                         quick-external-command: root.quick-external-command;
                         quick-external-send-enter: root.quick-external-send-enter;
                         quick-external-sequence: root.quick-external-sequence;
+                        focus-sequence: root.terminal-focus-sequence;
                         command-history: root.command-history;
                         history-view: root.history-view;
                         run-command(cmd, all) => { root.run-command(term.id, cmd, all); }
@@ -4375,10 +4377,12 @@ export component AppWindow inherits Window {
         confirm => {
             root.paste-confirmed(root.paste-confirm-tab);
             root.paste-confirm-open = false;
+            root.terminal-focus-sequence += 1;
         }
         cancel => {
             root.paste-confirm-cancelled();
             root.paste-confirm-open = false;
+            root.terminal-focus-sequence += 1;
         }
     }
 
