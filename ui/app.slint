@@ -126,6 +126,9 @@ component WinBtn inherits Rectangle {
     in property <bool> danger: false;
     callback clicked();
     width: 46px;
+    // (#winbtn-seamless 2026-09-06) 三键无缝:hover 高亮占满 46px 热区且
+    // 相邻按钮贴连(Windows 原生样式);图标仍居中,视觉间隔由字形留白
+    // 提供。间距控制在标题栏 win-controls 的 HL spacing(=0)。
     background: ta.has-hover ? (root.danger ? #e81123 : Theme.bg-hover) : transparent;
     animate background { duration: 90ms; }
     ta := TouchArea {
@@ -1378,12 +1381,17 @@ export component AppWindow inherits Window {
                     Rectangle { horizontal-stretch: 1; }
                     // Window controls only — the app toolbar icons live in the tab
                     // row below, not here (#119).
-                    WinBtn { icon: "\u{E15B}"; clicked => { root.win-minimize(); } }
-                    WinBtn {
-                        icon: root.window-maximized ? "\u{E3E0}" : "\u{E835}";
-                        clicked => { root.win-maximize-toggle(); }
+                    // (#winbtn-seamless) 三键贴连无间隙:高亮区连成一条整带,
+                    // 悬停跨键时不断开(Windows 原生窗口控制样式)。
+                    HorizontalLayout {
+                        spacing: 0;
+                        WinBtn { icon: "\u{E15B}"; clicked => { root.win-minimize(); } }
+                        WinBtn {
+                            icon: root.window-maximized ? "\u{E3E0}" : "\u{E835}";
+                            clicked => { root.win-maximize-toggle(); }
+                        }
+                        WinBtn { icon: "\u{E5CD}"; danger: true; clicked => { root.win-close(); } }
                     }
-                    WinBtn { icon: "\u{E5CD}"; danger: true; clicked => { root.win-close(); } }
                 }
             }
 
