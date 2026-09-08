@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn apply_session_event_to_window(
     win: &AppWindow,
+    editor: &EditorWindow,
     window_id: u64,
     tab_id: &str,
     event: SessionEvent,
@@ -104,6 +105,7 @@ pub(super) fn apply_session_event_to_window(
             // synthetic Output event so it reuses the normal render path (#79).
             apply_session_event_to_window(
                 win,
+                editor,
                 window_id,
                 tab_id,
                 SessionEvent::Output(format!(
@@ -289,19 +291,23 @@ pub(super) fn apply_session_event_to_window(
         } => {
             if error.is_empty() {
                 // Open the built-in viewer/editor (#70).
-                win.set_editor_lines(editor_lines_for(&content));
-                win.set_editor_path(path.into());
-                win.set_editor_name(name.into());
-                win.set_editor_content(content.into());
-                win.set_editor_readonly(!edit);
-                win.set_editor_dirty(false);
-                win.set_editor_open(true);
+                editor.set_editor_lines(editor_lines_for(&content));
+                editor.set_editor_tab_id(tab_id.into());
+                editor.set_editor_path(path.into());
+                editor.set_editor_name(name.into());
+                editor.set_editor_content(content.into());
+                editor.set_editor_readonly(!edit);
+                editor.set_editor_dirty(false);
+                editor.set_editor_open(true);
+                let _ = editor.show();
+                editor.window().with_winit_window(|ww| ww.focus_window());
             } else {
                 // Couldn't open as text. The SFTP status line alone is easy to
                 // miss (looks like "nothing happened"), so also print the reason
                 // into the terminal via a synthetic Output event (#70).
                 apply_session_event_to_window(
                     win,
+                    editor,
                     window_id,
                     tab_id,
                     SessionEvent::Output(format!(
@@ -400,13 +406,12 @@ pub(super) fn apply_session_event_to_window(
                 // Drive the breathing indicator on the Transfers toolbar button:
                 // `true` while any row is active (0) or preparing (3); flips back
                 // to `false` the moment the last transfer finishes (#breathing-light).
-                let has_active = (0..model.row_count())
-                    .any(|i| {
-                        model
-                            .row_data(i)
-                            .map(|r| r.state == 0 || r.state == 3)
-                            .unwrap_or(false)
-                    });
+                let has_active = (0..model.row_count()).any(|i| {
+                    model
+                        .row_data(i)
+                        .map(|r| r.state == 0 || r.state == 3)
+                        .unwrap_or(false)
+                });
                 win.set_has_active_transfers(has_active);
             }
         }

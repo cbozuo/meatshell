@@ -11,11 +11,12 @@ use crate::resource::{LocalSnap, NetHist, TabStatuses};
 use crate::sftp::{SftpHandles, SftpLastCwd};
 use crate::ssh::{CredentialResponder, HostKeyResponder, MfaResponder, SessionHandle};
 use crate::terminal::{RenderGates, TermBuffers};
-use crate::ui::AppWindow;
+use crate::ui::{AppWindow, EditorWindow};
 
 /// Shared dependencies for starting or reconnecting a session tab.
 pub(crate) struct ConnectCtx {
     pub(crate) weak: slint::Weak<AppWindow>,
+    pub(crate) editor: slint::Weak<EditorWindow>,
     /// Registry id of the window this session belongs to, so connect-time
     /// prompts (host key / credentials / MFA) open their dialog in the
     /// owning window rather than whichever window happens to resolve the

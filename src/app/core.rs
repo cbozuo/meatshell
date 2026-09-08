@@ -16,7 +16,8 @@ use crate::sftp::{SftpHandles, SftpLastCwd};
 use crate::ssh::SessionHandle;
 use crate::terminal::{RenderGates, TermBuffers};
 use crate::ui::{
-    AppWindow, PaneInfo, ProcWindow, SplitterInfo, SystemInfoWindow, TabInfo, TerminalState,
+    AppWindow, EditorWindow, PaneInfo, ProcWindow, SplitterInfo, SystemInfoWindow, TabInfo,
+    TerminalState,
 };
 
 /// Where a tab's session events are currently delivered. Session pump
@@ -28,6 +29,7 @@ use crate::ui::{
 #[derive(Clone)]
 pub struct TabRoute {
     pub window: slint::Weak<AppWindow>,
+    pub editor: slint::Weak<EditorWindow>,
     pub window_id: u64,
     pub bufs: TermBuffers,
     pub gates: RenderGates,
@@ -73,6 +75,7 @@ pub struct WindowState {
     /// `forget_window_state` drops this entry on close.
     pub proc_win: Rc<ProcWindow>,
     pub sys_win: Rc<SystemInfoWindow>,
+    pub editor_win: Rc<EditorWindow>,
     pub proc_weak: slint::Weak<ProcWindow>,
     pub sys_weak: slint::Weak<SystemInfoWindow>,
 }

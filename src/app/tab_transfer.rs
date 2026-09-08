@@ -430,6 +430,7 @@ pub(super) fn move_tab_between_windows(
             if let Ok(mut r) = route.lock() {
                 *r = TabRoute {
                     window: dst.weak.clone(),
+                    editor: dst.editor_win.as_weak(),
                     window_id: dst_id,
                     bufs: dst.bufs.clone(),
                     gates: dst.gates.clone(),
@@ -491,6 +492,7 @@ pub(super) fn close_window_now(core: &Rc<AppCore>, window_id: u64) {
             &st.sftp_handles,
             &st.proc_weak,
             &st.sys_weak,
+            &st.editor_win.as_weak(),
         );
         let _ = win.hide();
     }
@@ -508,6 +510,7 @@ pub(super) fn forget_window_state(core: &Rc<AppCore>, window_id: u64) {
         st.timers.borrow_mut().clear();
         let _ = st.proc_win.hide();
         let _ = st.sys_win.hide();
+        let _ = st.editor_win.hide();
     }
     if let Ok(mut routes) = core.tab_routes.lock() {
         routes.retain(|_, route| {

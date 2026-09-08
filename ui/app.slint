@@ -25,9 +25,10 @@ import { TerminalView, TermSpan, TermMatch, QuickCmd, QuickDockPanel } from "ter
 import { SftpEntry, SftpTreeNode, TunnelInfo } from "sftp_panel.slint";
 import { ProcWindow, ProcRow } from "proc_window.slint";
 import { SystemInfoWindow, SysInfoRow, SysMetricRow, SysNetRow } from "system_info_window.slint";
+import { EditorWindow, EditorFindResult } from "editor_window.slint";
 import { InterfacePanel, OutputRuleItem, WslProfileInfo } from "interface_panel.slint";
 // Re-export so `slint::include_modules!` generates the detached Rust window types.
-export { ProcWindow, SystemInfoWindow }
+export { ProcWindow, SystemInfoWindow, EditorWindow }
 import { ComboBox, SpinBox, LineEdit, Button, ScrollView, CheckBox, Palette } from "std-widgets.slint";
 
 export { SessionInfo, SessionDraft, TabInfo, SftpEntry, SftpTreeNode, TunnelInfo, QuickCmd, PortFwd, WslProfileInfo }
@@ -94,12 +95,6 @@ export struct PaneInfo {
     focused: bool,
     reserve-right: length,
     tabs: [TabInfo],
-}
-
-export struct EditorFindResult {
-    start: int,
-    end: int,
-    count: int,
 }
 
 // A draggable splitter between two regions of the split layout (v0.5).
@@ -2351,7 +2346,9 @@ export component AppWindow inherits Window {
     // --- Built-in file viewer / editor (#70) ------------------------------
     // View = read-only (selectable/copyable); Edit = writable, Ctrl+S or the
     // Save button uploads, and closing uploads any unsaved changes.
-    if root.editor-open : Rectangle {
+    // EditorWindow is the active top-level editor. Keep this legacy block
+    // disabled while retaining the old properties for source compatibility.
+    if false && root.editor-open : Rectangle {
         // Modal backdrop; clicking it does NOT close (avoids losing edits to a
         // stray click) — use the close button or Esc. Also swallow wheel events
         // so scrolling can't leak through to the terminal underneath (#70).
