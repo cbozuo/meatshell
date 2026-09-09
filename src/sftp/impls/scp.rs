@@ -110,6 +110,14 @@ fn parse_ls(lines: &str, dir: &str) -> Vec<RemoteEntry> {
             size,
             modified: 0,
             mode: 0,
+            // (#431 merge) SCP 协议拿不到扩展元数据,填中性默认值:
+            // UI 端对 0/None/空串有回退显示(#431)。
+            permissions_mode: 0,
+            uid: None,
+            gid: None,
+            owner: None,
+            group: None,
+            file_type: if is_dir || is_link && is_dir { "dir".into() } else { "file".into() },
         });
     }
     out.sort_by(|a, b| match (a.is_dir, b.is_dir) {

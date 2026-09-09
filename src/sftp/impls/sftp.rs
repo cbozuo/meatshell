@@ -732,7 +732,9 @@ async fn run_sftp(
             let _ = events.send(SessionEvent::SftpStatus(
                 t("SFTP 子系统不可用,已回退到 SCP", "SFTP subsystem unavailable — using SCP instead").into(),
             ));
-            Transport::Scp { handle }
+            // (#431 merge 2026-09-09) clone 而非 move:SCP 模式下命令循环
+            // 仍要用 handle 处理 EnrichEntries(属主补全)。
+            Transport::Scp { handle: handle.clone() }
         }
     };
 
