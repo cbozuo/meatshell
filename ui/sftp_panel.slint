@@ -1081,8 +1081,14 @@ export component SftpPanel inherits Rectangle {
                     // enabled only when an item was right-clicked (menu-target set);
                     // new/refresh are always available.
                     copy-target-menu := PopupWindow {
-                        x: root.menu-x + 148px;
-                        y: root.menu-y;
+                        // (#sftp-menu-flip) 主菜单右侧展开;右缘放不下 → 弹到
+                        // 主菜单左侧;超面板底 → 上翻(底边贴点击点)。
+                        x: root.menu-x + 148px + self.width > file-area.width - 8px
+                            ? max(8px, root.menu-x - self.width)
+                            : root.menu-x + 148px;
+                        y: root.menu-y + self.height > file-area.height - 8px
+                            ? max(8px, root.menu-y - self.height)
+                            : root.menu-y;
                         width: 148px;
                         height: max(1, root.transfer-targets.length) * 27px + 8px;
                         Rectangle {
@@ -1113,8 +1119,14 @@ export component SftpPanel inherits Rectangle {
                     }
 
                     file-menu := PopupWindow {
-                        x: root.menu-x;
-                        y: root.menu-y;
+                        // (#sftp-menu-flip 2026-09-09) 右下角展开;超面板底 →
+                        // 上翻(底边贴点击点,右上角);x 钳制防溢出面板右缘。
+                        // 关闭交互用 PopupWindow 内置行为(点外部/Esc 自动关),
+                        // 无需会话菜单的 backdrop 安全区方案。
+                        x: min(root.menu-x, max(8px, file-area.width - self.width - 8px));
+                        y: root.menu-y + self.height > file-area.height - 8px
+                            ? max(8px, root.menu-y - self.height)
+                            : root.menu-y;
                         width: 148px;
                         height: 15 * 27px + 8px;   // 15 menu rows after splitting Download into two (#context-split)
                         Rectangle {
