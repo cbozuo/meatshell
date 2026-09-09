@@ -1,4 +1,6 @@
-use super::{event_requires_immediate_ui, record_ingested_chunk, INGEST_FRAME_BUDGET};
+use super::{
+    event_requires_immediate_ui, record_ingested_chunk, take_closed_event, INGEST_FRAME_BUDGET,
+};
 use crate::ssh::SessionEvent;
 
 fn count_requests(chunk_lengths: &[usize]) -> (usize, usize) {
@@ -62,4 +64,19 @@ fn routine_shell_metadata_does_not_disable_tail_pacing() {
     assert!(event_requires_immediate_ui(&SessionEvent::Closed(
         "connection lost".into()
     )));
+}
+
+#[test]
+fn closed_event_discards_stale_output_backlog() {
+    let mut events = vec![
+        SessionEvent::Output("old-1".into()),
+        SessionEvent::Output("old-2".into()),
+        SessionEvent::Closed("connection closed".into()),
+        SessionEvent::Output("stale-after-close".into()),
+    ];
+
+    let closed = take_closed_event(&mut events);
+
+    assert!(matches!(closed, Some(SessionEvent::Closed(reason)) if reason == "connection closed"));
+    assert!(events.is_empty());
 }

@@ -3,6 +3,21 @@ use super::*;
 // 继承 app.rs 的 use 项,app.rs 内不再直接使用该函数后需在此声明。
 use crate::config::named_display_groups;
 
+fn serial_session_detail(session: &Session) -> String {
+    if session.kind != SessionKind::Serial {
+        return String::new();
+    }
+    let parity = match session.parity.as_str() {
+        "odd" => "O",
+        "even" => "E",
+        _ => "N",
+    };
+    format!(
+        "{} · {} baud · {}{}{}",
+        session.serial_port, session.baud_rate, session.data_bits, parity, session.stop_bits
+    )
+}
+
 pub(super) fn wsl_profile_model(store: &ConfigStore) -> ModelRc<WslProfileInfo> {
     let rows = store
         .wsl_profiles()
@@ -204,6 +219,7 @@ fn build_session_rows(
         id: "".into(),
         name: "".into(),
         host: "".into(),
+        serial_detail: "".into(),
         port: 0,
         user: "".into(),
         auth: "".into(),
@@ -229,6 +245,7 @@ fn build_session_rows(
             id: s.id.clone().into(),
             name: s.name.clone().into(),
             host: s.host.clone().into(),
+            serial_detail: "".into(),
             port: 0,
             user: s.user.clone().into(),
             auth: s.kind.as_str().into(),
@@ -278,6 +295,7 @@ fn build_session_rows(
                     id: s.id.clone().into(),
                     name: s.name.clone().into(),
                     host: s.host.clone().into(),
+                    serial_detail: serial_session_detail(s).into(),
                     port: s.port as i32,
                     user: s.user.clone().into(),
                     auth: s.auth.as_str().into(),
@@ -606,6 +624,7 @@ mod search_tests {
 }
 
 #[cfg(test)]
+
 mod drag_order_tests {
     use super::*;
 
@@ -654,5 +673,44 @@ mod drag_order_tests {
             .nth(1)
             .unwrap();
         assert_eq!(second_test.group_index, 1);
+
+mod serial_display_tests {
+    use super::*;
+
+    #[test]
+    fn serial_rows_show_device_and_framing_instead_of_ssh_defaults() {
+        for (device, baud, bits, parity, stops, expected) in [
+            ("/dev/ttyUSB0", 115200, 8, "none", 1, "/dev/ttyUSB0 · 115200 baud · 8N1"),
+            ("COM3", 9600, 7, "even", 2, "COM3 · 9600 baud · 7E2"),
+            ("/dev/ttyS0", 57600, 8, "odd", 1, "/dev/ttyS0 · 57600 baud · 8O1"),
+        ] {
+            let mut session = Session::new_empty();
+            session.kind = SessionKind::Serial;
+            session.serial_port = device.into();
+            session.baud_rate = baud;
+            session.data_bits = bits;
+            session.parity = parity.into();
+            session.stop_bits = stops;
+            let rows = build_session_rows(&[session], &[], None, &[], "");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].serial_detail.as_str(), expected);
+        }
     }
-}
+
+    #[test]
+    fn network_rows_keep_their_address_fields() {
+        for kind in [SessionKind::Ssh, SessionKind::Telnet] {
+            let mut session = Session::new_empty();
+            session.kind = kind;
+            session.host = "example.com".into();
+            session.port = 2222;
+            session.user = "alice".into();
+            let rows = build_session_rows(&[session], &[], None, &[], "");
+            assert!(rows[0].serial_detail.is_empty());
+            assert_eq!(rows[0].host.as_str(), "example.com");
+            assert_eq!(rows[0].port, 2222);
+            assert_eq!(rows[0].user.as_str(), "alice");
+        }
+
+    }
+

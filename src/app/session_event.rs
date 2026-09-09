@@ -98,6 +98,13 @@ pub(super) fn apply_session_event_to_window(
             }
         }
         SessionEvent::Closed(reason) => {
+            // A disconnected tab remains open for Enter-to-reconnect, but it
+            // must not retain the old firehose scrollback while idle. Keep the
+            // tab and its status, release the heavy terminal state, then paint
+            // only the reconnect hint below.
+            if let Some(h) = crate::app::term_buf(bufs, tab_id) {
+                h.lock().unwrap().release_scrollback();
+            }
             // Print the hint into the terminal itself (FinalShell-style), via a
             // synthetic Output event so it reuses the normal render path (#79).
             apply_session_event_to_window(
@@ -293,7 +300,7 @@ pub(super) fn apply_session_event_to_window(
         } => {
             if error.is_empty() {
                 // Open the built-in viewer/editor (#70).
-                win.set_editor_line_numbers(line_numbers_for(&content).into());
+                win.set_editor_lines(editor_lines_for(&content));
                 win.set_editor_path(path.into());
                 win.set_editor_name(name.into());
                 win.set_editor_content(content.into());

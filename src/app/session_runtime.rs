@@ -1,5 +1,18 @@
 use super::*;
 
+/// When a firehose queue contains stale output ahead of its terminal `Closed`
+/// event, keep the close notification and discard the obsolete output. The
+/// disconnected tab is going to be reset anyway; replaying those bytes only
+/// delays cleanup and can temporarily retain hundreds of megabytes.
+pub(super) fn take_closed_event(events: &mut Vec<SessionEvent>) -> Option<SessionEvent> {
+    let index = events
+        .iter()
+        .position(|event| matches!(event, SessionEvent::Closed(_)))?;
+    let closed = events.swap_remove(index);
+    events.clear();
+    Some(closed)
+}
+
 pub(super) fn resolve_jump(store: &Rc<RefCell<ConfigStore>>, session: &Session) -> Option<Session> {
     if session.kind != SessionKind::Ssh || session.jump_session_id.trim().is_empty() {
         return None;
@@ -10,11 +23,18 @@ pub(super) fn resolve_jump(store: &Rc<RefCell<ConfigStore>>, session: &Session) 
     store.borrow().get(&session.jump_session_id).cloned()
 }
 
+pub(super) fn should_start_sftp(session: &Session) -> bool {
+    // Compatibility mode must keep the connection to a single, plain PTY.
+    // Bastions such as JumpServer/Koko can terminate an active proxied shell
+    // when the client immediately opens a second SSH connection for SFTP.
+    session.kind == SessionKind::Ssh && !session.disable_shell_integration
+}
+
 /// Spawn the shell (+ SFTP) workers and their event-pump threads for an
 /// already-registered tab. Used by the initial connect and by in-place
 /// reconnect (#79); the tab/terminal/parser must already exist.
 pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &ConnectCtx) {
-    let has_sftp = session.kind == SessionKind::Ssh;
+    let has_sftp = should_start_sftp(&session);
     let (initial_cols, initial_rows) = *ctx.last_term_size.lock().unwrap();
     // Resolve the optional SSH jump host now (on the UI thread, where the store
     // lives) so the owned Session can be handed to the worker threads (#211).
@@ -156,6 +176,33 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                 let Ok(rt) = route_pump.lock().map(|g| g.clone()) else {
                     continue;
                 };
+
+                // A close marker can sit behind a large burst of Output events
+                // in the unbounded channel. Handle it before ingesting anything
+                // from this batch so stale scrollback is released immediately.
+                if let Some(closed) = take_closed_event(&mut drained) {
+                    if let Some(h) = crate::app::term_buf(&rt.bufs, &tab_id_pump) {
+                        h.lock().unwrap().release_scrollback();
+                    }
+                    let rt_evt = rt.clone();
+                    let tid = tab_id_pump.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(win) = rt_evt.window.upgrade() {
+                            apply_session_event_to_window(
+                                &win,
+                                rt_evt.window_id,
+                                &tid,
+                                closed,
+                                &rt_evt.bufs,
+                                &rt_evt.gates,
+                                &rt_evt.statuses,
+                                &rt_evt.local_snap,
+                                &rt_evt.net_hist,
+                            );
+                        }
+                    });
+                    break;
+                }
 
                 // Run CwdChanged side-effects here (off the UI thread), drop the
                 // swallowed ones, and concatenate runs of Output into a single chunk
@@ -368,5 +415,28 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                 });
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_start_sftp;
+    use crate::config::{Session, SessionKind};
+
+    #[test]
+    fn compatibility_mode_keeps_ssh_to_one_connection() {
+        let mut session = Session::new_empty();
+        session.kind = SessionKind::Ssh;
+        assert!(should_start_sftp(&session));
+
+        session.disable_shell_integration = true;
+        assert!(!should_start_sftp(&session));
+    }
+
+    #[test]
+    fn non_ssh_sessions_never_start_sftp() {
+        let mut session = Session::new_empty();
+        session.kind = SessionKind::Telnet;
+        assert!(!should_start_sftp(&session));
     }
 }

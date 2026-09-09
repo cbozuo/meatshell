@@ -23,6 +23,28 @@ fn terminal_query(sequence: &[u8]) -> Option<TerminalQuery> {
 }
 
 impl TermBuffer {
+    /// Release all retained terminal output and recreate the parser at the
+    /// current size. This is used when a session is disconnected or the user
+    /// explicitly clears the terminal, so a dead tab does not keep a large
+    /// scrollback allocation alive until it is closed.
+    pub(crate) fn release_scrollback(&mut self) {
+        let (rows, cols) = self.parser.screen().size();
+        self.parser = vt100::Parser::new(rows, cols, 5000);
+        self.find_query.clear();
+        self.history = std::collections::VecDeque::new();
+        self.prev = Vec::new();
+        self.view_offset = 0;
+        self.sel_anchor = None;
+        self.sel_focus = None;
+        self.sel_ranges.clear();
+        self.displayed_text = Vec::new();
+        self.csi_state = CsiState::Normal;
+        self.csi_pending = Vec::new();
+        self.raw = std::collections::VecDeque::new();
+        self.charset = crate::terminal::CharsetTracker::default();
+        self.mouse_tracked = false;
+    }
+
     // ---- Absolute-coordinate selection helpers (#18 follow-up) -------------
     //
     // The "combined" buffer is `history` (oldest first) followed by the live

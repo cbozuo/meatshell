@@ -1,3 +1,4 @@
+
 # Changelog / 更新日志
 
 All notable changes are documented here. 本文件记录所有重要变更。
@@ -5,8 +6,51 @@ All notable changes are documented here. 本文件记录所有重要变更。
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-07
+
+- **停止 Android Beta 支持。** 移除 Android 客户端源码、APK 构建和发布任务，发布流程仅保留桌面平台。
+- **Discontinue Android Beta support.** Remove the Android client source, APK builds, and release tasks; releases now target desktop platforms only.
+
+- **修复内置文本查看器和编辑器的行号错位。** 行号按正文自动折行后的显示高度排列，保留空行与末尾换行，并随编辑、替换和窗口宽度变化同步更新；查找与替换输入框的文字和光标统一垂直居中。
+- **Fix line-number alignment in the built-in text viewer and editor.** Align the gutter with wrapped text, preserve blank and trailing lines, and update it after edits, replacements, and width changes. Vertically center text and cursors in the find and replace fields.
+
+- **修复串口会话误显示 SSH 端口（#406）。** 左侧和完整会话列表现在显示串口设备名、波特率及通信参数（如 `115200 baud · 8N1`），不再显示无关的 `:22`。
+- **Fix serial sessions showing an SSH port (#406).** The sidebar and full session list now show the serial device, baud rate, and framing (such as `115200 baud · 8N1`) instead of an unrelated `:22`.
+
+- **修复会话输入框提示文字重叠（#415）。** 提示文字置于输入控件下层，获得焦点时隐藏，避免与输入法尚未提交的组合文字重叠；覆盖普通输入框、分组框和端口转发字段。
+- **Fix overlapping placeholders in session fields (#415).** Placeholders render beneath input controls and hide on focus to avoid overlapping uncommitted IME composition text, covering labeled inputs, the group field, and port-forward fields.
+
+- **修复命令输入框全选与多行滚动（#416，输入框部分）。** `Ctrl+A` / `Cmd+A` 现在全选文本，支持滚动查看多行内容，并在选择时跟随光标。该更新不包含 `top` 无法通过 `Ctrl+C` 退出问题的修复。
+- **Fix command-input select-all and multiline scrolling (input-field portion of #416).** `Ctrl+A` / `Cmd+A` now selects all text. Multiline content can scroll, and selection keeps the cursor visible. This update does not resolve the reported inability to exit `top` with `Ctrl+C`.
+
+- **保留 Intel Mac 安装包。** 正式发布同时提供 Intel (`macos-x86_64`) 和 Apple Silicon (`macos-aarch64`) 安装包。
+- **Keep Intel Mac packages.** Releases provide packages for both Intel (`macos-x86_64`) and Apple Silicon (`macos-aarch64`).
+
+## [0.7.2] - 2026-09-04
+
 - **修复旧版 macOS 启动闪退。** 在 macOS 上禁用 Slint/winit 的 AppKit DisplayLink 帧节流，回退到计时器帧节流，避免旧系统收到不存在的 `displayLinkWithTarget:selector:` 消息。
 - **Fix startup crashes on older macOS.** Disable Slint/winit's AppKit DisplayLink frame throttling on macOS and use timer throttling instead, avoiding calls to the unavailable `displayLinkWithTarget:selector:` method on older systems.
+
+- **支持终端鼠标追踪与 VT100 线框字符（#399、#400）。** 鼠标事件现在可转发给启用追踪的 TUI 程序，并正确解析 DEC Special Graphics 字符集；会话设置可按需关闭线框转换。
+- **Support terminal mouse tracking and VT100 line drawing (#399, #400).** Mouse events are now forwarded to TUI applications that enable tracking, and the DEC Special Graphics character set is rendered correctly, with an option to disable line-drawing conversion per session.
+
+- **修复多项 SFTP 文件操作问题（#401、#402、#403）。** 上传完成后会正确清空选择计数，调整工具栏拖拽手柄与路径输入框布局，并在批量归档、复制路径时安全处理符号链接，避免空文件、卡死或越界访问。
+- **Fix several SFTP file-operation issues (#401, #402, #403).** Clear the selection count after uploads, improve the transfer toolbar and path-field layout, and handle symbolic links safely during batch archives and path copying to prevent empty files, hangs, and traversal outside the selected tree.
+
+- **修复 Wayland 启动后出现多个任务栏窗口（#404）。** 调整 Linux 窗口初始化与资源信息展示，避免应用启动时创建多余的可见窗口。
+- **Fix duplicate taskbar windows after startup on Wayland (#404).** Adjust Linux window initialization and resource presentation so startup no longer creates extra visible windows.
+
+- **支持在多个标签栏之间拖动标签页（#408）。** 标签页现在可以跨分屏和多标签容器拖动，并在目标位置正确重排，方便整理复杂的终端工作区。
+- **Support dragging tabs across tab bars (#408).** Tabs can now be moved between split panes and multi-tab containers and reordered at the destination, making complex terminal workspaces easier to organize.
+
+- **修复右键重命名标签页时闪退（#411）。** 调整窗口菜单事件处理，避免从标签页上下文菜单执行重命名时发生重入崩溃。
+- **Fix crashes when renaming tabs from the context menu (#411).** Adjust window-menu event handling to prevent re-entrant crashes when renaming a tab from its context menu.
+
+- **优化终端内存管理与跨平台分配器（#410）。** 终端关闭后会及时释放缓存及关联状态，并按平台选择合适的全局内存分配器，降低长时间、多会话使用时的内存占用。
+- **Improve terminal memory management and cross-platform allocation (#410).** Release terminal buffers and associated state promptly after tabs close, and select an appropriate global allocator per platform to reduce memory use during long-running, multi-session workloads.
+
+- **修复通过 JumpServer/Koko 连接后 Shell 自动断开（#359）。** SSH 兼容模式现在只建立单一 PTY 连接，不再自动启动独立 SFTP 旁路；界面同步隐藏不可用的 SFTP 状态，避免堡垒机关闭被代理的 Shell。
+- **Fix shells disconnecting through JumpServer/Koko (#359).** SSH compatibility mode now keeps a single PTY connection instead of automatically starting a separate SFTP side channel, and the UI reflects that SFTP is unavailable so bastions do not close the proxied shell.
 
 ## [0.7.2] - 2026-09-01
 

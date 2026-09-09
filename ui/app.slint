@@ -962,7 +962,7 @@ export component AppWindow inherits Window {
     // Opening the dynamic editor and focusing its TextInput in the same event
     // can re-enter Windows AccessKit while it is registering the new item tree.
     property <bool> editor-focus-pending: false;
-    in-out property <string> editor-line-numbers; // newline-joined "1..N" from Rust (#81)
+    in-out property <[string]> editor-lines; // logical lines, measured with editor wrapping
     in-out property <string> editor-find-query;
     in-out property <string> editor-replace-text;
     in-out property <int> editor-match-count: 0;
@@ -1065,6 +1065,7 @@ export component AppWindow inherits Window {
     in-out property <string> paste-confirm-text;
     in-out property <string> paste-confirm-preview;
     in-out property <bool> paste-confirm-large: false;
+    property <int> terminal-focus-sequence;
     callback paste-confirmed(string /* tab-id */);
     callback paste-confirm-cancelled();
     callback connect-session(string /* session-id */);
@@ -2256,6 +2257,7 @@ export component AppWindow inherits Window {
                         quick-external-command: root.quick-external-command;
                         quick-external-send-enter: root.quick-external-send-enter;
                         quick-external-sequence: root.quick-external-sequence;
+                        focus-sequence: root.terminal-focus-sequence;
                         command-history: root.command-history;
                         history-view: root.history-view;
                         run-command(cmd, all) => { root.run-command(term.id, cmd, all); }
@@ -3259,6 +3261,10 @@ export component AppWindow inherits Window {
                             TextInput {
                                 horizontal-stretch: 1;
                                 single-line: true;
+                                vertical-alignment: center;
+                                font-family: Theme.ui-font-family;
+                                font-size: Theme.fs-md;
+                                color: Theme.text-primary;
                                 text <=> root.editor-find-query;
                                 edited => {
                                     root.editor-find-position = -1;
@@ -3311,6 +3317,10 @@ export component AppWindow inherits Window {
                             TextInput {
                                 horizontal-stretch: 1;
                                 single-line: true;
+                                vertical-alignment: center;
+                                font-family: Theme.ui-font-family;
+                                font-size: Theme.fs-md;
+                                color: Theme.text-primary;
                                 text <=> root.editor-replace-text;
                             }
                             Rectangle {
@@ -3348,15 +3358,39 @@ export component AppWindow inherits Window {
                                 width: 48px;
                                 background: Theme.bg-panel-alt;
                                 clip: true;
-                                Text {
-                                    x: 0;
+                                VerticalLayout {
                                     y: ed-scroll.viewport-y + 8px;
-                                    width: parent.width - 6px;
-                                    text: root.editor-line-numbers;
-                                    horizontal-alignment: right;
-                                    font-family: Theme.ui-font-family;
-                                    font-size: Theme.fs-md;
-                                    color: Theme.text-muted;
+                                    width: parent.width;
+                                    height: self.preferred-height;
+                                    spacing: 0px;
+                                    padding: 0px;
+                                    for line[index] in root.editor-lines: Rectangle {
+                                        height: line-measure.preferred-height;
+                                        // Use TextInput for identical font fallback,
+                                        // wrapping and empty-line metrics. The clipped
+                                        // measurement sits outside the visible gutter.
+                                        line-measure := TextInput {
+                                            x: parent.width;
+                                            width: edit-input.width;
+                                            height: self.preferred-height;
+                                            text: line;
+                                            read-only: true;
+                                            single-line: false;
+                                            wrap: char-wrap;
+                                            font-family: edit-input.font-family;
+                                            font-size: edit-input.font-size;
+                                        }
+                                        Text {
+                                            width: parent.width - 6px;
+                                            height: line-measure.preferred-height;
+                                            text: "\{index + 1}";
+                                            horizontal-alignment: right;
+                                            vertical-alignment: top;
+                                            font-family: edit-input.font-family;
+                                            font-size: edit-input.font-size;
+                                            color: Theme.text-muted;
+                                        }
+                                    }
                                 }
                             }
                             Rectangle { width: 1px; background: Theme.border-subtle; }
@@ -5164,10 +5198,12 @@ export component AppWindow inherits Window {
         confirm => {
             root.paste-confirmed(root.paste-confirm-tab);
             root.paste-confirm-open = false;
+            root.terminal-focus-sequence += 1;
         }
         cancel => {
             root.paste-confirm-cancelled();
             root.paste-confirm-open = false;
+            root.terminal-focus-sequence += 1;
         }
     }
 

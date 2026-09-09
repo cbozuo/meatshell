@@ -4939,8 +4939,9 @@ fn wire_session_callbacks(
                 SessionKind::Telnet => format!("telnet {}:{}", session.host, session.port),
                 SessionKind::Local => format!("local {}", session.name),
             };
-            // Serial / Telnet have no SFTP side-channel.
-            let has_sftp = session.kind == SessionKind::Ssh;
+            // Compatibility mode also suppresses the SFTP side-channel so
+            // bastions that only permit one proxied PTY connection stay alive.
+            let has_sftp = should_start_sftp(&session);
 
             // Seed the per-tab status so the sidebar shows "连接中 host" the
             // moment this tab becomes active (the `changed active-tab-id`
@@ -5952,16 +5953,7 @@ fn wire_key_input(
                     {
                         if let Some(h) = term_buf(&ctx.bufs, tab_id.as_str()) {
                             let mut b = h.lock().unwrap();
-                            let (rows, cols) = b.parser.screen().size();
-                            b.parser = vt100::Parser::new(rows, cols, 5000);
-                            b.history.clear();
-                            b.prev.clear();
-                            b.displayed_text.clear();
-                            b.view_offset = 0;
-                            b.sel_anchor = None;
-                            b.sel_focus = None;
-                            b.sel_ranges.clear();
-                            b.raw.clear();
+                            b.release_scrollback();
                         }
                     }
                     if let Some(st) =
@@ -6441,17 +6433,7 @@ fn wire_key_input(
             let tid = tab_id.to_string();
             if let Some(h) = term_buf(&bufs_clear, &tid) {
                 let mut buf = h.lock().unwrap();
-                let (rows, cols) = buf.parser.screen().size();
-                buf.parser = vt100::Parser::new(rows, cols, 5000);
-                buf.find_query.clear();
-                buf.history = VecDeque::new(); // recycle the session scrollback
-                buf.prev = Vec::new();
-                buf.view_offset = 0;
-                buf.sel_anchor = None;
-                buf.sel_focus = None;
-                buf.sel_ranges.clear();
-                buf.displayed_text = Vec::new();
-                buf.raw.clear();
+                buf.release_scrollback();
             }
             if let Some(win) = weak.upgrade() {
                 set_terminal_row(&win, &tid, |row| {
@@ -6918,19 +6900,12 @@ fn should_drop_macos_bare_ctrl_marker(key: &str, ctrl: bool, is_macos: bool) -> 
 /// when true the four arrow keys must use SS3 sequences (`\x1bOA`…) instead
 /// of the default CSI sequences (`\x1b[A`…).  Full-screen apps like nano and
 /// vim set this mode on startup.
-/// Build the editor's line-number gutter text: "1\n2\n…\nN", one number per line
-/// of `content`, matching its (newline-separated) line count (#81).
-fn line_numbers_for(content: &str) -> String {
-    use std::fmt::Write;
-    let lines = content.split('\n').count().max(1);
-    let mut s = String::with_capacity(lines * 4);
-    for i in 1..=lines {
-        if i > 1 {
-            s.push('\n');
-        }
-        let _ = write!(s, "{i}");
-    }
-    s
+/// Preserve logical lines (including blank and trailing lines) for the gutter.
+/// Slint measures each line with the same wrapping and font as the editor.
+fn editor_lines_for(content: &str) -> ModelRc<SharedString> {
+    ModelRc::new(VecModel::from(
+        content.split('\n').map(SharedString::from).collect::<Vec<_>>(),
+    ))
 }
 
 /// Write `text` to the system clipboard. Call from a dedicated thread, never the
@@ -7142,3 +7117,7 @@ mod selection_tests;
 #[cfg(test)]
 #[path = "../tests/app/output_highlighting/mod.rs"]
 mod log_highlight_tests;
+
+#[cfg(test)]
+#[path = "../tests/app/text_editor/mod.rs"]
+mod text_editor_tests;
