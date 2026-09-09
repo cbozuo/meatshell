@@ -1334,6 +1334,35 @@ impl ConfigStore {
     pub fn set_sftp_tree_width(&mut self, width: f32) {
         self.cache.sftp_tree_width = width.clamp(120.0, 420.0);
     }
+    pub fn sftp_visible_columns(&self) -> Vec<String> {
+        const COLUMNS: &[&str] = &["name", "type", "size", "modified", "permissions", "owner", "group"];
+        if self.cache.sftp_visible_columns.is_empty() {
+            return COLUMNS.iter().map(|column| (*column).to_string()).collect();
+        }
+        let mut columns: Vec<String> = self
+            .cache
+            .sftp_visible_columns
+            .iter()
+            .filter(|column| COLUMNS.contains(&column.as_str()))
+            .cloned()
+            .collect();
+        if !columns.iter().any(|column| column == "name") {
+            columns.insert(0, "name".to_string());
+        }
+        columns
+    }
+    pub fn set_sftp_visible_columns(&mut self, columns: Vec<String>) {
+        let allowed = ["name", "type", "size", "modified", "permissions", "owner", "group"];
+        let mut normalized: Vec<String> = columns
+            .into_iter()
+            .filter(|column| allowed.contains(&column.as_str()))
+            .collect();
+        normalized.dedup();
+        if !normalized.iter().any(|column| column == "name") {
+            normalized.insert(0, "name".to_string());
+        }
+        self.cache.sftp_visible_columns = normalized;
+    }
     pub fn sftp_dock(&self) -> String {
         let d = self.cache.sftp_dock.trim();
         if d.is_empty() {
@@ -1835,6 +1864,22 @@ mod tests {
 
         store.cache = serde_json::from_str("{}").expect("legacy config must deserialize");
         assert_eq!(store.terminal_cursor_style(), "block");
+    }
+
+    #[test]
+    fn sftp_visible_columns_keep_name_and_ignore_unknown_values() {
+        let mut store = temp_store();
+        store.set_sftp_visible_columns(vec!["owner".into(), "unknown".into(), "owner".into()]);
+        assert_eq!(
+            store.sftp_visible_columns(),
+            vec!["name".to_string(), "owner".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_sftp_columns_use_the_current_default() {
+        let store = temp_store();
+        assert_eq!(store.sftp_visible_columns().len(), 7);
     }
 
     #[test]

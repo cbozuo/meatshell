@@ -1033,6 +1033,13 @@ fn open_window(
         window.set_sftp_panel_width(s.sftp_panel_width());
         window.set_sftp_panel_height(s.sftp_panel_height());
         window.set_sftp_tree_width(s.sftp_tree_width());
+        let columns = s.sftp_visible_columns();
+        window.set_sftp_show_type(columns.iter().any(|column| column == "type"));
+        window.set_sftp_show_size(columns.iter().any(|column| column == "size"));
+        window.set_sftp_show_modified(columns.iter().any(|column| column == "modified"));
+        window.set_sftp_show_permissions(columns.iter().any(|column| column == "permissions"));
+        window.set_sftp_show_owner(columns.iter().any(|column| column == "owner"));
+        window.set_sftp_show_group(columns.iter().any(|column| column == "group"));
         window.set_sftp_dock(s.sftp_dock().into());
         window.set_quick_commands_as_sidebar(quick_commands_as_sidebar);
         window.set_quick_panel_open(quick_panel_open);
@@ -1409,6 +1416,34 @@ fn open_window(
             let mut s = store.borrow_mut();
             s.set_sftp_tree_width(width);
             let _ = s.save();
+        });
+    }
+    {
+        let store = store.clone();
+        let weak = window.as_weak();
+        window.on_toggle_sftp_column(move |column: SharedString| {
+            let columns = {
+                let mut s = store.borrow_mut();
+                let mut columns = s.sftp_visible_columns();
+                if column != "name" {
+                    if let Some(index) = columns.iter().position(|value| value == column.as_str()) {
+                        columns.remove(index);
+                    } else {
+                        columns.push(column.to_string());
+                    }
+                    s.set_sftp_visible_columns(columns);
+                }
+                let _ = s.save();
+                s.sftp_visible_columns()
+            };
+            if let Some(w) = weak.upgrade() {
+                w.set_sftp_show_type(columns.iter().any(|value| value == "type"));
+                w.set_sftp_show_size(columns.iter().any(|value| value == "size"));
+                w.set_sftp_show_modified(columns.iter().any(|value| value == "modified"));
+                w.set_sftp_show_permissions(columns.iter().any(|value| value == "permissions"));
+                w.set_sftp_show_owner(columns.iter().any(|value| value == "owner"));
+                w.set_sftp_show_group(columns.iter().any(|value| value == "group"));
+            }
         });
     }
     {
