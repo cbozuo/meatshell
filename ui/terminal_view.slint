@@ -269,6 +269,12 @@ export component TerminalView inherits Rectangle {
     in property <[TabInfo]> sftp-transfer-targets: [];
     in property <string> sftp-sort-key: "";
     in property <int> sftp-sort-dir: 0;
+    in property <bool> sftp-show-type: true;
+    in property <bool> sftp-show-size: true;
+    in property <bool> sftp-show-modified: true;
+    in property <bool> sftp-show-permissions: true;
+    in property <bool> sftp-show-owner: true;
+    in property <bool> sftp-show-group: true;
     in property <bool> sftp-available: true;
     in property <[TunnelInfo]> tunnels: [];
 
@@ -284,6 +290,7 @@ export component TerminalView inherits Rectangle {
     callback set-sftp-panel-width(length);
     callback set-sftp-saved-height(length);
     callback persist-sftp-tree-width(length);
+    callback toggle-sftp-column(string);
     callback set-sftp-collapsed(bool);
 
     // --- SFTP docking (within the terminal area) ---------------------------
@@ -2108,6 +2115,13 @@ export component TerminalView inherits Rectangle {
             show-tree: !root.sftp-horizontal;   // hide the tree when narrow (vertical)
             tree-width: root.sftp-tree-width;
             persist-tree-width(width) => { root.persist-sftp-tree-width(width); }
+            show-type: root.sftp-show-type;
+            show-size: root.sftp-show-size;
+            show-modified: root.sftp-show-modified;
+            show-permissions: root.sftp-show-permissions;
+            show-owner: root.sftp-show-owner;
+            show-group: root.sftp-show-group;
+            toggle-column(key) => { root.toggle-sftp-column(key); }
             compact: root.sftp-collapsed && root.sftp-horizontal;  // clean strip when side+collapsed
             dock-drag-move(ax, ay) => {
                 root.sftp-panel-dragging = true;
