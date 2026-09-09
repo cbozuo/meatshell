@@ -1475,12 +1475,16 @@ export component AppWindow inherits Window {
                     // 悬停跨键时不断开(Windows 原生窗口控制样式)。
                     HorizontalLayout {
                         spacing: 0;
-                        WinBtn { icon: "\u{E15B}"; clicked => { root.win-minimize(); } }
+                        // (#winbtn-full-height) height 补齐行高(43px):与左侧
+                        // TopbarBtn 同款实例绑定,hover 高亮铺满整行而非只剩
+                        // 图标 preferred 高度(约 16px)。
+                        WinBtn { height: parent.height; icon: "\u{E15B}"; clicked => { root.win-minimize(); } }
                         WinBtn {
+                            height: parent.height;
                             icon: root.window-maximized ? "\u{E3E0}" : "\u{E835}";
                             clicked => { root.win-maximize-toggle(); }
                         }
-                        WinBtn { icon: "\u{E5CD}"; danger: true; clicked => { root.win-close(); } }
+                        WinBtn { height: parent.height; icon: "\u{E5CD}"; danger: true; clicked => { root.win-close(); } }
                     }
                 }
             }
