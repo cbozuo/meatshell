@@ -17,7 +17,7 @@ import "fonts/MaterialIcons-Regular.ttf";
 import { Theme } from "theme.slint";
 import { Sidebar, DiskInfo } from "sidebar.slint";
 import { TabBar, TabInfo } from "tabs.slint";
-import { Welcome, SessionInfo } from "welcome.slint";
+import { Welcome, SessionInfo, CtxRowHit } from "welcome.slint";
 import { SessionDialog, SessionDraft, PortFwd, TriggerDraft } from "session_dialog.slint";
 import { ConfirmDialog } from "confirm_dialog.slint";
 import { LabeledInput, PrimaryButton, GhostButton, DockExpandButton, IconButton, ToolStrip } from "widgets.slint";
@@ -30,7 +30,7 @@ import { InterfacePanel, OutputRuleItem, WslProfileInfo } from "interface_panel.
 export { ProcWindow, SystemInfoWindow }
 import { ComboBox, SpinBox, LineEdit, Button, ScrollView, CheckBox, Palette } from "std-widgets.slint";
 
-export { SessionInfo, SessionDraft, TabInfo, SftpEntry, SftpTreeNode, TunnelInfo, QuickCmd, PortFwd, WslProfileInfo }
+export { SessionInfo, SessionDraft, TabInfo, SftpEntry, SftpTreeNode, TunnelInfo, QuickCmd, PortFwd, WslProfileInfo, CtxRowHit }
 
 // --- TerminalState ---------------------------------------------------------
 // Per-terminal view-model exposed to Rust. A TabInfo has the metadata; the
@@ -536,6 +536,11 @@ export component AppWindow inherits Window {
     in-out property <length> ctx-row-y;
     in-out property <length> ctx-row-w;
     in-out property <length> ctx-row-h;
+    in-out property <int> ctx-gen;
+    // (#ctx-menu-autoclose) 行命中注册/查询:菜单打开时 welcome 逐行注册,
+    // backdrop 右击时按坐标命中(Rust 遍历),一步换菜单。
+    callback reg-ctx-row(CtxRowHit);
+    callback open-ctx-menu-at(length, length);
     // (#ctx-menu-autoclose) ctx-out-hover = 指针在安全区(触发行∪菜单)之外:
     // backdrop 被触发行探测层/菜单垫底层遮挡时为 false(安全),露出时为
     // true(不安全)——反向判定,不依赖新建探测层的 has-hover 初始化。
@@ -1629,6 +1634,8 @@ export component AppWindow inherits Window {
                     ctx-row-y <=> root.ctx-row-y;
                     ctx-row-w <=> root.ctx-row-w;
                     ctx-row-h <=> root.ctx-row-h;
+                    ctx-gen <=> root.ctx-gen;
+                    reg-ctx-row(info) => { root.reg-ctx-row(info); }
                     cancel-drag() => { root.cancel-session-drag(); }
                     move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     move-session-to-start(id) => { root.move-session-to-start(id); }
@@ -2128,6 +2135,8 @@ export component AppWindow inherits Window {
                         ctx-row-y <=> root.ctx-row-y;
                         ctx-row-w <=> root.ctx-row-w;
                         ctx-row-h <=> root.ctx-row-h;
+                        ctx-gen <=> root.ctx-gen;
+                        reg-ctx-row(info) => { root.reg-ctx-row(info); }
                         cancel-drag() => { root.cancel-session-drag(); }
                         move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     move-session-to-start(id) => { root.move-session-to-start(id); }
@@ -2668,8 +2677,10 @@ export component AppWindow inherits Window {
         changed has-hover => { root.ctx-out-hover = self.has-hover; }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
-                root.ctx-open-key = "";
-                root.ctx-menu-kind = "";
+                // (#ctx-menu-autoclose) 右击命中行/组头 → 一步换菜单(关闭旧 +
+                // 以右击点弹新);未命中(空白/面板外) → 仅关闭。命中判定与
+                // 状态写入在 Rust(open_ctx_menu_at)。
+                root.open-ctx-menu-at(self.mouse-x, self.mouse-y);
             }
         }
     }

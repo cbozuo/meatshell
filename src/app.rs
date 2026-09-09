@@ -4268,6 +4268,47 @@ fn wire_session_callbacks(
             }
         });
     }
+    // (#ctx-menu-autoclose 2026-09-09) 右键菜单"一步换目标"的行命中注册表:
+    // 菜单打开时 welcome 逐可见行/组头注册窗口矩形与身份(reg_ctx_row);
+    // backdrop 右击时按坐标命中(open_ctx_menu_at)——命中则直接切换菜单
+    // (关旧+以右击点弹新),未命中(空白/面板外)仅关闭。gen 过滤历史残留。
+    {
+        let ctx_rows: Rc<RefCell<Vec<CtxRowHit>>> = Rc::new(RefCell::new(Vec::new()));
+        let reg = ctx_rows.clone();
+        window.on_reg_ctx_row(move |info: CtxRowHit| {
+            let mut rows = reg.borrow_mut();
+            if let Some(slot) = rows.iter_mut().find(|r| r.key == info.key) {
+                *slot = info;
+            } else {
+                rows.push(info);
+            }
+        });
+        let weak = window.as_weak();
+        let hit = ctx_rows.clone();
+        window.on_open_ctx_menu_at(move |x: f32, y: f32| {
+            let Some(w) = weak.upgrade() else { return };
+            let gen = w.get_ctx_gen();
+            let found = hit.borrow().iter().rev().find(|r| {
+                r.gen == gen && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
+            }).cloned();
+            if let Some(hit) = found {
+                w.set_ctx_open_key(hit.key.clone());
+                w.set_ctx_menu_kind(hit.kind.clone());
+                w.set_ctx_menu_group(hit.group.clone());
+                w.set_ctx_menu_empty(hit.empty);
+                w.set_ctx_menu_x(x);
+                w.set_ctx_menu_y(y);
+                w.set_ctx_row_x(hit.x);
+                w.set_ctx_row_y(hit.y);
+                w.set_ctx_row_w(hit.w);
+                w.set_ctx_row_h(hit.h);
+                w.set_ctx_menu_space_below(hit.space_below);
+            } else {
+                w.set_ctx_open_key("".into());
+                w.set_ctx_menu_kind("".into());
+            }
+        });
+    }
     {
         // (#group-drag-reorder 2026-09-06) 组头拖动换位:explicit groups 相
         // 邻移动一位(存储顺序 = 显示顺序),保存后全量刷新列表。

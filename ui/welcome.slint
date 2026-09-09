@@ -28,6 +28,23 @@ export struct SessionInfo {
     // 拖拽让位计算用——被拖行越过的同组成员向反方向平移一行高。
 }
 
+// (#ctx-menu-autoclose 2026-09-09) 右键菜单"一步换目标"的行命中注册项:
+// 菜单打开时每个可见行/组头把自身窗口矩形与身份注册上来(见 srow/gh-shell
+// 的 changed ctx-open-key);backdrop 右击时按坐标命中,直接切换菜单,无需
+// 二次右击。gen = 打开会话代数,命中时只匹配当前代(忽略历史残留)。
+export struct CtxRowHit {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    space-below: length,   // 行底到面板底余量,菜单上翻判定用
+    key: string,           // 菜单 key:session.id / "hdr:"+组名
+    kind: string,          // "row" | "group"
+    group: string,
+    empty: bool,
+    gen: int,
+}
+
 // --- SessionRow ------------------------------------------------------------
 component SessionRow inherits Rectangle {
     in property <SessionInfo> session;
@@ -708,6 +725,12 @@ export component Welcome inherits Rectangle {
     in-out property <length> ctx-row-y: 0px;
     in-out property <length> ctx-row-w: 0px;
     in-out property <length> ctx-row-h: 0px;
+    // (#ctx-menu-autoclose) 行命中注册表(Rust 侧 VecModel 维护)+ 注册回调:
+    // 菜单打开时各可见行/组头经 changed ctx-open-key 注册自身;backdrop
+    // 右击调 hit-ctx-row 命中后一步换菜单。ctx-gen = 打开代数(命中过滤)。
+    in-out property <[CtxRowHit]> ctx-rows;
+    callback reg-ctx-row(CtxRowHit);
+    in-out property <int> ctx-gen: 0;
     // (#drag-stale-click 2026-09-07) 拖拽中切窗口(截图/看消息)再切回,
     // 系统不会补发 pointer cancel,list-dragging 残留、ghost 钉在原地。
     // 用户下一次按下被 down 分支的 stale-drag 清理逻辑吃掉(drag-end),
@@ -1419,6 +1442,7 @@ export component Welcome inherits Rectangle {
                                         // (#ctx-menu-backdrop) 弹层状态直写
                                         // Welcome 级,由 AppWindow 根浮层渲染;
                                         // key 带组头前缀防与成员行 id 撞车。
+                                        root.ctx-gen += 1;
                                         root.ctx-open-key = "hdr:" + session.group-header;
                                         root.ctx-menu-kind = "group";
                                         root.ctx-menu-group = session.group;
@@ -1435,6 +1459,27 @@ export component Welcome inherits Rectangle {
                                         root.ctx-row-y = self.absolute-position.y;
                                         root.ctx-row-w = self.width;
                                         root.ctx-row-h = self.height;
+                                    }
+                                }
+                                // (#ctx-menu-autoclose) 菜单打开时注册本组头矩形
+                                // 与身份(blank 空组头同样注册,kind=group)。
+                                // changed 只能监听自身属性,经中转 watch 桥接根状态。
+                                property <bool> ctx-open-watch: root.ctx-open-key != "";
+                                changed ctx-open-watch => {
+                                    if (root.ctx-open-key != "" && !session.builtin) {
+                                        root.reg-ctx-row({
+                                            x: self.absolute-position.x,
+                                            y: self.absolute-position.y,
+                                            w: self.width,
+                                            h: self.height,
+                                            space-below: flick.absolute-position.y + flick.height
+                                                - (self.absolute-position.y + self.height),
+                                            key: "hdr:" + session.group-header,
+                                            kind: "group",
+                                            group: session.group,
+                                            empty: session.id == "",
+                                            gen: root.ctx-gen,
+                                        });
                                     }
                                 }
                                 moved => {
@@ -1690,6 +1735,7 @@ export component Welcome inherits Rectangle {
                             // 余量(供浮层做"超面板底上翻")。事件回调期几何
                             // 稳定,读 absolute-position 安全(drag-start 先例)。
                             ctx-opening(px, py) => {
+                                root.ctx-gen += 1;
                                 root.ctx-open-key = session.id;
                                 root.ctx-menu-kind = "row";
                                 root.ctx-menu-group = session.group;
@@ -1704,6 +1750,26 @@ export component Welcome inherits Rectangle {
                                 root.ctx-row-y = srow.absolute-position.y;
                                 root.ctx-row-w = srow.width;
                                 root.ctx-row-h = srow.height;
+                            }
+                            // (#ctx-menu-autoclose) 菜单打开时全量注册本行矩形
+                            // 与身份(backdrop 右击按坐标命中,一步换菜单)。
+                            // absolute-position 在菜单打开的稳定期读取,安全。
+                            changed ctx-open-key => {
+                                if (root.ctx-open-key != "" && !session.builtin) {
+                                    root.reg-ctx-row({
+                                        x: srow.absolute-position.x,
+                                        y: srow.absolute-position.y,
+                                        w: srow.width,
+                                        h: srow.height,
+                                        space-below: flick.absolute-position.y + flick.height
+                                            - (srow.absolute-position.y + srow.height),
+                                        key: session.id,
+                                        kind: "row",
+                                        group: session.group,
+                                        empty: false,
+                                        gen: root.ctx-gen,
+                                    });
+                                }
                             }
                             connect => { root.connect-session(session.id); }
                             edit => { root.edit-session(session.id); }
