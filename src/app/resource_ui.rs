@@ -553,6 +553,16 @@ pub(super) fn sync_system_info_theme(main: &AppWindow, sys: &SystemInfoWindow) {
     sys.set_wp_tint(main.get_wp_tint());
 }
 
+pub(super) fn sync_editor_theme(main: &AppWindow, editor: &EditorWindow) {
+    editor.set_dark_mode(main.get_dark_mode());
+    editor.set_ui_scale(main.get_ui_scale());
+    editor.set_ui_font_family(main.get_ui_font_family());
+    editor.set_wallpaper_img(main.get_wallpaper_img());
+    editor.set_wallpaper_active(main.get_wallpaper_active());
+    editor.set_wp_accent(main.get_wp_accent());
+    editor.set_wp_tint(main.get_wp_tint());
+}
+
 pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow) {
     // Centre on the **content area** of the main AppWindow (not the OS window
     // bounds). `size()` returns the OS-level outer size (title bar + frame
@@ -604,8 +614,10 @@ pub(super) fn place_system_info_window(main: &AppWindow, sys: &SystemInfoWindow)
     // open may run before the native window exists. In that state the Slint
     // API stores the size/position on the adapter and applies it at creation;
     // with a live window it behaves like the winit calls did.
-    sys.window().set_size(slint::LogicalSize::new(target_w as f32, target_h as f32));
-    sys.window().set_position(slint::LogicalPosition::new(x as f32, y as f32));
+    sys.window()
+        .set_size(slint::LogicalSize::new(target_w as f32, target_h as f32));
+    sys.window()
+        .set_position(slint::LogicalPosition::new(x as f32, y as f32));
 }
 
 /// Centre the process monitor on the **content area** of the main AppWindow
@@ -649,6 +661,7 @@ pub(super) fn place_process_window(main: &AppWindow, process: &ProcWindow) {
         .window()
         .with_winit_window(|ww| ww.outer_size())
         .unwrap_or_default();
+<<<<<<< HEAD
     let (cw, ch) = if outer.width == 0 || outer.height == 0 {
         // ProcWindow component declares `preferred-width: 640px` /
         // `preferred-height: 520px` (proc_window.slint); hard-coded here so
@@ -668,4 +681,11 @@ pub(super) fn place_process_window(main: &AppWindow, process: &ProcWindow) {
     let x = ox + (iw - cw as f64).max(0.0) / 2.0;
     let y = oy + (ih - ch as f64).max(0.0) / 2.0;
     process.window().set_position(slint::LogicalPosition::new(x as f32, y as f32));
+=======
+    let x = origin.x + monitor_size.width.saturating_sub(window_size.width) as i32 / 2;
+    let y = origin.y + monitor_size.height.saturating_sub(window_size.height) as i32 / 2;
+    process
+        .window()
+        .set_position(slint::PhysicalPosition::new(x, y));
+>>>>>>> pr-430
 }

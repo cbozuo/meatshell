@@ -82,6 +82,7 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
     // route — the pumps keep running and target the new window (#tab-detach).
     let route = Arc::new(Mutex::new(TabRoute {
         window: ctx.weak.clone(),
+        editor: ctx.editor.clone(),
         window_id: ctx.window_id,
         bufs: ctx.bufs.clone(),
         gates: ctx.render_gates.clone(),
@@ -121,10 +122,7 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
             }
             tokio::task::yield_now().await;
             let sftp_handle = spawn_sftp(sftp_task_runtime.handle(), session, jump, sftp_tx);
-            let handles = sftp_route
-                .lock()
-                .ok()
-                .map(|r| r.sftp_handles.clone());
+            let handles = sftp_route.lock().ok().map(|r| r.sftp_handles.clone());
             if let Some(handles) = handles {
                 if let Ok(mut handles) = handles.lock() {
                     handles.insert(sftp_tab_id, sftp_handle);
@@ -187,9 +185,12 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                     let rt_evt = rt.clone();
                     let tid = tab_id_pump.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(win) = rt_evt.window.upgrade() {
+                        if let (Some(win), Some(editor)) =
+                            (rt_evt.window.upgrade(), rt_evt.editor.upgrade())
+                        {
                             apply_session_event_to_window(
                                 &win,
+                                &editor,
                                 rt_evt.window_id,
                                 &tid,
                                 closed,
@@ -232,8 +233,7 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                             // Swallow when follow-cd is off: forwarding it would set
                             // sftp_loading without any ListDir to clear it (the #59
                             // stuck-"loading" trap).
-                            if !changed
-                                || !rt.follow_cd.load(std::sync::atomic::Ordering::Relaxed)
+                            if !changed || !rt.follow_cd.load(std::sync::atomic::Ordering::Relaxed)
                             {
                                 continue;
                             }
@@ -295,11 +295,8 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                     match evt {
                         SessionEvent::Output(chunk) => {
                             let chunk_len = chunk.len();
-                            let reply = ingest_terminal_output(
-                                &rt.bufs,
-                                &tab_id_pump,
-                                chunk.as_bytes(),
-                            );
+                            let reply =
+                                ingest_terminal_output(&rt.bufs, &tab_id_pump, chunk.as_bytes());
                             if !reply.is_empty() {
                                 let _ = terminal_reply_tx.send(SessionCommand::RawInput(reply));
                             }
@@ -334,12 +331,8 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                 }
 
                 if dirty_since_request {
-                    let _ = request_tab_render(
-                        rt.window.clone(),
-                        &tab_id_pump,
-                        &rt.bufs,
-                        &rt.gates,
-                    );
+                    let _ =
+                        request_tab_render(rt.window.clone(), &tab_id_pump, &rt.bufs, &rt.gates);
                 }
 
                 if ui_only.is_empty() {
@@ -349,10 +342,13 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                 let rt_evt = rt.clone();
                 let tid = tab_id_pump.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(win) = rt_evt.window.upgrade() {
+                    if let (Some(win), Some(editor)) =
+                        (rt_evt.window.upgrade(), rt_evt.editor.upgrade())
+                    {
                         for evt in ui_only {
                             apply_session_event_to_window(
                                 &win,
+                                &editor,
                                 rt_evt.window_id,
                                 &tid,
                                 evt,
@@ -397,10 +393,13 @@ pub(super) fn start_session_in_tab(tab_id: &str, session: Session, ctx: &Connect
                 };
                 let tid = tab_id_sftp.clone();
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(win) = rt_s.window.upgrade() {
+                    if let (Some(win), Some(editor)) =
+                        (rt_s.window.upgrade(), rt_s.editor.upgrade())
+                    {
                         for sftp_evt in ui_batch {
                             apply_session_event_to_window(
                                 &win,
+                                &editor,
                                 rt_s.window_id,
                                 &tid,
                                 sftp_evt,
