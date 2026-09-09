@@ -3137,6 +3137,38 @@ fn open_window(
         });
     }
 
+    // (#drag-stale-cancel 2026-09-07) 拖拽按键兜底:截图等全局工具会吃掉
+    // 鼠标 up 事件,UI 侧拖拽态残留、成员卡跟着鼠标漂。150ms 轮询
+    // GetAsyncKeyState(左键):拖拽活跃而左键实际已松开 → invoke 取消
+    // (清全部拖拽态、不提交任何移动)。轻开销:未拖拽时 tick 直接返回。
+    #[cfg(windows)]
+    {
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetAsyncKeyState(vkey: i32) -> i16;
+        }
+        const VK_LBUTTON: i32 = 0x01;
+        const KEY_PRESSED: i16 = -0x8000i16;
+        let weak = window.as_weak();
+        let key_watch = slint::Timer::default();
+        key_watch.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(150),
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                if !w.get_session_drag_active() {
+                    return;
+                }
+                let pressed = unsafe { GetAsyncKeyState(VK_LBUTTON) } & KEY_PRESSED != 0;
+                if !pressed {
+                    w.invoke_cancel_session_drag();
+                }
+            },
+        );
+        // Timer drop 即停:故意泄漏,进程生命周期内常驻兜底。
+        std::mem::forget(key_watch);
+    }
+
     // The old entry point was window.run(), which shows the window before
     // spinning the loop. run_event_loop() does not, so display it here —
     // without this the app starts but no window ever appears (#multi-window).
@@ -4151,10 +4183,79 @@ fn wire_session_callbacks(
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
         window.on_move_session_to(move |id: SharedString, target: SharedString, after: bool| {
+            tracing::info!("[DRAG-DBG] to id={id} target={target} after={after}");
             let moved = {
                 let mut s = store.borrow_mut();
                 s.move_session_relative(id.as_str(), target.as_str(), after)
             };
+            if moved {
+                if let Err(err) = store.borrow_mut().save() {
+                    tracing::warn!("failed to save config after session drag: {err:#?}");
+                }
+                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
+                registry.broadcast_config_changed();
+                if let Some(w) = weak.upgrade() {
+                    refresh_session_markers_win(&w);
+                }
+            }
+        });
+    }
+    {
+        // (#drag-tail-drop-r2 2026-09-07) 拖到列表最顶:精确目标由 store
+        // 按存储顺序计算,UI 只上报"指针越界"状态(旧的 head id 行广播
+        // 依赖 Slint changed 触发顺序,反序时落点跑组)。
+        // 底部两档(to-end/ungroup)注册已随 #drag-tail-drop-r4 退役移除。
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        let registry = registry.clone();
+        window.on_move_session_to_start(move |id: SharedString| {
+            let moved = store.borrow_mut().move_session_to_start(id.as_str());
+            if moved {
+                if let Err(err) = store.borrow_mut().save() {
+                    tracing::warn!("failed to save config after session drag: {err:#?}");
+                }
+                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
+                registry.broadcast_config_changed();
+                if let Some(w) = weak.upgrade() {
+                    refresh_session_markers_win(&w);
+                }
+            }
+        });
+    }
+    {
+        // (#group-head-directional 2026-09-08) ghost 与组头行接触或越过 =
+        // 进该组第一位(空组直接改组)。
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        let registry = registry.clone();
+        window.on_move_session_to_group_top(move |id: SharedString, group: SharedString| {
+            let moved = store
+                .borrow_mut()
+                .move_session_to_group_top(id.as_str(), group.as_str());
+            if moved {
+                if let Err(err) = store.borrow_mut().save() {
+                    tracing::warn!("failed to save config after session drag: {err:#?}");
+                }
+                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
+                registry.broadcast_config_changed();
+                if let Some(w) = weak.upgrade() {
+                    refresh_session_markers_win(&w);
+                }
+            }
+        });
+    }
+    {
+        // (#drag-ungroup-pop 2026-09-07) 拖过列表内容底 = 移出分组:
+        // group 清空,平铺到未分组区(ghost 卡去缩进 + accent 描边提示)。
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        let registry = registry.clone();
+        window.on_move_session_ungroup(move |id: SharedString| {
+            tracing::info!("[DRAG-DBG] ungroup id={id}");
+            let moved = store.borrow_mut().move_session_ungroup(id.as_str());
             if moved {
                 if let Err(err) = store.borrow_mut().save() {
                     tracing::warn!("failed to save config after session drag: {err:#?}");

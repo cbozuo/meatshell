@@ -716,3 +716,12 @@ msgstr "厂商"
 # (#empty-group-hint 2026-09-05) 空分组占位提示。
 msgid "Empty"
 msgstr "空分组"
+
+msgid "Release to move to end of list"
+msgstr "松手移到列表末尾"
+
+msgid "Release to remove from group"
+msgstr "松手移出分组"
+
+msgid "Local Terminals"
+msgstr "本地终端"

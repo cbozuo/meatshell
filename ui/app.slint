@@ -126,9 +126,6 @@ component WinBtn inherits Rectangle {
     in property <bool> danger: false;
     callback clicked();
     width: 46px;
-    // (#winbtn-seamless 2026-09-06) 三键无缝:hover 高亮占满 46px 热区且
-    // 相邻按钮贴连(Windows 原生样式);图标仍居中,视觉间隔由字形留白
-    // 提供。间距控制在标题栏 win-controls 的 HL spacing(=0)。
     background: ta.has-hover ? (root.danger ? #e81123 : Theme.bg-hover) : transparent;
     animate background { duration: 90ms; }
     ta := TouchArea {
@@ -325,6 +322,14 @@ component TopbarBtn inherits Rectangle {
     in property <bool> active;
     in property <bool> breathe: false;
     callback clicked();
+    // (#topbar-ctx 2026-09-09) 右键也唤出同款菜单(用户要求左右键都能弹),
+    // 位置同样跟随右击点右下角。
+    callback ctx-clicked();
+    // (#topbar-click-anchor 2026-09-08) 最近一次点击的窗口内坐标:弹层
+    // 跟随鼠标点击点右下角展开(替代旧的"按钮右缘"锚点)。clicked 是
+    // 事件期,读 absolute-position 安全(drag-start 同先例)。
+    out property <length> click-x;
+    out property <length> click-y;
     // 全行高在实例化处绑定(height: parent.height)——组件根不可引用
     // parent。hover/激活高亮整行,也规避 HL 固定高子项的顶对齐问题;
     // horizontal-stretch: 0 防止 HL 把按钮拉伸变宽。
@@ -347,7 +352,20 @@ component TopbarBtn inherits Rectangle {
     }
     ta := TouchArea {
         mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        clicked => {
+            // (#topbar-click-anchor) 记录点击点(窗口内坐标)供弹层跟随。
+            root.click-x = ta.absolute-position.x + self.mouse-x;
+            root.click-y = ta.absolute-position.y + self.mouse-y;
+            root.clicked();
+        }
+        // (#topbar-ctx) 右键同样唤出菜单,位置跟随右击点。
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                root.click-x = ta.absolute-position.x + self.mouse-x;
+                root.click-y = ta.absolute-position.y + self.mouse-y;
+                root.ctx-clicked();
+            }
+        }
     }
     HorizontalLayout {
         padding-left: 8px;
@@ -470,12 +488,12 @@ export component AppWindow inherits Window {
     in-out property <string> topbar-tip-text;
     in-out property <length> topbar-tip-x;
     in-out property <length> topbar-tip-y;
-    // (#polish-topbar-r3) 设置按钮的位置桥:标题栏按钮在条件块(if
-    // custom-titlebar)内,弹层(窗口根)无法直接引用其 id;按钮把自身的
-    // absolute-position / 宽度经 changed 回写到这两个属性,设置菜单与下载
-    // 菜单据此锚定(右对齐按钮右缘)。
-    in-out property <length> topbar-set-x: 0px;
-    in-out property <length> topbar-set-w: 0px;
+    // (#topbar-click-anchor 2026-09-08) 顶栏弹层的位置桥:TopbarBtn 点击
+    // 时把鼠标点击点(窗口内坐标)经 out property 写回这里,传输/更多弹层
+    // 跟随点击点右下角展开并钳制不出窗口。旧"按钮右缘"锚点(set-x/set-w)
+    // 整体退役。
+    in-out property <length> topbar-click-x: 0px;
+    in-out property <length> topbar-click-y: 0px;
     // (#session-hover-card) 成员行悬停信息卡片的集中渲染槽(SessionRow 经
     // Welcome 中转写入,浮层声明在窗口根尾部)。
     in-out property <string> session-card-name;
@@ -497,6 +515,20 @@ export component AppWindow inherits Window {
     callback win-drag();          // start an OS window-move
     callback win-resize(int);     // start an OS resize; arg = direction code
     in-out property <bool> sidebar-collapsed: false; // left panel hidden
+    // (#drag-stale-cancel 2026-09-07) 会话/组头拖拽活跃态与外部取消:
+    // Rust 侧轮询发现左键已松(被截图等全局工具吃掉 up)时调用取消。
+    in-out property <bool> session-drag-active;
+    callback cancel-session-drag();
+    // (#ctx-menu-pin-r2 2026-09-08) 右键菜单打开行的全局 key。
+    // (#ctx-menu-backdrop) 弹层迁 AppWindow 根集中渲染:全窗口透明
+    // backdrop + 菜单本体,点背景即关+清 key,关闭事件 100% 确定。
+    in-out property <string> ctx-open-key;
+    in-out property <string> ctx-menu-kind;      // "row" | "group"
+    in-out property <string> ctx-menu-group;     // 被右击对象的组
+    in-out property <bool> ctx-menu-empty;       // 组头菜单:空组才有"删除"
+    in-out property <length> ctx-menu-x;
+    in-out property <length> ctx-menu-y;
+    in-out property <length> ctx-menu-space-below;
     changed sidebar-collapsed => {
         if (!root.sidebar-collapsed) { root.refresh-sidebar(); }
     }
@@ -1007,6 +1039,13 @@ export component AppWindow inherits Window {
     callback move-session(string /* session-id */, string /* group */);
     callback reorder-session(string /* session-id */, int /* dir: -1 up, 1 down */) -> bool;
     callback move-session-to(string /* session-id */, string /* target-id */, bool /* after */);   // (#drag-ghost-pointer) 几何落位:移到目标行前/后并继承其组
+    // (#drag-tail-drop-r2 2026-09-07) 指针越出列表顶时的落位:精确目标由
+    // Rust 按存储顺序计算(旧的 head id 行广播依赖 changed 触发顺序,反序跑组)。
+    callback move-session-to-start(string /* session-id */);
+    // (#group-head-directional 2026-09-08) 组头接触/越过 = 进该组第一位。
+    callback move-session-to-group-top(string /* session-id */, string /* group */);
+    // (#drag-ungroup-pop 2026-09-07) 底部越界:移出分组(group 清空,平铺)。
+    callback move-session-ungroup(string /* session-id */);
     callback reorder-group(string /* group */, int /* dir */);   // (#group-drag-reorder) 组头拖动换位
     callback reorder-session-end();
     callback toggle-group(string /* group */);
@@ -1354,13 +1393,16 @@ export component AppWindow inherits Window {
                         active: root.download-open;
                         breathe: root.has-active-transfers;
                         clicked => {
-                            // 位置桥(#polish-topbar-r3):菜单打开必经点击,
-                            // 此刻布局已定,写入锚点位置最可靠(changed 对布
-                            // 局驱动的 x 不触发)。下载菜单与设置菜单共用
-                            // 右锚(set-btn 右缘),故写 set-btn 的位置。
-                            root.topbar-set-x = set-btn.absolute-position.x;
-                            root.topbar-set-w = set-btn.width;
+                            // (#topbar-click-anchor) 弹层跟随本次点击点右下角。
+                            root.topbar-click-x = self.click-x;
+                            root.topbar-click-y = self.click-y;
                             root.download-open = !root.download-open; root.settings-open = false;
+                        }
+                        // (#topbar-ctx) 右键同样唤出,位置跟随右击点。
+                        ctx-clicked => {
+                            root.topbar-click-x = self.click-x;
+                            root.topbar-click-y = self.click-y;
+                            root.download-open = true; root.settings-open = false;
                         }
                     }
                     // 更多 —— 设置菜单弹层锚点(菜单内第一项才是真正的设置)。
@@ -1371,27 +1413,28 @@ export component AppWindow inherits Window {
                         label: root.lang-en ? "More" : "更多";
                         active: root.settings-open || root.interface-open;
                         clicked => {
-                            // 位置桥:打开菜单前刷新锚点(见 transfer-btn)。
-                            root.topbar-set-x = self.absolute-position.x;
-                            root.topbar-set-w = self.width;
+                            // (#topbar-click-anchor) 弹层跟随本次点击点右下角。
+                            root.topbar-click-x = self.click-x;
+                            root.topbar-click-y = self.click-y;
                             root.settings-open = !root.settings-open; root.download-open = false; root.ssh-import-hint = "";
+                        }
+                        // (#topbar-ctx) 右键同样唤出,位置跟随右击点。
+                        ctx-clicked => {
+                            root.topbar-click-x = self.click-x;
+                            root.topbar-click-y = self.click-y;
+                            root.settings-open = true; root.download-open = false; root.ssh-import-hint = "";
                         }
                     }
                     // Draggable spacer (no TouchArea → clicks fall to tb-drag).
                     Rectangle { horizontal-stretch: 1; }
                     // Window controls only — the app toolbar icons live in the tab
                     // row below, not here (#119).
-                    // (#winbtn-seamless) 三键贴连无间隙:高亮区连成一条整带,
-                    // 悬停跨键时不断开(Windows 原生窗口控制样式)。
-                    HorizontalLayout {
-                        spacing: 0;
-                        WinBtn { icon: "\u{E15B}"; clicked => { root.win-minimize(); } }
-                        WinBtn {
-                            icon: root.window-maximized ? "\u{E3E0}" : "\u{E835}";
-                            clicked => { root.win-maximize-toggle(); }
-                        }
-                        WinBtn { icon: "\u{E5CD}"; danger: true; clicked => { root.win-close(); } }
+                    WinBtn { icon: "\u{E15B}"; clicked => { root.win-minimize(); } }
+                    WinBtn {
+                        icon: root.window-maximized ? "\u{E3E0}" : "\u{E835}";
+                        clicked => { root.win-maximize-toggle(); }
                     }
+                    WinBtn { icon: "\u{E5CD}"; danger: true; clicked => { root.win-close(); } }
                 }
             }
 
@@ -1558,7 +1601,19 @@ export component AppWindow inherits Window {
                     card-out-note <=> root.session-card-note;
                     card-out-x <=> root.session-card-x;
                     card-out-y <=> root.session-card-y;
+                    drag-active <=> root.session-drag-active;
+                    ctx-open-key <=> root.ctx-open-key;
+                    ctx-menu-kind <=> root.ctx-menu-kind;
+                    ctx-menu-group <=> root.ctx-menu-group;
+                    ctx-menu-empty <=> root.ctx-menu-empty;
+                    ctx-menu-x <=> root.ctx-menu-x;
+                    ctx-menu-y <=> root.ctx-menu-y;
+                    ctx-menu-space-below <=> root.ctx-menu-space-below;
+                    cancel-drag() => { root.cancel-session-drag(); }
                     move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
+                    move-session-to-start(id) => { root.move-session-to-start(id); }
+                    move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
+                    move-session-ungroup(id) => { root.move-session-ungroup(id); }
                     reorder-group(g, dir) => { root.reorder-group(g, dir); }
                     width: parent.width;
                     height: parent.height;
@@ -2041,7 +2096,19 @@ export component AppWindow inherits Window {
                         card-out-note <=> root.session-card-note;
                         card-out-x <=> root.session-card-x;
                         card-out-y <=> root.session-card-y;
+                        drag-active <=> root.session-drag-active;
+                        ctx-open-key <=> root.ctx-open-key;
+                        ctx-menu-kind <=> root.ctx-menu-kind;
+                        ctx-menu-group <=> root.ctx-menu-group;
+                        ctx-menu-empty <=> root.ctx-menu-empty;
+                        ctx-menu-x <=> root.ctx-menu-x;
+                        ctx-menu-y <=> root.ctx-menu-y;
+                        ctx-menu-space-below <=> root.ctx-menu-space-below;
+                        cancel-drag() => { root.cancel-session-drag(); }
                         move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
+                    move-session-to-start(id) => { root.move-session-to-start(id); }
+                    move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
+                    move-session-ungroup(id) => { root.move-session-ungroup(id); }
                         reorder-group(g, dir) => { root.reorder-group(g, dir); }
                         search-changed(query) => { root.host-search-changed(query); }
                         new-session => { root.new-session-clicked(); }
@@ -2550,6 +2617,193 @@ export component AppWindow inherits Window {
             vertical-alignment: center;
             width: parent.width;
             height: parent.height;
+        }
+    }
+
+    // (#ctx-menu-backdrop 2026-09-08) 会话右键菜单集中浮层(替代 SessionRow/
+    // 组头内嵌 PopupWindow):全窗口透明 backdrop 打底,点击即关+清 key——
+    // 关闭事件 100% 确定感知,Slint 1.8 popup 无 closed 回调的残留问题根治。
+    // 弹层在 backdrop 之后声明 = 上层,菜单项点击不会漏到 backdrop。
+    if root.ctx-open-key != "" : TouchArea {
+        width: parent.width;
+        height: parent.height;
+        clicked => {
+            root.ctx-open-key = "";
+            root.ctx-menu-kind = "";
+        }
+    }
+    // 成员行菜单(key = session.id):编辑/复制/删除 + 移动到组列表。
+    // (#ctx-menu-backdrop) 显示条件必须同时带 key 非空:关闭只清 key(kind
+    // 不变),只判 kind 会让菜单在关闭后永久驻留(用户实测关不掉)。
+    if root.ctx-open-key != "" && root.ctx-menu-kind == "row" : Rectangle {
+        // (#topbar-click-anchor 同式钳制) 点击点右下角展开;按钮/行靠右时
+        // 贴窗口右缘,y 不超窗口底。
+        x: max(8px, min(root.ctx-menu-x, parent.width - self.width - 8px));
+        // (#ctx-menu-flip) 菜单底超出快速连接面板底(余量不足)→ 上翻,
+        // 底边贴点击点;再钳窗口底兜底。
+        y: min(
+            self.height > root.ctx-menu-space-below
+                ? max(8px, root.ctx-menu-y - self.height)
+                : root.ctx-menu-y,
+            parent.height - self.height - 8px);
+        width: 140px;
+        height: row-menu-vl.preferred-height;
+        background: Theme.popup-bg;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 10px;
+        drop-shadow-color: #00000050;
+        row-menu-vl := VerticalLayout {
+            padding: 4px;
+            spacing: 2px;
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: m-edit-ta.has-hover ? Theme.bg-hover : transparent;
+                m-edit-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        // 先取 key 执行动作再清:清空后 key 读不到 id。
+                        root.edit-session(root.ctx-open-key);
+                        root.ctx-open-key = "";
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Edit"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: m-dup-ta.has-hover ? Theme.bg-hover : transparent;
+                m-dup-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.duplicate-session(root.ctx-open-key); root.ctx-open-key = ""; }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E14D}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Duplicate"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: m-del-ta.has-hover ? #cc333320 : transparent;
+                m-del-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.remove-session(root.ctx-open-key); root.ctx-open-key = ""; }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Delete"); color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle { height: 1px; background: Theme.border-subtle; }
+            HorizontalLayout {
+                padding-left: 10px;
+                padding-top: 2px;
+                spacing: 6px;
+                Text { text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-muted; font-size: Theme.fs-xs; vertical-alignment: center; }
+                Text { text: @tr("Move to"); color: Theme.text-muted; font-size: Theme.fs-xs; vertical-alignment: center; horizontal-stretch: 1; }
+            }
+            for s in root.sessions : Rectangle {
+                visible: s.group-header != ""
+                    && s.group-header != "system"
+                    && s.group-header != root.ctx-menu-group;
+                height: self.visible ? 28px : 0px;
+                border-radius: Theme.radius-sm;
+                background: m-mv-ta.has-hover ? Theme.bg-hover : transparent;
+                m-mv-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.move-session(root.ctx-open-key, s.group-header); root.ctx-open-key = ""; }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: s.group-header; color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                }
+            }
+        }
+    }
+    // 组头菜单(key = "hdr:"+组名):编辑分组/删除分组(空组)/新建分组。
+    // 同成员菜单:条件带 key 非空,否则关闭后不消失。
+    if root.ctx-open-key != "" && root.ctx-menu-kind == "group" : Rectangle {
+        x: max(8px, min(root.ctx-menu-x, parent.width - self.width - 8px));
+        y: min(
+            self.height > root.ctx-menu-space-below
+                ? max(8px, root.ctx-menu-y - self.height)
+                : root.ctx-menu-y,
+            parent.height - self.height - 8px);
+        width: 140px;
+        height: grp-menu-vl.preferred-height;
+        background: Theme.popup-bg;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 10px;
+        drop-shadow-color: #00000050;
+        grp-menu-vl := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: g-edit-ta.has-hover ? Theme.bg-hover : transparent;
+                g-edit-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.ctx-open-key = "";
+                        root.group-dialog-orig = root.ctx-menu-group;
+                        root.group-dialog-name = root.ctx-menu-group;
+                        root.group-dialog-error = "";
+                        root.group-dialog-open = true;
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Edit group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            if root.ctx-menu-empty : Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: g-del-ta.has-hover ? #cc333320 : transparent;
+                g-del-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ctx-open-key = ""; root.delete-group(root.ctx-menu-group); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Delete group"); color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: g-new-ta.has-hover ? Theme.bg-hover : transparent;
+                g-new-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.ctx-open-key = "";
+                        root.group-dialog-orig = "";
+                        root.group-dialog-name = "";
+                        root.group-dialog-error = "";
+                        root.group-dialog-open = true;
+                    }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E2CC}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("New group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
         }
     }
 
@@ -3083,17 +3337,11 @@ export component AppWindow inherits Window {
     // Always present; toggled via `visible` (avoids destroying interactive
     // elements mid-event, which crashes when created/removed at the Window root).
     Rectangle {
-        // Follow the download button (shifts with the toolbar when the resource
-        // panel docks right/top) (#dock).
-        // (#polish-topbar-r3) 下载菜单与设置菜单共用右锚(set-btn 右缘):
-        // 右对齐后菜单自然覆盖左侧传输按钮下方区域;transfer-btn 的跨条
-        // 件引用被 Slint 拒绝,故不复用。macOS 保持 toolbar 定位。
-        x: root.custom-titlebar
-            ? root.topbar-set-x + root.topbar-set-w - self.width
-            : parent.width - 364px - root.toolbar-x-off;
-        y: root.custom-titlebar
-            ? 42px
-            : (40px + root.titlebar-inset) + root.toolbar-y-off;
+        // (#topbar-click-anchor 2026-09-08) 跟随鼠标点击点右下角展开:
+        // 左上角贴点击点,x 钳制防溢出窗口右缘(按钮靠右时自动贴右),
+        // y 钳制防溢出窗口底。两种标题栏形态统一此规则。
+        x: max(8px, min(root.topbar-click-x, parent.width - self.width - 12px));
+        y: min(root.topbar-click-y, parent.height - self.height - 12px);
         width: root.dl-w;
         height: root.dl-h;
         visible: root.download-open;
@@ -3371,18 +3619,10 @@ export component AppWindow inherits Window {
         clicked => { root.settings-open = false; }
     }
     Rectangle {
-        // Follow the gear button: it shifts by toolbar-x/y-off when the resource
-        // panel docks right/top, so the menu must shift the same amount or it ends
-        // up floating over the resource panel (#dock).
-        // (#polish-topbar-r3) 菜单锚定到标题栏的设置按钮(set-btn)左下角:
-        // 按钮自带文字标签后位置随语言/字体变化,元素引用比公式可靠。
-        // macOS(浮动按钮,无 set-btn)保持 toolbar-x/y-off 跟随定位。
-        x: root.custom-titlebar
-            ? root.topbar-set-x + root.topbar-set-w - self.width
-            : parent.width - 196px - root.toolbar-x-off;
-        y: root.custom-titlebar
-            ? 42px
-            : (40px + root.titlebar-inset) + root.toolbar-y-off;
+        // (#topbar-click-anchor 2026-09-08) 跟随"更多"按钮的点击点右下角
+        // 展开,钳制不出窗口(规则同下载弹层);替代旧 set-btn 右缘锚点。
+        x: max(8px, min(root.topbar-click-x, parent.width - self.width - 12px));
+        y: min(root.topbar-click-y, parent.height - self.height - 12px);
         width: 198px;
         // Size to the menu's content so adding/removing items (or the
         // ~/.ssh/config import hint expanding) never overflows the card (#150-fix).

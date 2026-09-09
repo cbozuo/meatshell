@@ -719,3 +719,12 @@ msgstr "Tunnels"
 # (#empty-group-hint 2026-09-05) Placeholder for an expanded empty group.
 msgid "Empty"
 msgstr "Empty"
+
+msgid "Release to move to end of list"
+msgstr "Release to move to end of list"
+
+msgid "Release to remove from group"
+msgstr "Release to remove from group"
+
+msgid "Local Terminals"
+msgstr "Local Terminals"

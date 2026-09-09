@@ -266,7 +266,11 @@ fn build_session_rows(
         // No alphabetical sort: the stored Vec order is the user's manual
         // order, maintained by drag-to-reorder (same convention as quick
         // commands). New sessions land at the end of their group.
-        if gs.is_empty() && !searching {
+        // (#no-default-header 2026-09-07) default(未分组)组不再生成组头:
+        // 未分组会话不属于任何组,平铺显示、无折叠概念。blank 占位也只对
+        // 具名组有意义(default 组仅在存在未分组会话时进入 display_groups,
+        // 恒有成员,blank 分支天然走不到)。
+        if gs.is_empty() && !searching && group != "default" {
             rows.push(blank(group));
         } else {
             for (i, s) in gs.iter().enumerate() {
@@ -284,12 +288,18 @@ fn build_session_rows(
                         .unwrap_or_else(|| "never".to_string())
                         .into(),
                     group: group.clone().into(),
-                    group_header: if i == 0 {
+                    group_header: if i == 0 && group != "default" {
                         group.clone().into()
                     } else {
                         "".into()
                     },
-                    collapsed: group_is_collapsed(group),
+                    // (#no-default-header) default 组无组头即无法展开折叠,
+                    // 恒 false 防御历史折叠记录把未分组成员永久藏起来。
+                    collapsed: if group == "default" {
+                        false
+                    } else {
+                        group_is_collapsed(group)
+                    },
                     builtin: false,
                     conn_state: 0,
                     group_index: i as i32,

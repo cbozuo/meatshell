@@ -324,7 +324,7 @@ pub(crate) fn named_display_groups(explicit: &[String], sessions: &[Session]) ->
     // (#group-drag-reorder 2026-09-06) 不再按字母排序:explicit groups 的
     // 存储顺序就是用户手动排列的组顺序(组头拖动换位维护它),session-
     // only 组按首次出现顺序附在后面。dedup 保留(explicit 优先)。
-    let mut named: Vec<String> = explicit
+    let named: Vec<String> = explicit
         .iter()
         .filter(|group| !is_reserved_session_group(group.trim()))
         .cloned()
@@ -337,8 +337,18 @@ pub(crate) fn named_display_groups(explicit: &[String], sessions: &[Session]) ->
                 .map(|session| session.group.clone()),
         )
         .collect();
-    named.dedup();
-    named
+    // (#group-dropdown-dedup 2026-09-08) 全局按首次出现去重(explicit 优先),
+    // 不能用 Vec::dedup——它只移除【相邻】重复。#group-drag-reorder 改为
+    // 保持存储顺序后,explicit 与 sessions 组序不再一致,拼接结果如
+    // [1,2,3,2,1,3] 无相邻重复,dedup 原样放行:分组下拉框出现重复项
+    // (用户实测),reorder_session 的跨组相邻组查找同样被污染。
+    let mut unique: Vec<String> = Vec::with_capacity(named.len());
+    for group in named {
+        if !unique.contains(&group) {
+            unique.push(group);
+        }
+    }
+    unique
 }
 
 /// Repair configurations created before #316/#324, when the Move-to menu exposed
@@ -692,6 +702,99 @@ impl ConfigStore {
         // A named source group that just lost its last member would vanish
         // from the list; keep it as an empty explicit folder (mirrors
         // reorder_session).
+        let display_source = if source_group.is_empty()
+            || is_reserved_session_group(source_group.trim())
+        {
+            "default".to_string()
+        } else {
+            source_group.clone()
+        };
+        if display_source != "default"
+            && !self.cache.sessions.iter().any(|s| s.group == source_group)
+            && !self.cache.groups.iter().any(|g| g == &source_group)
+        {
+            self.cache.groups.push(source_group);
+        }
+        true
+    }
+
+    /// (#drag-tail-drop-r2 2026-09-07) 拖到列表最底:移到最后一个【其他】会话
+    /// 之后。旧 UI 方案(head/tail id 由行 changed 钩子广播)依赖 Slint changed
+    /// 触发顺序 = 模型顺序,反序时 tail 落到前面组的行,拖到底松手就跑组。
+    /// 现在哨兵只上报"越界状态",精确目标由这里按存储顺序计算——builtin 会话
+    /// 不在 store(运行时生成、固定在最前),sessions 末尾即最后一个可移动行。
+    pub fn move_session_to_end(&mut self, id: &str) -> bool {
+        let Some(target) = self
+            .cache
+            .sessions
+            .iter()
+            .filter(|s| s.id != id)
+            .last()
+            .map(|s| s.id.clone())
+        else {
+            return false;
+        };
+        self.move_session_relative(id, &target, true)
+    }
+
+    /// 拖到列表最顶:移到第一个【其他】会话之前(对称于 move_session_to_end)。
+    pub fn move_session_to_start(&mut self, id: &str) -> bool {
+        let Some(target) = self
+            .cache
+            .sessions
+            .iter()
+            .filter(|s| s.id != id)
+            .next()
+            .map(|s| s.id.clone())
+        else {
+            return false;
+        };
+        self.move_session_relative(id, &target, false)
+    }
+
+    /// (#group-head-directional 2026-09-08) ghost 与组头行发生接触(上移顶边
+    /// 压住组头 / 下移底边接触组头)或已越过组头行 = 放入该组第一位。
+    /// 组内有成员时委托 move_session_relative(插到首成员之前,组继承目标
+    /// 成员);空组(无成员,仅存在于 groups 列表)直接改组字段——显示按组
+    /// 聚合,存储位置不影响"落入空组"的语义。
+    pub fn move_session_to_group_top(&mut self, id: &str, group: &str) -> bool {
+        if id.is_empty() || group.is_empty() {
+            return false;
+        }
+        // (#system-group-frozen 2026-09-08) 保留组(本地终端/system)不收成员:
+        // builtin 会话运行时生成,保存的会话永远不该进保留组。
+        if is_reserved_session_group(group.trim()) {
+            return false;
+        }
+        let target = self
+            .cache
+            .sessions
+            .iter()
+            .find(|s| s.group == group && s.id != id)
+            .map(|s| s.id.clone());
+        match target {
+            Some(t) => self.move_session_relative(id, &t, false),
+            None => {
+                let Some(s) = self.cache.sessions.iter_mut().find(|s| s.id == id) else {
+                    return false;
+                };
+                s.group = group.to_string();
+                true
+            }
+        }
+    }
+
+    /// (#drag-tail-drop-r3 2026-09-07) 拖出列表底部 = 移出分组:group 清空,
+    /// 挪到存储末尾(未分组会话平铺在列表尾部区域)。源组腾空时同样保留
+    /// 为显式空文件夹(与 move_session_relative 尾部逻辑一致)。
+    pub fn move_session_ungroup(&mut self, id: &str) -> bool {
+        let Some(idx) = self.cache.sessions.iter().position(|s| s.id == id) else {
+            return false;
+        };
+        let source_group = self.cache.sessions[idx].group.clone();
+        let mut moved = self.cache.sessions.remove(idx);
+        moved.group.clear();
+        self.cache.sessions.push(moved);
         let display_source = if source_group.is_empty()
             || is_reserved_session_group(source_group.trim())
         {
@@ -2054,6 +2157,42 @@ mod tests {
         assert!(store.reorder_session(&id_of(&store, "b2"), 1));
         let last = store.sessions().iter().find(|s| s.name == "b2").unwrap();
         assert_eq!(last.group, "gamma");
+    }
+
+    /// (#group-dropdown-dedup 2026-09-08) 拼接结果无相邻重复时 Vec::dedup
+    /// 原样放行:explicit 组序与会话组序不一致时(组头拖动换位后常态),
+    /// 分组下拉框出现 [1,2,3,2,1,3] 式重复。去重必须全局、保首次出现
+    /// (explicit 优先)。
+    #[test]
+    fn named_display_groups_dedups_across_explicit_and_session_order() {
+        fn session(id: &str, group: &str) -> Session {
+            let mut value = Session::new_empty();
+            value.id = id.into();
+            value.group = group.into();
+            value
+        }
+        let explicit = vec!["1".to_string(), "2".to_string(), "3".to_string()];
+        // 会话存储顺序的组首现序列与 explicit 不同:2, 1, 3。
+        let sessions = vec![
+            session("a", "2"),
+            session("b", "2"),
+            session("c", "1"),
+            session("d", "3"),
+        ];
+        assert_eq!(
+            named_display_groups(&explicit, &sessions),
+            ["1", "2", "3"]
+        );
+        // 保留组与未分组不进下拉。
+        let with_reserved = vec![
+            session("a", "system"),
+            session("b", ""),
+            session("c", "2"),
+        ];
+        assert_eq!(
+            named_display_groups(&explicit.clone(), &with_reserved),
+            ["1", "2", "3"]
+        );
     }
 
     /// (#drag-ghost-pointer 2026-09-06) 几何落位:同组前/后插、跨组继承目标
