@@ -541,10 +541,6 @@ export component AppWindow inherits Window {
     // backdrop 右击时按坐标命中(Rust 遍历),一步换菜单。
     callback reg-ctx-row(CtxRowHit);
     callback open-ctx-menu-at(length, length);
-    // (#ctx-menu-autoclose) ctx-out-hover = 指针在安全区(触发行∪菜单)之外:
-    // backdrop 被触发行探测层/菜单垫底层遮挡时为 false(安全),露出时为
-    // true(不安全)——反向判定,不依赖新建探测层的 has-hover 初始化。
-    in-out property <bool> ctx-out-hover: false;
     changed sidebar-collapsed => {
         if (!root.sidebar-collapsed) { root.refresh-sidebar(); }
     }
@@ -2665,16 +2661,13 @@ export component AppWindow inherits Window {
     // 打开瞬间指针尚在触发行上不会误关(ever-safe 门槛:确认进入过
     // 安全区后才开始判不安全,最坏退化为菜单常驻、由点击关闭兜底)。
     // 右击菜单外 = 仅关闭(新菜单需再次右击目标行);Esc 亦可关闭。
-    if root.ctx-open-key != "" : TouchArea {
+    if root.ctx-open-key != "" : bd := TouchArea {
         width: parent.width;
         height: parent.height;
         clicked => {
             root.ctx-open-key = "";
             root.ctx-menu-kind = "";
         }
-        // (#ctx-menu-autoclose) 安全区反向信号:指针露出 backdrop = 已离开
-        // 触发行∪菜单(探测层在其之上,会挡住 backdrop 的 hover)。
-        changed has-hover => { root.ctx-out-hover = self.has-hover; }
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
                 // (#ctx-menu-autoclose) 右击命中行/组头 → 一步换菜单(关闭旧 +
@@ -2683,14 +2676,36 @@ export component AppWindow inherits Window {
                 root.open-ctx-menu-at(self.mouse-x, self.mouse-y);
             }
         }
-    }
-    // (#ctx-menu-autoclose) 触发行探测层:盖在被右击行上(层级高于
-    // backdrop),指针在其上 = 安全区"行"侧。has-hover 上报给关闭判定。
-    if root.ctx-open-key != "" : TouchArea {
-        x: root.ctx-row-x;
-        y: root.ctx-row-y;
-        width: max(1px, root.ctx-row-w);
-        height: max(1px, root.ctx-row-h);
+        // (#ctx-menu-autoclose r3 2026-09-09) 安全区判定改为【几何采样】:
+        // has-hover=false → 指针在菜单上(垫底层/菜单项挡住 backdrop)→ 安全;
+        // has-hover=true 且指针在触发行矩形内 → 安全(右击锚点行);
+        // has-hover=true 且指针在外 → 不安全,150ms 后关闭。
+        // 不再用 has-hover 转发链:新建探测层的 has-hover 初始化不可靠
+        // (指针不动不重算,打开瞬间误记 true 后卡死,菜单自己消失)。
+        // 副产物:鼠标完全不动时坐标不变 → 判定稳定,菜单常驻(符合直觉)。
+        property <bool> ptr-outside-row:
+            !(self.mouse-x >= root.ctx-row-x
+                && self.mouse-x <= root.ctx-row-x + root.ctx-row-w
+                && self.mouse-y >= root.ctx-row-y
+                && self.mouse-y <= root.ctx-row-y + root.ctx-row-h);
+        property <int> unsafe-ticks: 0;
+        Timer {
+            interval: 75ms;
+            running: true;
+            triggered => {
+                if (!bd.has-hover) {
+                    bd.unsafe-ticks = 0;
+                } else if (bd.ptr-outside-row) {
+                    bd.unsafe-ticks = bd.unsafe-ticks + 1;
+                    if (bd.unsafe-ticks >= 2) {
+                        root.ctx-open-key = "";
+                        root.ctx-menu-kind = "";
+                    }
+                } else {
+                    bd.unsafe-ticks = 0;
+                }
+            }
+        }
     }
     // (#ctx-menu-autoclose) Esc 关闭右键菜单(键盘兜底)。
     if root.ctx-open-key != "" : FocusScope {
@@ -2743,29 +2758,9 @@ export component AppWindow inherits Window {
         // (#ctx-menu-autoclose) 垫底探测:指针在菜单内非菜单项区域(空隙/
         // padding/Move to 标签行)时由此层上报安全。菜单项 TouchArea 声明
         // 在其后 = 上层,点击不受影响。
+        // (#ctx-menu-autoclose) 垫底探测:指针在菜单内非菜单项区域时空隙由
+        // 此层挡住 backdrop 的 hover(bd.has-hover=false → 判定"在菜单上"安全)。
         menu-pad := TouchArea { width: 100%; height: 100%; }
-        property <int> unsafe-ticks: 0;
-        property <int> open-ticks: 0;
-        // 连续 2 个采样周期(2×75ms)ctx-out-hover(指针露出 backdrop = 离开
-        // 触发行∪菜单)→ 自动关闭。打开后 450ms 缓冲:探测层新建时 has-hover
-        // 未必立即更新,缓冲期内顺带清 mv-hover 残留,防下次打开误判安全。
-        Timer {
-            interval: 75ms;
-            running: true;
-            triggered => {
-                if (row-menu-rect.open-ticks < 6) {
-                    row-menu-rect.open-ticks += 1;
-                } else if (root.ctx-out-hover) {
-                    row-menu-rect.unsafe-ticks += 1;
-                    if (row-menu-rect.unsafe-ticks >= 2) {
-                        root.ctx-open-key = "";
-                        root.ctx-menu-kind = "";
-                    }
-                } else {
-                    row-menu-rect.unsafe-ticks = 0;
-                }
-            }
-        }
         row-menu-vl := VerticalLayout {
             padding: 4px;
             spacing: 2px;
@@ -2861,26 +2856,8 @@ export component AppWindow inherits Window {
         drop-shadow-color: #00000050;
         // (#ctx-menu-autoclose) 垫底探测 + 安全区聚合 + 自动关闭,
         // 同 row 菜单(组头菜单无动态项,全静态聚合)。
+        // (#ctx-menu-autoclose) 垫底探测:同 row 菜单,挡住 backdrop hover。
         g-pad := TouchArea { width: 100%; height: 100%; }
-        property <int> unsafe-ticks: 0;
-        property <int> open-ticks: 0;
-        Timer {
-            interval: 75ms;
-            running: true;
-            triggered => {
-                if (grp-menu-rect.open-ticks < 6) {
-                    grp-menu-rect.open-ticks += 1;
-                } else if (root.ctx-out-hover) {
-                    grp-menu-rect.unsafe-ticks += 1;
-                    if (grp-menu-rect.unsafe-ticks >= 2) {
-                        root.ctx-open-key = "";
-                        root.ctx-menu-kind = "";
-                    }
-                } else {
-                    grp-menu-rect.unsafe-ticks = 0;
-                }
-            }
-        }
         grp-menu-vl := VerticalLayout {
             padding: 4px;
             spacing: 1px;
