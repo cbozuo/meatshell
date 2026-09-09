@@ -3724,12 +3724,37 @@ export component AppWindow inherits Window {
 
     // --- Settings menu popup (top-right) ----------------------------------
     // Click-outside-to-close backdrop (same pattern as the download popup).
-    if root.settings-open : TouchArea {
+    // (#settings-menu-autoclose 2026-09-09) 指针移出菜单 → 自动关闭;锚点
+    // 豁免:菜单从"更多"按钮弹出,指针初始停在按钮上(菜单外)——距点击点
+    // 40px 内视为"仍在打开锚点"不算离开,防止手停在按钮上读菜单被误关。
+    if root.settings-open : settings-bd := TouchArea {
         width: parent.width;
         height: parent.height;
         clicked => { root.settings-open = false; }
+        // 距点击点的距离平方(>40px 视为远离锚点);has-hover 时 mouse 有效。
+        property <bool> ptr-far-from-anchor:
+            ((self.mouse-x - root.topbar-click-x) / 1px)
+                * ((self.mouse-x - root.topbar-click-x) / 1px)
+            + ((self.mouse-y - root.topbar-click-y) / 1px)
+                * ((self.mouse-y - root.topbar-click-y) / 1px)
+            > 1600;
+        property <int> unsafe-ticks: 0;
+        Timer {
+            interval: 75ms;
+            running: true;
+            triggered => {
+                if (settings-bd.has-hover && settings-bd.ptr-far-from-anchor) {
+                    settings-bd.unsafe-ticks = settings-bd.unsafe-ticks + 1;
+                    if (settings-bd.unsafe-ticks >= 2) {
+                        root.settings-open = false;
+                    }
+                } else {
+                    settings-bd.unsafe-ticks = 0;
+                }
+            }
+        }
     }
-    Rectangle {
+    settings-menu-rect := Rectangle {
         // (#topbar-click-anchor 2026-09-08) 跟随"更多"按钮的点击点右下角
         // 展开,钳制不出窗口(规则同下载弹层);替代旧 set-btn 右缘锚点。
         x: max(8px, min(root.topbar-click-x, parent.width - self.width - 12px));
@@ -3748,6 +3773,14 @@ export component AppWindow inherits Window {
 
         TouchArea {}   // swallow events so they don't reach the terminal
 
+        // (#settings-menu-autoclose) 垫底探测:指针在菜单内非菜单项区域时
+        // 挡住 backdrop 的 hover(settings-bd.has-hover=false → 判定安全)。
+        settings-pad := TouchArea { width: 100%; height: 100%; }
+        // 菜单内任一处 hover(垫底 + 8 个菜单项),与 backdrop 露出互斥。
+        property <bool> menu-any-hover:
+            settings-pad.has-hover || iface-ta.has-hover || export-ta.has-hover
+            || impconn-ta.has-hover || batchimp-ta.has-hover || import-ta.has-hover
+            || lang-ta.has-hover || keys-ta.has-hover || about-ta.has-hover;
         menu-vl := VerticalLayout {
             padding: 4px;
             spacing: 1px;
