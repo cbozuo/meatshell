@@ -1,5 +1,26 @@
 # 本地构建提速(2026-09-09)
 # 用 llvm-mingw 自带的 ld.lld 替换慢速 bfd ld,链接阶段从数分钟降到秒级。
-# ld.lld.exe 已在 C:\llvm-mingw\bin(PATH 已含),gcc 经 -fuse-ld=lld 调用。
+# ld.lld.exe 位于 C:\llvm-mingw\bin(已加入用户 PATH;工具链解压自
+# llvm-mingw-20260908-ucrt-x86_64.zip)。
+#
+# 注意:lld 不继承 gcc 的内建库搜索路径,须显式补 -L:
+# - gcc 版本子目录:libgcc.a / libgcc_eh.a(Rust std 的展开依赖)
+# - mingw64/lib:libgcc_s.a 等运行时支持库
+# 这两个 -L 对路径不存在的机器无害(只是多余的搜索路径)。
+#
+# [target.*] 只作用于目标编译;构建脚本 / proc-macros 按 host 编译,须
+# 另配 [host.*](本机 host == target,两段内容相同)。缺 host 段时
+# build.rs 链接会报 lld: unable to find library -lgcc。
 [target.x86_64-pc-windows-gnu]
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=lld",
+    "-C", "link-arg=-LC:/Users/Administrator/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0",
+    "-C", "link-arg=-LC:/Users/Administrator/msys64/mingw64/lib",
+]
+
+[host.x86_64-pc-windows-gnu]
+rustflags = [
+    "-C", "link-arg=-fuse-ld=lld",
+    "-C", "link-arg=-LC:/Users/Administrator/msys64/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0",
+    "-C", "link-arg=-LC:/Users/Administrator/msys64/mingw64/lib",
+]

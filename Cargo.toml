@@ -153,9 +153,20 @@ windows = { version = "0.58", features = [
 [profile.release]
 opt-level = 3
 lto = "thin"
-codegen-units = 256
+# (#build-speed 2026-09-09) codegen-units=256 撤回默认 16:它对总耗时收益
+# 有限(瓶颈在依赖编译与链接),却让发布二进制变大、运行性能略降。日常
+# 快速验证改用 profile.fast(见下),发布仍走本 profile。
 strip = "symbols"
 panic = "abort"
+
+# (#build-speed 2026-09-09) 日常本地验证专用:低优化 + 增量 + 大并行
+# units,小改动重建约 1~2 分钟;cargo build --profile fast 调用。
+[profile.fast]
+inherits = "release"
+opt-level = 1
+lto = false
+incremental = true
+codegen-units = 256
 
 [profile.dev]
 opt-level = 0
