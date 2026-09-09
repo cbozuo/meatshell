@@ -1,0 +1,5 @@
+# 本地构建提速(2026-09-09)
+# 用 llvm-mingw 自带的 ld.lld 替换慢速 bfd ld,链接阶段从数分钟降到秒级。
+# ld.lld.exe 已在 C:\llvm-mingw\bin(PATH 已含),gcc 经 -fuse-ld=lld 调用。
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
