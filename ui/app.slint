@@ -333,6 +333,13 @@ component TopbarBtn inherits Rectangle {
     // 事件期,读 absolute-position 安全(drag-start 同先例)。
     out property <length> click-x;
     out property <length> click-y;
+    // (#settings-menu-autoclose 2026-09-09) 按钮自身矩形(窗口坐标,同样
+    // 事件期记录):菜单的"锚点豁免区"——指针还在打开它的按钮上不算离开
+    // 菜单,避免手停在按钮上读菜单被误关(替代距点击点 40px 的圆形阈值)。
+    out property <length> btn-x;
+    out property <length> btn-y;
+    out property <length> btn-w;
+    out property <length> btn-h;
     // 全行高在实例化处绑定(height: parent.height)——组件根不可引用
     // parent。hover/激活高亮整行,也规避 HL 固定高子项的顶对齐问题;
     // horizontal-stretch: 0 防止 HL 把按钮拉伸变宽。
@@ -359,6 +366,11 @@ component TopbarBtn inherits Rectangle {
             // (#topbar-click-anchor) 记录点击点(窗口内坐标)供弹层跟随。
             root.click-x = ta.absolute-position.x + self.mouse-x;
             root.click-y = ta.absolute-position.y + self.mouse-y;
+            // (#settings-menu-autoclose) 记录按钮矩形(锚点豁免区)。
+            root.btn-x = root.absolute-position.x;
+            root.btn-y = root.absolute-position.y;
+            root.btn-w = root.width;
+            root.btn-h = root.height;
             root.clicked();
         }
         // (#topbar-ctx) 右键同样唤出菜单,位置跟随右击点。
@@ -366,6 +378,10 @@ component TopbarBtn inherits Rectangle {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
                 root.click-x = ta.absolute-position.x + self.mouse-x;
                 root.click-y = ta.absolute-position.y + self.mouse-y;
+                root.btn-x = root.absolute-position.x;
+                root.btn-y = root.absolute-position.y;
+                root.btn-w = root.width;
+                root.btn-h = root.height;
                 root.ctx-clicked();
             }
         }
@@ -497,6 +513,12 @@ export component AppWindow inherits Window {
     // 整体退役。
     in-out property <length> topbar-click-x: 0px;
     in-out property <length> topbar-click-y: 0px;
+    // (#settings-menu-autoclose) 菜单的锚点豁免区(打开按钮矩形,窗口坐标):
+    // 指针还在该矩形(外扩 4px)内 = 仍在打开菜单的按钮上,不算离开菜单。
+    in-out property <length> topbar-anchor-x: 0px;
+    in-out property <length> topbar-anchor-y: 0px;
+    in-out property <length> topbar-anchor-w: 0px;
+    in-out property <length> topbar-anchor-h: 0px;
     // (#session-hover-card) 成员行悬停信息卡片的集中渲染槽(SessionRow 经
     // Welcome 中转写入,浮层声明在窗口根尾部)。
     in-out property <string> session-card-name;
@@ -1428,12 +1450,20 @@ export component AppWindow inherits Window {
                             // (#topbar-click-anchor) 弹层跟随本次点击点右下角。
                             root.topbar-click-x = self.click-x;
                             root.topbar-click-y = self.click-y;
+                            root.topbar-anchor-x = self.btn-x;
+                            root.topbar-anchor-y = self.btn-y;
+                            root.topbar-anchor-w = self.btn-w;
+                            root.topbar-anchor-h = self.btn-h;
                             root.settings-open = !root.settings-open; root.download-open = false; root.ssh-import-hint = "";
                         }
                         // (#topbar-ctx) 右键同样唤出,位置跟随右击点。
                         ctx-clicked => {
                             root.topbar-click-x = self.click-x;
                             root.topbar-click-y = self.click-y;
+                            root.topbar-anchor-x = self.btn-x;
+                            root.topbar-anchor-y = self.btn-y;
+                            root.topbar-anchor-w = self.btn-w;
+                            root.topbar-anchor-h = self.btn-h;
                             root.settings-open = true; root.download-open = false; root.ssh-import-hint = "";
                         }
                     }
@@ -3731,19 +3761,19 @@ export component AppWindow inherits Window {
         width: parent.width;
         height: parent.height;
         clicked => { root.settings-open = false; }
-        // 距点击点的距离平方(>40px 视为远离锚点);has-hover 时 mouse 有效。
-        property <bool> ptr-far-from-anchor:
-            ((self.mouse-x - root.topbar-click-x) / 1px)
-                * ((self.mouse-x - root.topbar-click-x) / 1px)
-            + ((self.mouse-y - root.topbar-click-y) / 1px)
-                * ((self.mouse-y - root.topbar-click-y) / 1px)
-            > 1600;
+        // 指针是否在锚点(打开菜单的按钮矩形,四边外扩 4px 呼吸空间)内:
+        // 在按钮上/贴近按钮 = 仍在打开它的位置,不算离开菜单。
+        property <bool> ptr-outside-anchor:
+            !(self.mouse-x >= root.topbar-anchor-x - 4px
+                && self.mouse-x <= root.topbar-anchor-x + root.topbar-anchor-w + 4px
+                && self.mouse-y >= root.topbar-anchor-y - 4px
+                && self.mouse-y <= root.topbar-anchor-y + root.topbar-anchor-h + 4px);
         property <int> unsafe-ticks: 0;
         Timer {
             interval: 75ms;
             running: true;
             triggered => {
-                if (settings-bd.has-hover && settings-bd.ptr-far-from-anchor) {
+                if (settings-bd.has-hover && settings-bd.ptr-outside-anchor) {
                     settings-bd.unsafe-ticks = settings-bd.unsafe-ticks + 1;
                     if (settings-bd.unsafe-ticks >= 2) {
                         root.settings-open = false;
