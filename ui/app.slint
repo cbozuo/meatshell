@@ -532,6 +532,15 @@ export component AppWindow inherits Window {
     in-out property <length> ctx-menu-x;
     in-out property <length> ctx-menu-y;
     in-out property <length> ctx-menu-space-below;
+    in-out property <length> ctx-row-x;
+    in-out property <length> ctx-row-y;
+    in-out property <length> ctx-row-w;
+    in-out property <length> ctx-row-h;
+    // (#ctx-menu-autoclose) 安全区探测信号:ctx-in-row = 指针在触发行探测
+    // 层上;ctx-mv-hover = 指针在成员菜单"移动到"动态项上(项多无法静态
+    // 聚合,由各实例 changed has-hover 上报)。
+    in-out property <bool> ctx-in-row: false;
+    in-out property <bool> ctx-mv-hover: false;
     changed sidebar-collapsed => {
         if (!root.sidebar-collapsed) { root.refresh-sidebar(); }
     }
@@ -1617,6 +1626,10 @@ export component AppWindow inherits Window {
                     ctx-menu-x <=> root.ctx-menu-x;
                     ctx-menu-y <=> root.ctx-menu-y;
                     ctx-menu-space-below <=> root.ctx-menu-space-below;
+                    ctx-row-x <=> root.ctx-row-x;
+                    ctx-row-y <=> root.ctx-row-y;
+                    ctx-row-w <=> root.ctx-row-w;
+                    ctx-row-h <=> root.ctx-row-h;
                     cancel-drag() => { root.cancel-session-drag(); }
                     move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     move-session-to-start(id) => { root.move-session-to-start(id); }
@@ -2112,6 +2125,10 @@ export component AppWindow inherits Window {
                         ctx-menu-x <=> root.ctx-menu-x;
                         ctx-menu-y <=> root.ctx-menu-y;
                         ctx-menu-space-below <=> root.ctx-menu-space-below;
+                        ctx-row-x <=> root.ctx-row-x;
+                        ctx-row-y <=> root.ctx-row-y;
+                        ctx-row-w <=> root.ctx-row-w;
+                        ctx-row-h <=> root.ctx-row-h;
                         cancel-drag() => { root.cancel-session-drag(); }
                         move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     move-session-to-start(id) => { root.move-session-to-start(id); }
@@ -2632,6 +2649,14 @@ export component AppWindow inherits Window {
     // 组头内嵌 PopupWindow):全窗口透明 backdrop 打底,点击即关+清 key——
     // 关闭事件 100% 确定感知,Slint 1.8 popup 无 closed 回调的残留问题根治。
     // 弹层在 backdrop 之后声明 = 上层,菜单项点击不会漏到 backdrop。
+    // (#ctx-menu-autoclose 2026-09-09) 安全区自动关闭(用户定稿交互):
+    // 安全区 = 被右击的触发行 ∪ 菜单本体。指针在安全区内菜单稳定显示,
+    // 离开安全区(含"进入过菜单后又划出")持续 ~150ms → 自动关闭。
+    // 实现:backdrop(全窗口) → row-probe(触发行,盖在 backdrop 上) →
+    // 菜单本体(内含垫底 menu-pad) 三层 hover 探测,任一为真即安全。
+    // 打开瞬间指针尚在触发行上不会误关(ever-safe 门槛:确认进入过
+    // 安全区后才开始判不安全,最坏退化为菜单常驻、由点击关闭兜底)。
+    // 右击菜单外 = 仅关闭(新菜单需再次右击目标行);Esc 亦可关闭。
     if root.ctx-open-key != "" : TouchArea {
         width: parent.width;
         height: parent.height;
@@ -2639,11 +2664,52 @@ export component AppWindow inherits Window {
             root.ctx-open-key = "";
             root.ctx-menu-kind = "";
         }
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                root.ctx-open-key = "";
+                root.ctx-menu-kind = "";
+            }
+        }
+    }
+    // (#ctx-menu-autoclose) 触发行探测层:盖在被右击行上(层级高于
+    // backdrop),指针在其上 = 安全区"行"侧。has-hover 上报给关闭判定。
+    if root.ctx-open-key != "" : TouchArea {
+        x: root.ctx-row-x;
+        y: root.ctx-row-y;
+        width: max(1px, root.ctx-row-w);
+        height: max(1px, root.ctx-row-h);
+        changed has-hover => { root.ctx-in-row = self.has-hover; }
+    }
+    // (#ctx-menu-autoclose) Esc 关闭右键菜单(键盘兜底)。
+    if root.ctx-open-key != "" : FocusScope {
+        x: 0;
+        y: 0;
+        width: 1px;
+        height: 1px;
+        property <bool> fs-focus-pending: false;
+        init => { self.fs-focus-pending = true; }
+        Timer {
+            interval: 0ms;
+            running: parent.fs-focus-pending;
+            triggered => {
+                parent.fs-focus-pending = false;
+                parent.focus();
+            }
+        }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.ctx-open-key = "";
+                root.ctx-menu-kind = "";
+                accept
+            } else {
+                reject
+            }
+        }
     }
     // 成员行菜单(key = session.id):编辑/复制/删除 + 移动到组列表。
     // (#ctx-menu-backdrop) 显示条件必须同时带 key 非空:关闭只清 key(kind
     // 不变),只判 kind 会让菜单在关闭后永久驻留(用户实测关不掉)。
-    if root.ctx-open-key != "" && root.ctx-menu-kind == "row" : Rectangle {
+    if root.ctx-open-key != "" && root.ctx-menu-kind == "row" : row-menu-rect := Rectangle {
         // (#topbar-click-anchor 同式钳制) 点击点右下角展开;按钮/行靠右时
         // 贴窗口右缘,y 不超窗口底。
         x: max(8px, min(root.ctx-menu-x, parent.width - self.width - 8px));
@@ -2662,6 +2728,35 @@ export component AppWindow inherits Window {
         border-color: Theme.border-strong;
         drop-shadow-blur: 10px;
         drop-shadow-color: #00000050;
+        // (#ctx-menu-autoclose) 垫底探测:指针在菜单内非菜单项区域(空隙/
+        // padding/Move to 标签行)时由此层上报安全。菜单项 TouchArea 声明
+        // 在其后 = 上层,点击不受影响。
+        menu-pad := TouchArea { width: 100%; height: 100%; }
+        // 安全区聚合:菜单内任一处 hover(垫底/固定项/动态移动到项)。
+        property <bool> menu-any-hover:
+            menu-pad.has-hover || m-edit-ta.has-hover || m-dup-ta.has-hover
+            || m-del-ta.has-hover || root.ctx-mv-hover;
+        property <int> unsafe-ticks: 0;
+        // 连续 2 个采样周期(2×75ms)指针不在安全区 → 自动关闭。
+        // ever-safe 门槛防"开即关":菜单刚弹出时指针还在触发行上,首次
+        // 确认进入过安全区之前不做不安全判定(最坏退化为常驻+点击关闭)。
+        Timer {
+            interval: 75ms;
+            running: true;
+            triggered => {
+                if (row-menu-rect.menu-any-hover || root.ctx-in-row) {
+                    row-menu-rect.ever-safe = true;
+                    row-menu-rect.unsafe-ticks = 0;
+                } else if (row-menu-rect.ever-safe) {
+                    row-menu-rect.unsafe-ticks += 1;
+                    if (row-menu-rect.unsafe-ticks >= 2) {
+                        root.ctx-open-key = "";
+                        root.ctx-menu-kind = "";
+                    }
+                }
+            }
+        }
+        property <bool> ever-safe: false;
         row-menu-vl := VerticalLayout {
             padding: 4px;
             spacing: 2px;
@@ -2729,6 +2824,8 @@ export component AppWindow inherits Window {
                 m-mv-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.move-session(root.ctx-open-key, s.group-header); root.ctx-open-key = ""; }
+                    // (#ctx-menu-autoclose) 动态项无法静态聚合,逐实例上报。
+                    changed has-hover => { root.ctx-mv-hover = self.has-hover; }
                 }
                 HorizontalLayout {
                     padding-left: 10px; spacing: 8px;
@@ -2740,7 +2837,7 @@ export component AppWindow inherits Window {
     }
     // 组头菜单(key = "hdr:"+组名):编辑分组/删除分组(空组)/新建分组。
     // 同成员菜单:条件带 key 非空,否则关闭后不消失。
-    if root.ctx-open-key != "" && root.ctx-menu-kind == "group" : Rectangle {
+    if root.ctx-open-key != "" && root.ctx-menu-kind == "group" : grp-menu-rect := Rectangle {
         x: max(8px, min(root.ctx-menu-x, parent.width - self.width - 8px));
         y: min(
             self.height > root.ctx-menu-space-below
@@ -2755,6 +2852,30 @@ export component AppWindow inherits Window {
         border-color: Theme.border-strong;
         drop-shadow-blur: 10px;
         drop-shadow-color: #00000050;
+        // (#ctx-menu-autoclose) 垫底探测 + 安全区聚合 + 自动关闭,
+        // 同 row 菜单(组头菜单无动态项,全静态聚合)。
+        g-pad := TouchArea { width: 100%; height: 100%; }
+        property <bool> menu-any-hover:
+            g-pad.has-hover || g-edit-ta.has-hover || g-new-ta.has-hover
+            || root.ctx-mv-hover;
+        property <int> unsafe-ticks: 0;
+        property <bool> ever-safe: false;
+        Timer {
+            interval: 75ms;
+            running: true;
+            triggered => {
+                if (grp-menu-rect.menu-any-hover || root.ctx-in-row) {
+                    grp-menu-rect.ever-safe = true;
+                    grp-menu-rect.unsafe-ticks = 0;
+                } else if (grp-menu-rect.ever-safe) {
+                    grp-menu-rect.unsafe-ticks += 1;
+                    if (grp-menu-rect.unsafe-ticks >= 2) {
+                        root.ctx-open-key = "";
+                        root.ctx-menu-kind = "";
+                    }
+                }
+            }
+        }
         grp-menu-vl := VerticalLayout {
             padding: 4px;
             spacing: 1px;
@@ -2785,6 +2906,9 @@ export component AppWindow inherits Window {
                 g-del-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.ctx-open-key = ""; root.delete-group(root.ctx-menu-group); }
+                    // (#ctx-menu-autoclose) 条件元素 id 外层不可见,hover 经
+                    // ctx-mv-hover 通道上报(与动态移动到项共用)。
+                    changed has-hover => { root.ctx-mv-hover = self.has-hover; }
                 }
                 HorizontalLayout {
                     padding-left: 10px; spacing: 8px;

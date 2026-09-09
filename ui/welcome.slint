@@ -700,6 +700,14 @@ export component Welcome inherits Rectangle {
     in-out property <length> ctx-menu-x: 0px;
     in-out property <length> ctx-menu-y: 0px;
     in-out property <length> ctx-menu-space-below: 0px;
+    // (#ctx-menu-autoclose 2026-09-09) 被右击的触发行矩形(窗口坐标):菜单
+    // 打开期间,该行 ∪ 菜单本体构成"安全区"——指针在安全区内菜单稳定,
+    // 离开安全区(app.slint 探测层判定,150ms 防抖)自动关闭。右击时随
+    // ctx-opening 链/组头分支写入。
+    in-out property <length> ctx-row-x: 0px;
+    in-out property <length> ctx-row-y: 0px;
+    in-out property <length> ctx-row-w: 0px;
+    in-out property <length> ctx-row-h: 0px;
     // (#drag-stale-click 2026-09-07) 拖拽中切窗口(截图/看消息)再切回,
     // 系统不会补发 pointer cancel,list-dragging 残留、ghost 钉在原地。
     // 用户下一次按下被 down 分支的 stale-drag 清理逻辑吃掉(drag-end),
@@ -1422,6 +1430,11 @@ export component Welcome inherits Rectangle {
                                         root.ctx-menu-space-below =
                                             flick.absolute-position.y + flick.height
                                             - (self.absolute-position.y + self.mouse-y);
+                                        // (#ctx-menu-autoclose) 触发行(组头壳)矩形。
+                                        root.ctx-row-x = self.absolute-position.x;
+                                        root.ctx-row-y = self.absolute-position.y;
+                                        root.ctx-row-w = self.width;
+                                        root.ctx-row-h = self.height;
                                     }
                                 }
                                 moved => {
@@ -1685,6 +1698,12 @@ export component Welcome inherits Rectangle {
                                     flick.absolute-position.y + flick.height
                                     - (srow.absolute-position.y + py);
                                 root.ctx-menu-y = srow.absolute-position.y + py;
+                                // (#ctx-menu-autoclose) 触发行矩形(窗口坐标),
+                                // 安全区探测层据此定位。
+                                root.ctx-row-x = srow.absolute-position.x;
+                                root.ctx-row-y = srow.absolute-position.y;
+                                root.ctx-row-w = srow.width;
+                                root.ctx-row-h = srow.height;
                             }
                             connect => { root.connect-session(session.id); }
                             edit => { root.edit-session(session.id); }
