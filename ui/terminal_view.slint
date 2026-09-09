@@ -1367,30 +1367,15 @@ export component TerminalView inherits Rectangle {
                             accept
                         }
                     }
+                    // (#cmd-prompt) 输入区右移 22px,给 "$" 提示符让位。
                     command-scroll := ScrollView {
                         x: 22px;
                         width: parent.width - 22px;
                         viewport-width: self.visible-width;
                         viewport-height: max(self.visible-height, cmd-input.preferred-height);
                         cmd-input := TextInput {
-                            x: 0px;
-                            width: max(1px, command-scroll.visible-width - 2px);
-                            y: 0px;
-                            height: max(command-scroll.visible-height, self.preferred-height);
-                            color: Theme.text-primary;
-                            font-family: Theme.ui-font-family;
-                            font-size: Theme.fs-md;
-                            vertical-alignment: top;
-                            wrap: char-wrap;
-                            page-height: command-scroll.visible-height;
-                        }
-                    }
-                    command-scroll := ScrollView {
-                        viewport-width: self.visible-width;
-                        viewport-height: max(self.visible-height, cmd-input.preferred-height);
-                        cmd-input := TextInput {
-                            x: 8px;
-                            width: max(1px, command-scroll.visible-width - 16px);
+                            x: 2px;
+                            width: max(1px, command-scroll.visible-width - 4px);
                             y: 0px;
                             height: max(command-scroll.visible-height, self.preferred-height);
                             color: Theme.text-primary;

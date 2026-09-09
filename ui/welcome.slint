@@ -5,6 +5,7 @@ export struct SessionInfo {
     id: string,
     name: string,
     host: string,
+    serial-detail: string, // device, baud rate and framing; empty for non-serial sessions (#422)
     port: int,
     user: string,
     auth: string,      // "password" | "key"

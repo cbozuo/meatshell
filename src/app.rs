@@ -4221,14 +4221,9 @@ fn wire_session_callbacks(
                     .upgrade()
                     .map(|w| w.get_host_search_query().to_string())
                     .unwrap_or_default();
-<<<<<<< HEAD
                 let in_place = refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query);
                 // (#session-status-dot) in_place 重建同样会重置 connected。
                 refresh_session_markers(&weak);
-=======
-                let in_place =
-                    refresh_session_rows_in_place(&store.borrow(), &sessions_model, &query);
->>>>>>> pr-430
                 if !in_place {
                     // The hop changed the row count (e.g. a cross-group hop
                     // emptied the ungrouped section): the set_vec rebuild

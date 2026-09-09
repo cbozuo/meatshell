@@ -517,17 +517,7 @@ pub(super) fn wire_sftp_callbacks(
             if !always_ask && !preset.is_empty() {
                 if let Ok(handles) = sftp_handles.lock() {
                     if let Some(h) = handles.get(tab_id.as_str()) {
-<<<<<<< HEAD
                         h.download_archive(remote_dir.clone(), names.clone(), preset.clone());
-=======
-                        if single {
-                            if let Some(conflict) = choose_download_conflict(&paths[0], &preset) {
-                                h.download(paths[0].clone(), preset.clone(), conflict);
-                            }
-                        } else {
-                            h.download_archive(remote_dir.clone(), names.clone(), preset.clone());
-                        }
->>>>>>> pr-430
                     }
                 }
                 w.set_download_open(true);

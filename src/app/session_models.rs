@@ -673,6 +673,8 @@ mod drag_order_tests {
             .nth(1)
             .unwrap();
         assert_eq!(second_test.group_index, 1);
+    }
+}
 
 mod serial_display_tests {
     use super::*;
@@ -714,3 +716,4 @@ mod serial_display_tests {
 
     }
 
+}
