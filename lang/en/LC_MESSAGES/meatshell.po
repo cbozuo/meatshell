@@ -737,3 +737,9 @@ msgstr "Release to remove from group"
 
 msgid "Local Terminals"
 msgstr "Local Terminals"
+
+msgid "Default group"
+msgstr "Default group"
+
+msgid "→ {} · #{}"
+msgstr "→ {} · #{}"

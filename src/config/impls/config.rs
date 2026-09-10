@@ -328,6 +328,19 @@ pub(crate) fn is_reserved_session_group(name: &str) -> bool {
     name.eq_ignore_ascii_case("default") || name.eq_ignore_ascii_case("system")
 }
 
+/// (#default-group-drag 2026-09-10) 会话的【显示组】:未分组(group 为空)与
+/// 保留名一律归于 "default",其余即自身组名。默认组成为正式组(有组头、可
+/// 折叠、可作拖放落点)后,拖拽的每个判定点都必须用同一套显示组语义——
+/// reorder_session 的邻组查找、move_session_to_group_top 的目标成员查找、
+/// build_session_rows 的渲染分组三处同源,否则落点与实际行对不上。
+fn display_group_of(session: &Session) -> String {
+    if session.group.is_empty() || is_reserved_session_group(session.group.trim()) {
+        "default".to_string()
+    } else {
+        session.group.clone()
+    }
+}
+
 /// Named display groups: explicit folders ∪ the groups sessions are filed
 /// under, with reserved names and ungrouped excluded, de-duplicated and
 /// sorted case-insensitively. The single source of truth for group display
@@ -578,21 +591,12 @@ impl ConfigStore {
     /// boundary (first member moving down, last moving up). Returns whether
     /// anything changed.
     pub fn reorder_session(&mut self, id: &str, dir: isize) -> bool {
-        // Display group of a session: ungrouped (and reserved names) render
-        // under "default"; everything else under its own group. Mirrors
-        // build_session_rows in src/app/session_models.rs.
-        fn display_group(session: &Session) -> String {
-            if session.group.is_empty() || is_reserved_session_group(session.group.trim()) {
-                "default".to_string()
-            } else {
-                session.group.clone()
-            }
-        }
-
+        // Display group via display_group_of (single source of truth, mirrors
+        // build_session_rows in src/app/session_models.rs).
         let Some(idx) = self.cache.sessions.iter().position(|s| s.id == id) else {
             return false;
         };
-        let group = display_group(&self.cache.sessions[idx]);
+        let group = display_group_of(&self.cache.sessions[idx]);
 
         // Same-group neighbour in stored (= display) order → plain swap.
         let same_group_target = {
@@ -600,9 +604,9 @@ impl ConfigStore {
             if dir < 0 {
                 (0..idx)
                     .rev()
-                    .find(|&i| display_group(&sessions[i]) == group)
+                    .find(|&i| display_group_of(&sessions[i]) == group)
             } else {
-                (idx + 1..sessions.len()).find(|&i| display_group(&sessions[i]) == group)
+                (idx + 1..sessions.len()).find(|&i| display_group_of(&sessions[i]) == group)
             }
         };
         if let Some(target) = same_group_target {
@@ -626,7 +630,7 @@ impl ConfigStore {
             .cache
             .sessions
             .iter()
-            .any(|s| display_group(s) == "default")
+            .any(|s| display_group_of(s) == "default")
         {
             display.push("default".to_string());
         }
@@ -661,7 +665,7 @@ impl ConfigStore {
                 .sessions
                 .iter()
                 .enumerate()
-                .filter(|(_, s)| display_group(s) == target_group)
+                .filter(|(_, s)| display_group_of(s) == target_group)
                 .map(|(i, _)| i)
                 .collect();
             if members.is_empty() {
@@ -771,20 +775,34 @@ impl ConfigStore {
     /// 组内有成员时委托 move_session_relative(插到首成员之前,组继承目标
     /// 成员);空组(无成员,仅存在于 groups 列表)直接改组字段——显示按组
     /// 聚合,存储位置不影响"落入空组"的语义。
+    /// (#default-group-drop 2026-09-10) `group` 允许传 "default" / 空串,
+    /// 二者都表示未分组会话的归属组(默认组),落点合法。
     pub fn move_session_to_group_top(&mut self, id: &str, group: &str) -> bool {
-        if id.is_empty() || group.is_empty() {
+        if id.is_empty() {
             return false;
         }
-        // (#system-group-frozen 2026-09-08) 保留组(本地终端/system)不收成员:
-        // builtin 会话运行时生成,保存的会话永远不该进保留组。
-        if is_reserved_session_group(group.trim()) {
+        // (#default-group-drop 2026-09-10) "default" 是未分组会话的显示组名,
+        // 存储层以空字符串表示。默认组有组头后它是用户可命中的正常落点:
+        // 若不映射,is_reserved_session_group("default") 为 true 会把这个
+        // 落点静默拒绝(拖到"默认组"组头松手 = 什么也没发生)。
+        let group = if group.is_empty() {
+            "default"
+        } else {
+            group
+        };
+        // (#system-group-frozen 2026-09-08) 具名保留组(本地终端/system)不收
+        // 成员:builtin 会话运行时生成,保存的会话永远不该进保留组。
+        // default 例外——它正是未分组会话的归属组。
+        if group != "default" && is_reserved_session_group(group.trim()) {
             return false;
         }
+        // 目标组首个其他成员:按【显示组】匹配。默认组因此同时兼容空串与
+        // 历史遗留的 reserved 存储值;具名组按其组名。
         let target = self
             .cache
             .sessions
             .iter()
-            .find(|s| s.group == group && s.id != id)
+            .find(|s| display_group_of(s) == group && s.id != id)
             .map(|s| s.id.clone());
         match target {
             Some(t) => self.move_session_relative(id, &t, false),
@@ -792,7 +810,12 @@ impl ConfigStore {
                 let Some(s) = self.cache.sessions.iter_mut().find(|s| s.id == id) else {
                     return false;
                 };
-                s.group = group.to_string();
+                // 存储层:默认组写空串,与 upsert / move_session_ungroup 同约定。
+                s.group = if group == "default" {
+                    String::new()
+                } else {
+                    group.to_string()
+                };
                 true
             }
         }
@@ -1674,18 +1697,25 @@ impl ConfigStore {
     }
 
     /// (#group-drag-reorder 2026-09-06) 组头拖动换位:在 explicit groups
-    /// 的存储顺序中相邻移动一位(该顺序即列表显示顺序)。越界/不存在返
-    /// 回 false(default/system 不在此 vec,天然不参与)。
+    /// 的存储顺序中移动 |dir| 个位置(该顺序即列表显示顺序)。越界时
+    /// clamp 到端头(拖拽多位换位传大步长,落边界即止)。不存在/dir=0
+    /// 返回 false(default/system 不在此 vec,天然不参与)。
+    /// (#group-drag-collapse 2026-09-08) |dir|>1 支持:配合拖起自动折叠
+    /// 的行级换位(一次拖过数行 = 移动数位)。
     pub fn reorder_group(&mut self, name: &str, dir: isize) -> bool {
         let gs = &mut self.cache.groups;
         let Some(pos) = gs.iter().position(|g| g == name) else {
             return false;
         };
-        let target = pos as isize + dir;
-        if dir == 0 || target < 0 || target as usize >= gs.len() {
+        if dir == 0 {
             return false;
         }
-        gs.swap(pos, target as usize);
+        let target = (pos as isize + dir).clamp(0, gs.len() as isize - 1) as usize;
+        if target == pos {
+            return false;
+        }
+        let g = gs.remove(pos);
+        gs.insert(target, g);
         true
     }
 

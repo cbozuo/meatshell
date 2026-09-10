@@ -3238,17 +3238,30 @@ fn open_window(
 
     // (#drag-stale-cancel 2026-09-07) 拖拽按键兜底:截图等全局工具会吃掉
     // 鼠标 up 事件,UI 侧拖拽态残留、成员卡跟着鼠标漂。150ms 轮询
-    // GetAsyncKeyState(左键):拖拽活跃而左键实际已松开 → invoke 取消
-    // (清全部拖拽态、不提交任何移动)。轻开销:未拖拽时 tick 直接返回。
+    // GetAsyncKeyState:拖拽活跃时的取消条件(任一命中即取消,不提交移动)。
+    // (#drag-fly-home 2026-09-10) 取消条件扩为四路:左键已松(原有兜底)、
+    // 按下右键、按下 Esc、本窗口失去【前台】(切窗口/被全局工具抢焦点,
+    // r3 起用 GetForegroundWindow 与本窗口 HWND 比较)。UI 侧收到取消后
+    // 让 ghost 180ms 飞回原位再清态。轻开销:未拖拽时 tick 直接返回。
     #[cfg(windows)]
     {
         #[link(name = "user32")]
         extern "system" {
             fn GetAsyncKeyState(vkey: i32) -> i16;
+            fn GetForegroundWindow() -> isize;
         }
         const VK_LBUTTON: i32 = 0x01;
+        const VK_RBUTTON: i32 = 0x02;
+        const VK_ESCAPE: i32 = 0x1B;
         const KEY_PRESSED: i16 = -0x8000i16;
         let weak = window.as_weak();
+        // (#drag-fly-home-r2 2026-09-10) 取消节流:一次拖拽只上报一次取消,
+        // 直到拖拽态真正结束(drag-active 变 false)才复位。取消后 UI 侧会
+        // 刻意保留 list-dragging 200ms 让 ghost 飞回,该窗口内 drag-active
+        // 仍为 true;若取消条件(如本窗口处于后台)持续成立,不节流就会每
+        // 150ms 重复上报、反复扰动 UI 的归位过程。UI 侧另有幂等兜底,
+        // 此处双保险。
+        let cancel_sent = std::cell::Cell::new(false);
         let key_watch = slint::Timer::default();
         key_watch.start(
             slint::TimerMode::Repeated,
@@ -3256,11 +3269,46 @@ fn open_window(
             move || {
                 let Some(w) = weak.upgrade() else { return };
                 if !w.get_session_drag_active() {
+                    // 拖拽已结束:复位节流,供下一次拖拽使用。
+                    cancel_sent.set(false);
                     return;
                 }
-                let pressed = unsafe { GetAsyncKeyState(VK_LBUTTON) } & KEY_PRESSED != 0;
-                if !pressed {
-                    w.invoke_cancel_session_drag();
+                if cancel_sent.get() {
+                    return;
+                }
+                // (#drag-fly-home-r3 2026-09-10) "切窗口"判定改用
+                // 【前台窗口 != 本窗口】。原 GetActiveWindow()==0 不可靠:
+                // 它返回「调用线程消息队列关联的激活窗口」,在 Timer 回调
+                // 这类非窗口消息线程上往往恒为 0 → 每次拖拽 150ms 后必被
+                // 取消("拖不动/取消不归位"的另一半根因)。GetForegroundWindow
+                // 返回全系统前台窗口,跨线程稳定;再取本窗口 HWND 与它比较,
+                // 只有本窗口确实失去前台才取消。窗口尚未就绪时
+                // with_winit_window 返回 None → 该路不触发,不影响左键/右键/
+                // Esc 三路判定。
+                let down = |vk: i32| unsafe { GetAsyncKeyState(vk) & KEY_PRESSED != 0 };
+                let cancelled = !down(VK_LBUTTON)
+                    || down(VK_RBUTTON)
+                    || down(VK_ESCAPE)
+                    || w.window()
+                        .with_winit_window(|ww| unsafe {
+                            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                            let Ok(handle) = ww.window_handle() else { return false };
+                            let RawWindowHandle::Win32(h) = handle.as_raw() else { return false };
+                            let hwnd = h.hwnd.get();
+                            hwnd != 0 && GetForegroundWindow() != hwnd
+                        })
+                        .unwrap_or(false);
+                if cancelled {
+                    // (#drag-fly-home-r3 2026-09-10) 用计数器属性请求取消。
+                    // 原 invoke_cancel_session_drag() 触发的 AppWindow.
+                    // cancel-session-drag 回调没有任何处理者(那是 welcome→
+                    // AppWindow 方向的转发),取消请求从未抵达欢迎页 —— 改为
+                    // 递增 session-drag-cancel-seq,经实例绑定传到
+                    // Welcome.drag-cancel-seq,由其 changed 内部触发取消。
+                    cancel_sent.set(true);
+                    w.set_session_drag_cancel_seq(
+                        w.get_session_drag_cancel_seq().wrapping_add(1),
+                    );
                 }
             },
         );

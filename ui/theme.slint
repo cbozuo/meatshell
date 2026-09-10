@@ -84,7 +84,11 @@ export global Theme {
     out property <brush> text-secondary: dark ? #b4b9c4 : #45454a;
     out property <brush> text-muted:     dark ? #9196a3 : #606066;
 
-    out property <brush> accent:         root.wallpaper-active ? root.wp-accent          : (dark ? #4a90e2 : #0071e3);
+    // (#default-group-accent 2026-09-10) 强调色的 color 单一来源:brush 不能
+    // 当 color 用(组色函数返回 color、且调用处要 .with-alpha()),故先定义
+    // color 版,accent(brush)再基于它——避免两处各写一份取值。
+    out property <color> accent-solid:   root.wallpaper-active ? root.wp-accent          : (dark ? #4a90e2 : #0071e3);
+    out property <brush> accent:         root.accent-solid;
     out property <brush> accent-hover:   root.wallpaper-active ? root.wp-accent.brighter(0.12) : (dark ? #5aa0f2 : #0077ed);
     out property <brush> accent-pressed: root.wallpaper-active ? root.wp-accent.darker(0.12)   : (dark ? #3a80d2 : #006adb);
 
@@ -137,6 +141,43 @@ export global Theme {
     in-out property <string> term-font-family: "Meatshell Mono";
     in-out property <length> term-font-size: 13px;
     in-out property <bool> term-font-bold: false;
+
+    // --- Group hue palette (#group-hue 2026-09-10) -------------------------
+    // 组色由【组名 hash】映射而来(Rust 侧算索引,见 session_models::group_hue),
+    // 同一组恒同色、与排序位置无关。色值在主题层定义,明暗主题各自一套,
+    // 切换主题自动跟着换。8 档色相,相邻档在色环上拉开距离,保证常用组
+    // 不易撞色;饱和度压低一档,避免 1px 竖线过于跳眼。
+    out property <[color]> group-hue-dark: [
+        #9ece6a,  // 0 绿   本地终端常用
+        #7aa2f7,  // 1 蓝
+        #bb9af7,  // 2 紫
+        #e0af68,  // 3 黄
+        #2ac3de,  // 4 青
+        #f7768e,  // 5 粉
+        #ff9e64,  // 6 橙
+        #7dcfff,  // 7 天蓝
+    ];
+    out property <[color]> group-hue-light: [
+        #3b6d11,  // 0 绿
+        #185fa5,  // 1 蓝
+        #534ab7,  // 2 紫
+        #854f0b,  // 3 黄
+        #0f6e56,  // 4 青
+        #993556,  // 5 粉
+        #993c1d,  // 6 橙
+        #0c447c,  // 7 天蓝
+    ];
+    // (#default-group-accent 2026-09-10) hue < 0 = 默认组(「默认组」),改用
+    // 主题强调色(用户定稿)。它是"未填写分组"的收容处:跟随主题色既能一眼
+    // 认出"这是系统给的组",也避免与具名组的身份色(调色板)混淆。越界同样
+    // 回落强调色。
+    // (#group-hue-align-html 2026-09-10) 必须显式 `public`:函数被 welcome.slint
+    // 调用,Slint 1.8 起跨组件调用私有函数会报 warning(下一版直接升为 error),
+    // 提前标注豁免。
+    public pure function group-hue-color(hue: int) -> color {
+        if (hue < 0 || hue >= root.group-hue-dark.length) { return root.accent-solid; }
+        return root.dark ? root.group-hue-dark[hue] : root.group-hue-light[hue];
+    }
 
     // --- Geometry ----------------------------------------------------------
     out property <length> radius-sm: 4px * root.ui-scale;

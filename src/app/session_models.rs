@@ -213,6 +213,53 @@ fn build_session_rows(
     }
     display_groups.extend(named);
 
+    // (#first-group-no-pending 2026-09-10) 列表最顶的【可进入组】:其上方没有
+    // 任何可进入的组,拖拽上移时应跳过"待出组(pending)"直接进"出组"态。
+    //
+    // (#default-group-drop 2026-09-10) 判定基准由"第一个具名组"改为
+    // display_groups.first()。默认组成为正式组后(有组头、可折叠、可作落点),
+    // 当它存在时它就是最顶可进入组——其上方只有不可进入的 builtin(本地终端)。
+    // 旧实现 find(|g| g != "default") 跳过 default 取第一个具名组,在两个场景
+    // 同时错位:① default 组上移仍走 pending(上方无组可进却提示"松手回原位");
+    // ② 具名组上移被误判为最顶组而跳过 pending,但它上方明明有 default 可进入
+    // ——组名不亮蓝框、也拿不到"回原位"提示,落点反馈缺失。
+    let first_group: Option<String> = display_groups.first().cloned();
+
+    // (#group-hue 2026-09-10) 组色相索引:按【组名】做 FNV-1a 32 位 hash 取模。
+    // 为什么放 Rust:Slint 1.8 的字符串 API 只有 length / is-empty,拿不到字符,
+    // 纯 .slint 侧只能按"组名长度"取色,而 "3"/"1"/"2" 这类单字组名会全部
+    // 撞成同一色,不可用。
+    // 为什么按组名而不是序号:hash 与排序位置无关,组被拖动到任何位置都保持
+    // 原色,否则用户一排序颜色就变,颜色失去"身份标识"的意义。
+    // 返回值即 Theme.group-hue-* 调色板下标;-1 = 无组(group == ""),Slint 侧
+    // 回落中性描边色。调色板长度变更时只需同步此处的 HUE_COUNT。
+    const HUE_COUNT: u32 = 8;
+    let group_hue = |group: &str| -> i32 {
+        // 无组 / 默认组(「默认组」)一律回落中性描边色(Slint 侧 -1 →
+        // #3a3d46)。(#default-group-hue 2026-09-10) 默认组不是"身份分组",
+        // 而是未填写分组会话的收容处:给它 hash 随机色会让它看起来像一个
+        // 具名组,用户会误以为它跟 3/1/2 那些组是同一类东西(用户定稿:
+        // 默认组头保持中性色)。
+        if group.is_empty() || group.eq_ignore_ascii_case("default") {
+            return -1;
+        }
+        let mut h: u32 = 0x811c9dc5; // FNV-1a offset basis
+        for b in group.as_bytes() {
+            h ^= *b as u32;
+            h = h.wrapping_mul(0x01000193); // FNV prime
+        }
+        // 雪崩混合(murmur3 finalizer)。必须做:FNV 的**低位**分布很差,
+        // 直接 `% 8` 只取低 3 位,实测 16 个常见组名只落到 7 档且严重偏斜
+        // (system / 1 / prod / dev 全挤在同一档)。混合后 8 档全部用上,
+        // 且 system(本地终端)稳定独占 0 号绿。
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x85ebca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2ae35);
+        h ^= h >> 16;
+        (h % HUE_COUNT) as i32
+    };
+
     // Placeholder row for an empty folder; id == "" marks it as a group header
     // with no session (used by the UI to gate the "delete group" action).
     let blank = |group: &str| SessionInfo {
@@ -232,6 +279,9 @@ fn build_session_rows(
         note: "".into(),
         group_index: 0,
         group_size: 0,
+        // (#first-group-no-pending) 空组占位行同样按组归属标记。
+        first_group: first_group.as_deref() == Some(group),
+        group_hue: group_hue(group),
     };
 
     let mut rows: Vec<SessionInfo> = Vec::new();
@@ -251,6 +301,7 @@ fn build_session_rows(
             auth: s.kind.as_str().into(),
             last_used: "".into(),
             group: "system".into(),
+            group_hue: group_hue("system"),
             group_header: if i == 0 { "system".into() } else { "".into() },
             collapsed: group_is_collapsed("system"),
             note: "".into(),
@@ -263,6 +314,8 @@ fn build_session_rows(
             // dn∈[-gi, size-1-gi] 塌缩为空,组内排序被误判成跨组移动。
             // 计数徽章只在组头行渲染,非首行带值无副作用。
             group_size: builtin_matched.len() as i32,
+            // (#first-group-no-pending) builtin(本地终端)不参与。
+            first_group: false,
         });
     }
     for group in &display_groups {
@@ -283,10 +336,10 @@ fn build_session_rows(
         // No alphabetical sort: the stored Vec order is the user's manual
         // order, maintained by drag-to-reorder (same convention as quick
         // commands). New sessions land at the end of their group.
-        // (#no-default-header 2026-09-07) default(未分组)组不再生成组头:
-        // 未分组会话不属于任何组,平铺显示、无折叠概念。blank 占位也只对
-        // 具名组有意义(default 组仅在存在未分组会话时进入 display_groups,
-        // 恒有成员,blank 分支天然走不到)。
+        // (#default-group-header 2026-09-10) default 组现在与具名组同构:有组头、
+        // 可折叠、可作跨组拖放的落点。空占位(blank)仍只给具名组——default 组
+        // 只在存在未分组成员时才进入 display_groups(见上面的 has_default),
+        // 恒有成员,该分支天然走不到。
         if gs.is_empty() && !searching && group != "default" {
             rows.push(blank(group));
         } else {
@@ -306,24 +359,31 @@ fn build_session_rows(
                         .unwrap_or_else(|| "never".to_string())
                         .into(),
                     group: group.clone().into(),
-                    group_header: if i == 0 && group != "default" {
+                    group_hue: group_hue(group),
+                    // (#default-group-header 2026-09-10) default 组现在也生成
+                    // 组头行:未分组的会话不再是"顶层平铺的单独会话",而是挂在
+                    // "默认组"下面的普通成员(用户要求:每个会话必须属于某个组,
+                    // 没写组的归入默认组)。原 `group != "default"` 判断是
+                    // "未分组平铺"那一版的遗留。
+                    group_header: if i == 0 {
                         group.clone().into()
                     } else {
                         "".into()
                     },
-                    // (#no-default-header) default 组无组头即无法展开折叠,
-                    // 恒 false 防御历史折叠记录把未分组成员永久藏起来。
-                    collapsed: if group == "default" {
-                        false
-                    } else {
-                        group_is_collapsed(group)
-                    },
+                    // (#default-group-header) 折叠不再是特例:默认组与其他组
+                    // 一样可展开/折叠,折叠状态照常读写——它现在有组头可以点
+                    // 开,不会再出现"折叠记录把成员永久藏住"的死局。
+                    collapsed: group_is_collapsed(group),
                     builtin: false,
                     conn_state: 0,
                     group_index: i as i32,
                     // (#drag-cross-group-fix 2026-09-06) 同上:非首行也带
                     // 真实组大小,否则非首行拖拽的组内/跨组判定全部失真。
                     group_size: gs.len() as i32,
+                    // (#first-group-no-pending 2026-09-10) 该组是否为列表最顶
+                    // 的【可进入组】(拖拽跳过 pending 的依据;默认组存在时即
+                    // 默认组)。
+                    first_group: first_group.as_deref() == Some(group.as_str()),
                 });
             }
         }

@@ -538,7 +538,12 @@ export component AppWindow inherits Window {
     // (#drag-stale-cancel 2026-09-07) 会话/组头拖拽活跃态与外部取消:
     // Rust 侧轮询发现左键已松(被截图等全局工具吃掉 up)时调用取消。
     in-out property <bool> session-drag-active;
-    callback cancel-session-drag();
+    // (#drag-fly-home-r3 2026-09-10) 取消请求信号(Rust→UI):Rust 每次
+    // 请求取消即 +1;欢迎页经实例绑定改监听自身 drag-cancel-seq 并触发
+    // cancel-drag。原 callback cancel-session-drag 的绑定向是 welcome→
+    // AppWindow(只把"取消"转发给 Rust),Rust invoke 它并没有处理者——
+    // 取消请求从未抵达欢迎页,这是"取消不生效且拖拽态残留到卡死"的根因。
+    in-out property <int> session-drag-cancel-seq: 0;
     // (#ctx-menu-pin-r2 2026-09-08) 右键菜单打开行的全局 key。
     // (#ctx-menu-backdrop) 弹层迁 AppWindow 根集中渲染:全窗口透明
     // backdrop + 菜单本体,点背景即关+清 key,关闭事件 100% 确定。
@@ -1669,7 +1674,7 @@ export component AppWindow inherits Window {
                     ctx-row-h <=> root.ctx-row-h;
                     ctx-gen <=> root.ctx-gen;
                     reg-ctx-row(info) => { root.reg-ctx-row(info); }
-                    cancel-drag() => { root.cancel-session-drag(); }
+                    drag-cancel-seq: root.session-drag-cancel-seq;
                     move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     move-session-to-start(id) => { root.move-session-to-start(id); }
                     move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
@@ -2170,7 +2175,7 @@ export component AppWindow inherits Window {
                         ctx-row-h <=> root.ctx-row-h;
                         ctx-gen <=> root.ctx-gen;
                         reg-ctx-row(info) => { root.reg-ctx-row(info); }
-                        cancel-drag() => { root.cancel-session-drag(); }
+                        drag-cancel-seq: root.session-drag-cancel-seq;
                         move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
                     move-session-to-start(id) => { root.move-session-to-start(id); }
                     move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
@@ -2906,7 +2911,11 @@ export component AppWindow inherits Window {
         grp-menu-vl := VerticalLayout {
             padding: 4px;
             spacing: 1px;
-            Rectangle {
+            // (#default-group-locked 2026-09-10) 默认组是保留组、不可重命名
+            // (Rust rename_group 会以"该名称为系统保留分组"拒绝)。隐藏入口,
+            // 避免"点开对话框 → 提交 → 才报错"的空转。删除项本就不出现:
+            // 默认组头行是成员行(id 非空),ctx-menu-empty 恒 false。
+            if root.ctx-menu-group != "default" : Rectangle {
                 height: 28px;
                 border-radius: Theme.radius-sm;
                 background: g-edit-ta.has-hover ? Theme.bg-hover : transparent;

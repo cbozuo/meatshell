@@ -734,3 +734,9 @@ msgstr "松手移出分组"
 
 msgid "Local Terminals"
 msgstr "本地终端"
+
+msgid "Default group"
+msgstr "默认组"
+
+msgid "→ {} · #{}"
+msgstr "→ {} · 第 {} 位"
