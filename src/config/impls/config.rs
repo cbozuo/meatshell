@@ -1755,6 +1755,25 @@ impl ConfigStore {
         true
     }
 
+    /// (#group-drag-tail 2026-09-11) 移到 explicit groups 末尾 = 列表最后
+    /// 一位。尾部哨兵上报的 "(tail)" 落点由 app.rs 分派到这里——此前
+    /// "插入到某组之前"的表达式永远覆盖不到"最后组之后"这个位置,组别
+    /// 无法被拖到末位(用户反馈)。已在末位时 no-op(避免无谓写盘)。
+    pub fn move_group_to_end(&mut self, name: &str) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let Some(from) = self.cache.groups.iter().position(|g| g == name) else {
+            return false;
+        };
+        if from + 1 == self.cache.groups.len() {
+            return false;
+        }
+        let group = self.cache.groups.remove(from);
+        self.cache.groups.push(group);
+        true
+    }
+
     /// Create an empty group. Ignores blank/reserved names and duplicates.
     pub fn add_group(&mut self, name: String) {
         let n = name.trim().to_string();

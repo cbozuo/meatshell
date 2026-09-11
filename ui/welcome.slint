@@ -2954,6 +2954,29 @@ export component Welcome inherits Rectangle {
                         }
                     }
                     }
+                    // (#group-drag-tail 2026-09-11) 尾部落点哨兵(纯判定载体,
+                    // 不可见):修复两个问题——①组别无法拖到最后一组之后
+                    // (insert-here 只表达"某组之前",最后组之后无落点);
+                    // ②拖最后一组时插入线只出现在上方其它组头。指针进入列表
+                    // 底部 40px 区即报"移到末尾":插入线画在内容底部,松手
+                    // reorder-group(被拖组, "(tail)") → Rust move_group_to_end
+                    // 移到 explicit groups 末位。指标坐标系与组头 insert-here
+                    // 同源(list-host.drag-pointer-y 内容坐标)。
+                    if root.group-dragging && root.drag-group != "" : Rectangle {
+                        height: 0px;
+                        property <bool> insert-tail:
+                            !root.drag-fly-home
+                            && list-host.drag-pointer-y >= flick.viewport-height - 40px;
+                        changed insert-tail => {
+                            if (self.insert-tail) {
+                                root.group-insert-y = flick.viewport-height - 12px;
+                                root.group-insert-group = "(tail)";
+                            } else if (root.group-insert-group == "(tail)") {
+                                root.group-insert-group = "";
+                                root.group-insert-y = -1000px;
+                            }
+                        }
+                    }
                     // (#drag-autoscroll 2026-09-07) 拖到列表上下边缘自动滚动
                     // (tabs.slint #408 同款):机器多于一屏时一次拖到位。指针
                     // 的可视 y = 内容 y + viewport-y(viewport-y ≤ 0)。

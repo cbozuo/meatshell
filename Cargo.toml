@@ -154,6 +154,15 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 
+# (#fast-profile 2026-09-11) 日常验证用:30 秒级增量构建(依赖仅 opt-level 1、
+# 无 LTO、16 codegen units、开 incremental),发布仍走 [profile.release]。
+[profile.fast]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 16
+incremental = true
+
 [profile.dev]
 opt-level = 0
 debug = 1

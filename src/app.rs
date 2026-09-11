@@ -4474,9 +4474,15 @@ fn wire_session_callbacks(
         window.on_reorder_group(move |group: SharedString, before: SharedString| {
             // (#group-sort-line-r2 2026-09-11) 提交语义与插入线同源:线画在
             // 哪个组之前,就移到那个组之前。before 为空 / 不存在 = no-op。
-            let moved = store
-                .borrow_mut()
-                .move_group_before(group.as_str(), before.as_str());
+            // (#group-drag-tail 2026-09-11) before == "(tail)" = 尾部哨兵
+            // 上报的"移到末尾"落点(修复拖不到最后一组)。
+            let moved = if before.as_str() == "(tail)" {
+                store.borrow_mut().move_group_to_end(group.as_str())
+            } else {
+                store
+                    .borrow_mut()
+                    .move_group_before(group.as_str(), before.as_str())
+            };
             if !moved {
                 return;
             }
