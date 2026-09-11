@@ -770,11 +770,32 @@ impl ConfigStore {
         self.move_session_relative(id, &target, false)
     }
 
-    /// (#group-head-directional 2026-09-08) ghost 与组头行发生接触(上移顶边
-    /// 压住组头 / 下移底边接触组头)或已越过组头行 = 放入该组第一位。
-    /// 组内有成员时委托 move_session_relative(插到首成员之前,组继承目标
-    /// 成员);空组(无成员,仅存在于 groups 列表)直接改组字段——显示按组
-    /// 聚合,存储位置不影响"落入空组"的语义。
+    /// (#folded-head-into-end 2026-09-11) 该【显示组】当前是否折叠。
+    /// 语义与 `build_session_rows` 的 `group_is_collapsed` 保持同源,否则
+    /// "落点算出来的组"与"用户看到的组"会不一致:
+    /// `None`(遗留 / 新配置)= 全部折叠;`Some(list)` = 列表内的折叠。
+    /// 拖拽在搜索态被禁用(`reorder-enabled = 查询为空`),故不叠 searching 判断。
+    fn is_group_collapsed(&self, group: &str) -> bool {
+        self.cache
+            .collapsed_session_groups
+            .as_ref()
+            .map(|groups| groups.iter().any(|collapsed| collapsed == group))
+            .unwrap_or(true)
+    }
+
+    /// (#group-head-directional 2026-09-08) 压组头松手的落点。
+    /// (#folded-head-into-end 2026-09-11) 落点由【该组当前折叠态】决定
+    /// (核查稿 §3.1 区带表,与交互原型 resolveSession 同源):
+    ///  · 展开组 → 插入该组**第 1 位**(委托 move_session_relative,插到首成员
+    ///    之前,组继承目标成员);
+    ///  · 折叠组 → 追加到该组**末尾**(组头是闭合的文件夹,丢进去 = 放最后)。
+    ///
+    /// 折叠态必须在这里**实时**判定,不能让 Slint 侧做快照:dwell 展开会
+    /// `set_vec` 重建行模型,重建后的行实例不再触发 `changed`,快照会残留
+    /// "折叠"旧值,松手就落错位。Rust 侧读的是同一份 config,天然同步。
+    ///
+    /// 空组(无成员,仅存在于 groups 列表)直接改组字段——显示按组聚合,
+    /// 存储位置不影响"落入空组"的语义(此时首/末位等价)。
     /// (#default-group-drop 2026-09-10) `group` 允许传 "default" / 空串,
     /// 二者都表示未分组会话的归属组(默认组),落点合法。
     pub fn move_session_to_group_top(&mut self, id: &str, group: &str) -> bool {
@@ -796,16 +817,26 @@ impl ConfigStore {
         if group != "default" && is_reserved_session_group(group.trim()) {
             return false;
         }
-        // 目标组首个其他成员:按【显示组】匹配。默认组因此同时兼容空串与
-        // 历史遗留的 reserved 存储值;具名组按其组名。
-        let target = self
-            .cache
-            .sessions
-            .iter()
-            .find(|s| display_group_of(s) == group && s.id != id)
-            .map(|s| s.id.clone());
+        let at_end = self.is_group_collapsed(group);
+        // 目标组的【另一个】成员,按显示组匹配(默认组因此同时兼容空串与历史
+        // 遗留的 reserved 存储值;具名组按其组名)。展开 → 取首个(插其前);
+        // 折叠 → 取末个(插其后)。空组无成员 → 落到下面的"直接改组字段"分支。
+        let target = if at_end {
+            self.cache
+                .sessions
+                .iter()
+                .rev()
+                .find(|s| display_group_of(s) == group && s.id != id)
+                .map(|s| s.id.clone())
+        } else {
+            self.cache
+                .sessions
+                .iter()
+                .find(|s| display_group_of(s) == group && s.id != id)
+                .map(|s| s.id.clone())
+        };
         match target {
-            Some(t) => self.move_session_relative(id, &t, false),
+            Some(t) => self.move_session_relative(id, &t, at_end),
             None => {
                 let Some(s) = self.cache.sessions.iter_mut().find(|s| s.id == id) else {
                     return false;
@@ -1696,26 +1727,31 @@ impl ConfigStore {
             })
     }
 
-    /// (#group-drag-reorder 2026-09-06) 组头拖动换位:在 explicit groups
-    /// 的存储顺序中移动 |dir| 个位置(该顺序即列表显示顺序)。越界时
-    /// clamp 到端头(拖拽多位换位传大步长,落边界即止)。不存在/dir=0
-    /// 返回 false(default/system 不在此 vec,天然不参与)。
-    /// (#group-drag-collapse 2026-09-08) |dir|>1 支持:配合拖起自动折叠
-    /// 的行级换位(一次拖过数行 = 移动数位)。
-    pub fn reorder_group(&mut self, name: &str, dir: isize) -> bool {
-        let gs = &mut self.cache.groups;
-        let Some(pos) = gs.iter().position(|g| g == name) else {
+    /// (#group-sort-line-r2 2026-09-11) 组排序的提交语义与**插入线同源**:
+    /// 线画在哪个组头之前,松手就把 `name` 移到 `target` 之前。旧公式
+    /// `round(dy/pitch)` 按格数估位移,组高不等时会与线的落点脱节
+    /// (线在 A 前、松手落在 B 前)。
+    /// target 不存在 / 与 name 相同 → false(no-op,回原位)。
+    /// default/system 不在 explicit groups,天然不参与。
+    pub fn move_group_before(&mut self, name: &str, target: &str) -> bool {
+        if name.is_empty() || target.is_empty() || name == target {
+            return false;
+        }
+        let Some(from) = self.cache.groups.iter().position(|g| g == name) else {
             return false;
         };
-        if dir == 0 {
+        if self.cache.groups.iter().position(|g| g == target).is_none() {
             return false;
         }
-        let target = (pos as isize + dir).clamp(0, gs.len() as isize - 1) as usize;
-        if target == pos {
-            return false;
-        }
-        let g = gs.remove(pos);
-        gs.insert(target, g);
+        let group = self.cache.groups.remove(from);
+        // remove 之后 target 的下标可能前移,按名字重找插入点。
+        let to = self
+            .cache
+            .groups
+            .iter()
+            .position(|g| g == target)
+            .unwrap_or(self.cache.groups.len());
+        self.cache.groups.insert(to, group);
         true
     }
 
@@ -2310,6 +2346,44 @@ mod tests {
         // Self-target and unknown ids are no-ops.
         assert!(!store.move_session_relative(&id_of(&store, "b1"), &id_of(&store, "b1"), true));
         assert!(!store.move_session_relative("nope", &id_of(&store, "b1"), true));
+    }
+
+    // (#folded-head-into-end 2026-09-11) 组头落点按【实时折叠态】分流
+    // (核查稿 §3.1 区带表 / 交互原型 resolveSession):展开组 = 第 1 位,
+    // 折叠组 = 末尾。两条用例共用 reorder_store 的 beta 组(b1, b2)。
+    #[test]
+    fn move_session_to_group_top_prepends_when_group_expanded() {
+        let mut store = reorder_store();
+        let d1 = id_of(&store, "d1");
+
+        // beta 展开 → d1 插到首成员 b1 之前。
+        assert!(store.move_session_to_group_top(&d1, "beta"));
+        assert_eq!(
+            order_of(&store)[2..5],
+            [
+                ("d1".to_string(), "beta".to_string()),
+                ("b1".to_string(), "beta".to_string()),
+                ("b2".to_string(), "beta".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn move_session_to_group_top_appends_when_group_folded() {
+        let mut store = reorder_store();
+        let d1 = id_of(&store, "d1");
+        // beta 折叠 → d1 追加到末成员 b2 之后。
+        store.cache.collapsed_session_groups = Some(vec!["beta".into()]);
+
+        assert!(store.move_session_to_group_top(&d1, "beta"));
+        assert_eq!(
+            order_of(&store)[2..5],
+            [
+                ("b1".to_string(), "beta".to_string()),
+                ("b2".to_string(), "beta".to_string()),
+                ("d1".to_string(), "beta".to_string()),
+            ]
+        );
     }
 
     #[test]

@@ -4379,7 +4379,8 @@ fn wire_session_callbacks(
     }
     {
         // (#group-head-directional 2026-09-08) ghost 与组头行接触或越过 =
-        // 进该组第一位(空组直接改组)。
+        // 进该组:展开组 = 第 1 位,折叠组 = 末尾(空组直接改组,首/末等价;
+        // 折叠态由 config::move_session_to_group_top 实时判定)。
         let weak = window.as_weak();
         let store = store.clone();
         let sessions_model = sessions_model.clone();
@@ -4470,8 +4471,12 @@ fn wire_session_callbacks(
         let store = store.clone();
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
-        window.on_reorder_group(move |group: SharedString, dir: i32| {
-            let moved = store.borrow_mut().reorder_group(group.as_str(), dir as isize);
+        window.on_reorder_group(move |group: SharedString, before: SharedString| {
+            // (#group-sort-line-r2 2026-09-11) 提交语义与插入线同源:线画在
+            // 哪个组之前,就移到那个组之前。before 为空 / 不存在 = no-op。
+            let moved = store
+                .borrow_mut()
+                .move_group_before(group.as_str(), before.as_str());
             if !moved {
                 return;
             }

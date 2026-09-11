@@ -1084,11 +1084,12 @@ export component AppWindow inherits Window {
     // (#drag-tail-drop-r2 2026-09-07) 指针越出列表顶时的落位:精确目标由
     // Rust 按存储顺序计算(旧的 head id 行广播依赖 changed 触发顺序,反序跑组)。
     callback move-session-to-start(string /* session-id */);
-    // (#group-head-directional 2026-09-08) 组头接触/越过 = 进该组第一位。
+    // (#group-head-directional 2026-09-08) 组头接触/越过 = 进该组(展开组第
+    // 1 位 / 折叠组末尾,折叠态由 config 侧实时判定)。
     callback move-session-to-group-top(string /* session-id */, string /* group */);
     // (#drag-ungroup-pop 2026-09-07) 底部越界:移出分组(group 清空,平铺)。
     callback move-session-ungroup(string /* session-id */);
-    callback reorder-group(string /* group */, int /* dir */);   // (#group-drag-reorder) 组头拖动换位
+    callback reorder-group(string /* group */, string /* before-group */);   // (#group-sort-line-r2) 组排序:移到目标组之前(与插入线同源)
     callback reorder-session-end();
     callback toggle-group(string /* group */);
     callback remove-session(string /* session-id */);
@@ -1679,7 +1680,7 @@ export component AppWindow inherits Window {
                     move-session-to-start(id) => { root.move-session-to-start(id); }
                     move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
                     move-session-ungroup(id) => { root.move-session-ungroup(id); }
-                    reorder-group(g, dir) => { root.reorder-group(g, dir); }
+                    reorder-group(g, before) => { root.reorder-group(g, before); }
                     width: parent.width;
                     height: parent.height;
                     compact: true;
@@ -2180,7 +2181,7 @@ export component AppWindow inherits Window {
                     move-session-to-start(id) => { root.move-session-to-start(id); }
                     move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
                     move-session-ungroup(id) => { root.move-session-ungroup(id); }
-                        reorder-group(g, dir) => { root.reorder-group(g, dir); }
+                        reorder-group(g, before) => { root.reorder-group(g, before); }
                         search-changed(query) => { root.host-search-changed(query); }
                         new-session => { root.new-session-clicked(); }
                         import-ssh-config => { root.import-ssh-config(); }

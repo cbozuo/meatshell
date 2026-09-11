@@ -73,7 +73,10 @@ component SessionRow inherits Rectangle {
     // id, end persists the order. The card never follows the pointer — hops
     // swap rows instantly, so overlapping neighbours / group headers cannot
     // happen at all.
-    callback drag-start();
+    // (#ghost-anchor 2026-09-11) 带出抓取点 y(按下处距本行顶的距离):
+    // 由回调参数一次带出,避免再开一个 Welcome↔N 实例的双向绑定(双向 +
+    // 默认绑定是"取消拖拽卡死"的嫌疑源)。
+    callback drag-start(length /* grab-y */);
     callback drag-end();
     // Full session list — group-header is non-empty once per group, so the
     // "move to group" submenu can iterate it to list each group exactly once.
@@ -122,6 +125,14 @@ component SessionRow inherits Rectangle {
     // 同源)。组件内拿不到 Welcome,经实例绑定传入。
     in property <bool> drop-over-pending: false;
     in property <bool> drop-over-out: false;
+    // (#spine-src-collapse 2026-09-11) **源组已失去落点**:本行在【被拖行所属组】,
+    // 且落点已落在别的组 / 已拖出分组 → 本行的 tree-guide 段收缩,且不再"向原位
+    // 延展":源组脊线随组高一起**变短**,对齐原型"拖起即 splice、源组少一行、
+    // .group::before 自动变短"的视觉。
+    // ⚠ 必须同时限定 `session.group == drag-group`(源组):判据只写"落点组 ≠ 本行组"
+    // 时,**第三方组**的行也会满足(它的组名既不等于落点组、也不为空)→ 误收缩。
+    // drop-here-group 内建"回原位 / 待出组 / 移出分组 → 空"语义,过渡态不会误收缩。
+    in property <bool> drag-left-group: false;
     // (#drag-fly-home 2026-09-10) 取消归位窗口期:让位冻结、行命中停报、
     // 本体行立即复现(ghost 正在飞回原槽)。
     in property <bool> drag-fly-home: false;
@@ -160,17 +171,46 @@ component SessionRow inherits Rectangle {
     // 不恢复原位(用户定稿:组头下移就好,无"先下移再上移"),洞被上方
     // 成员链下移吸收(本体原槽不再留在组中);回进入组(member-mode)才
     // 恢复常规让位。异组行在两态期间维持抑制,避免邻组误导性空档。
-    // (#drag-fly-home) 取消归位窗口期让位冻结归零。
-    out property <length> shift-y:
-        !root.list-dragging || session.builtin || session.id == root.drag-id
-        || root.drag-fly-home
-        || ((root.drop-over-pending || root.drop-over-out)
-            && session.group != root.drag-group) ? 0px
-        : slot-y > root.drag-origin-y
-            && root.pointer-y > slot-y - self.line-half ? -(root.drag-pitch)
-        : slot-y < root.drag-origin-y
-            && root.pointer-y < slot-y + self.line-half ? root.drag-pitch
-        : 0px;
+    // (#shift-pure 2026-09-11) 让位几何 = **纯阈值**,移除 #shift-hysteresis 的
+    // ±3px 指针死区。核查稿 §3.3/§3.4 明确要求防抖唯一由 ghost 与组头的几何
+    // 关系产生(无指针滞回分支);死区是 09-11 为压"线条跟着晃"临时加的,与规则
+    // 冲突。现按规则移除,抖动改由 ghost 几何冻结消除(见 drop-report 冻结闸)。
+    // 各分支几何与移除死区前逐字一致,只去 ±3px 偏移,手感连续、无重新调参。
+    // 位移输出到根元素 y + animate:animate 是 property-change 驱动的,绑定
+    // 翻转产生的真实变化才会启动动画(不能用 if 包动画元素,那永不启动)。
+    in-out property <length> shift-y: 0px;
+    function recompute-shift() {
+        if (!root.list-dragging || session.builtin || session.id == root.drag-id
+                || root.drag-fly-home
+                || ((root.drop-over-pending || root.drop-over-out)
+                    && session.group != root.drag-group)) {
+            self.shift-y = 0px;
+            return;
+        }
+        if (session.group != root.drag-group) {
+            // 跨组:ghost 底边越过本行下边 → 上移;ghost 顶边越过本行上边 → 下移。
+            if (slot-y > root.drag-origin-y) {
+                self.shift-y = root.drop-y > slot-y + self.height
+                    ? -(root.drag-pitch) : 0px;
+            } else if (slot-y < root.drag-origin-y) {
+                self.shift-y = root.pointer-y < slot-y
+                    ? root.drag-pitch : 0px;
+            }
+        } else {
+            // 同组:越过行中线 ±half 方向化让位。
+            if (slot-y > root.drag-origin-y) {
+                self.shift-y = root.pointer-y > slot-y - self.line-half
+                    ? -(root.drag-pitch) : 0px;
+            } else if (slot-y < root.drag-origin-y) {
+                self.shift-y = root.pointer-y < slot-y + self.line-half
+                    ? root.drag-pitch : 0px;
+            }
+        }
+    }
+    changed pointer-y => { self.recompute-shift(); }
+    changed list-dragging => { self.recompute-shift(); }
+    changed drop-over-pending => { self.recompute-shift(); }
+    changed drop-over-out => { self.recompute-shift(); }
     in-out property <length> drag-pitch: 40px;
     // (#drag-ghost-pointer 2026-09-06) 指针几何落点:slot-y = 本行在列表内容
     // 坐标里的 y(实例侧拖拽中经 changed 钩子写入,非 init 绑定),配合
@@ -183,6 +223,23 @@ component SessionRow inherits Rectangle {
     // changed list-dragging 钩子写入(见下方实例区),从而避免 init 期读自身
     // 几何触发 Recursion detected 的 panic。
     in-out property <length> slot-y: 0px;
+    // (#spine-src-tail 2026-09-11) 被拖行是否是其所在组的**末行**。出组时被拖行段
+    // 收缩为 0,"组内倒数第二行"随即成为该组最后一个可见成员行 —— 脊线应到此收尾,
+    // 不能再向下补段间隙(否则组尾会多出一截 2px 线尾)。
+    // (#spine-src-slot) 被拖行的**组内索引**。原型出组 = 拖起即 splice:源组少一行、
+    // 下方成员整体上移一格。应用保持布局不动(塌缩会让 slot-y 快照失准),改为让
+    // "紧邻被拖行下方的那一段"向上延展一格吃掉空出的槽位 —— 需要索引来定位它。
+    // 下行 in:Welcome 值,同组每行读到同一个。上行 callback:拖起时由被拖行上抛,
+    // 唯一写入点。刻意不用 in-out(每行实例都连同一个 Welcome 属性,多源写入有歧义)。
+    in property <bool> drag-src-tail: false;
+    in property <int> drag-src-index: -1;
+    callback report-src(int, bool);
+    changed drag-id => {
+        if (root.drag-id != "" && root.session.id == root.drag-id) {
+            root.report-src(root.session.group-index,
+                root.session.group-index >= root.session.group-size - 1);
+        }
+    }
     // (#drop-ghost-edge 2026-09-07) 落点判定基准 = ghost 卡按拖动方向的
     // 【前导边】:下移用下边界(pointer + 行高),上移用上边界(pointer)。
     // 旧实现恒用指针点:上移方向 ghost 顶恰等于指针点,让位与提交天然
@@ -201,18 +258,34 @@ component SessionRow inherits Rectangle {
     // (#drag-pointer-geom) 顶部越界交给哨兵处理(见 list-host.over-head),
     // 不由 clamp 兜底。(底部越界 = 移出分组,见 over-ungroup。)
     // (#group-head-directional 2026-09-08) 组头行不参与行落点:压组头的
-    // 语义 = 进该组第一位(gh-overlap,组头外壳判定),行落点若仍命中
+    // 语义 = 进该组(gh-overlap,组头外壳判定;展开组放首位、折叠组放末尾),
+    // 行落点若仍命中
     // 组头行会当帧清掉组头蓝框并按残留落点误提交。进组一律走成员行
     // 落点;组头行的点击/折叠/右键不受影响(仅拖拽落点)。
     property <bool> ghost-over:
         root.list-dragging && root.drag-id != "" && session.id != root.drag-id
         && !session.builtin
         && !root.drag-fly-home
-        && self.drop-y >= slot-y
+        // (#group-top-band 2026-09-11) **组首成员行的命中带向上扩一个组头高**:
+        // 拖到"该组第一位"只有两条路——组头命中(gh-overlap,但它被"当前组"排除
+        // ——ghost 已经进到该组里时必然就是当前组 ✗)或组首成员行的上半区(原带
+        // 从 slot 起算,指针必须刚好落进组头内部 4~19px 的窄条 ✗)。结果就是
+        // "拖到第一位很难落地"(用户实测)。现在组首成员的带从"组头下边"上扩到
+        // "组头顶",指针压在组头上即命中该行 before = 组第一位 ✓;下移方向不会
+        // 与 pending/出组竞争(那两态只在 moving-up 时成立)。
+        && self.drop-y >= (session.group-header != "" ? slot-y - 34px : slot-y)
         && self.drop-y < slot-y + self.height;
-    // (#drag-pointer-geom) 越过本行中线即"插到之后";基准与 ghost-over
-    // 同为 drop-y,保证命中行与半区出自同一几何。
+    // (#drop-after-pure 2026-09-11) 半区判定 = **纯阈值**(对齐核查稿 §3.1 的
+    // "行上/下半区"与交互原型的 `after = y > 行中线`)。原 #drop-after-
+    // hysteresis 的 ±3px 死区属"指针滞回",与 §3.3"无 4px 指针滞回分支"
+    // 冲突,已移除;抖动改由 ghost 几何冻结(见 ghost-over / drop-report 冻结闸)
+    // 从根上消除——滞回只由 ghost 与组头的几何关系产生。
     property <bool> drop-after: self.drop-y > slot-y + self.height / 2;
+    changed drop-y => {
+        // (#shift-pure) 让位也在同一钩子重算:Slint 同一属性只允许一个 changed
+        // 回调,合并写。
+        self.recompute-shift();
+    }
     // (#bottom-ingress 2026-09-08) 底缘入组接管:上移跨组时 ghost 顶悬在
     // 组名下方间隙(顶基准无行命中),底缘已压住目标组最后成员——此时
     // 顶基准失效会误回落"组间空隙 = 出组态"(蓝框误亮)。异组成员行被
@@ -287,7 +360,10 @@ component SessionRow inherits Rectangle {
     property <length> grab-y;
     property <length> grab-x;
 
-    height: root.compact ? 38px : 36px;
+    // (#density 2026-09-11) 行高收紧 36→30(窄栏 38→32):36/38px 配 13px 字号
+    // 显得空旷(用户反馈),30/32 更接近设计稿的紧凑列表观感,同时保留
+    // "桌面端比 28px 宽松一档"的可点性。drag-pitch = 本高 + 2 自动跟随。
+    height: root.compact ? 32px : 30px;
     // (#slot-shift) 让位位移:配合外包 wrapper 使用(布局子元素不能设 y)。
     y: root.shift-y;
     // (#ease-align-spec 2026-09-10) 140ms + cubic-bezier(.22,.61,.36,1):
@@ -317,7 +393,10 @@ component SessionRow inherits Rectangle {
         // (资源管理器/任务管理器)在这一类行上给的都是标准箭头,手型会
         // 误传"这是个超链接"的语义(用户截图反馈)。拖拽中的 move 保留,
         // 它是"正在搬运"的唯一视觉信号。
-        mouse-cursor: root.grab-dragging ? move : default;
+        // (#ghost-anchor 2026-09-11) 拖动中显示**闭手**(grabbing):对齐交互
+        // 设计的"手抓起来"观感(原 move 是四向箭头,与"搬一个卡片"语义不符)。
+        // hover 仍保持 default(行是命令项,不是链接 —— 规格 §4.1)。
+        mouse-cursor: root.grab-dragging ? grabbing : default;
         // (#session-hover-card) 悬停离开时清掉信息卡片(写入在 info-delay)。
         changed has-hover => {
             if (!self.has-hover && root.card-out-name != "") {
@@ -397,14 +476,16 @@ component SessionRow inherits Rectangle {
         moved => {
             if (!root.pressing) { return; }
             if (!root.grab-dragging) {
-                // (#drag-axis-lock 2026-09-07) 方向锁:只有纵向位移占主导才
-                // 判定为拖拽意图。触控板点选常伴随几像素斜向漂移,旧逻辑只
-                // 看 |dy| > 5px,斜着划一下就变成拖拽、松手又落回连接,是
-                // "误触连错机器"的直接来源。现在要求 |dy| > 7px 且
-                // |dy| ≥ |dx|;横向为主的手势一律不进入拖拽。
+                // (#drag-threshold-omni 2026-09-11) 阈值对齐交互设计(§1②):
+                // **任意方向**位移 > 5px 即判定为拖拽意图(原型
+                // `hypot(dx,dy) > 5`)。旧"方向锁"(|dy|>7px 且 |dy|≥|dx|)
+                // 会让"斜着拖/横着拖"完全无响应,与设计不符,已退役。
+                // 误触代价可控:拖拽松手 = 落回原位,不会误连机器。
                 if (root.reorder-enabled
-                        && abs(touch.mouse-y - root.grab-y) > 7px
-                        && abs(touch.mouse-y - root.grab-y) >= abs(touch.mouse-x - root.grab-x)) {
+                        && Math.sqrt(
+                            ((touch.mouse-x - root.grab-x) / 1px) * ((touch.mouse-x - root.grab-x) / 1px)
+                            + ((touch.mouse-y - root.grab-y) / 1px) * ((touch.mouse-y - root.grab-y) / 1px)
+                        ) * 1px > 5px) {
                     root.grab-dragging = true;
                     root.grab-y = touch.mouse-y;
                     // (#drag-smooth-fix) 上报真实行距,供 dn 阈值 / 让位 / 落位共用。
@@ -414,7 +495,7 @@ component SessionRow inherits Rectangle {
                     // 在拖拽 grab 下恒 true),信息浮窗全程跟随拖拽——进入拖拽
                     // 此刻显式清掉。
                     root.card-out-name = "";
-                    root.drag-start();
+                    root.drag-start(touch.mouse-y);
                 }
             }
             // (#session-drag-smooth 2026-09-05) 拖动过程不 mutate 模型:只持
@@ -422,6 +503,12 @@ component SessionRow inherits Rectangle {
             // 表级 ghost 浮动卡(本体隐形留洞),落点由各行按指针几何自判
             // (插入指示线),松手按 (命中行, 前/后) 一次提交。
             root.drag-out-dy = touch.mouse-y - root.grab-y;
+            // (#ghost-follow-x-r2 2026-09-11) 上报**窗口绝对 x**(TouchArea 绝对
+            // x + 指针在行内的 x)。旧版报的是"相对抓取点的位移",而 ghost 的
+            // x 公式按"指针绝对 x − 60px"设计(原型 left = 指针x - 60),起手
+            // 瞬间位移≈0 → 卡片跳到列表最左。SessionRow 看不到 sess-list
+            // (组件作用域),故在此报窗口坐标,由列表级减去自身绝对 x 得内容 x。
+            root.drag-out-dx = touch.absolute-position.x + touch.mouse-x;
         }
     }
 
@@ -437,6 +524,10 @@ component SessionRow inherits Rectangle {
     in-out property <length> card-out-x;
     in-out property <length> card-out-y;
     in-out property <length> drag-out-dy;   // (#session-drag-smooth) 拖动中的指针偏移输出
+    in-out property <length> drag-out-dx;   // (#ghost-follow-x-r2) 指针**窗口绝对 x**:ghost 窄卡横向跟手用
+    // (#spine-highlight-drag) ghost 前导边当前所在的组(Welcome 下发):拖动中
+    // 用它点亮该组脊线(hover 在 grab 期间冻结)。
+    in property <string> drag-group-current: "";
     info-delay := Timer {
         interval: 450ms;
         running: touch.has-hover && !root.list-dragging;   // 拖动中不弹信息卡
@@ -470,23 +561,134 @@ component SessionRow inherits Rectangle {
     // 两条线与让位几何在组头/组间距处脱节而整体退役(用户定稿"不要蓝色
     // 主题色线条")。现在 = 让位动画(shift-y) + 落点空槽框(见下方 slot-box)。
 
-    // (#slot-box 2026-09-10) 落点空槽框:本行是 ghost 命中行时,在它的
-    // after / before 侧画一圈描边,把"松手会插入的那个空档"标出来
-    // (对齐交互原型的空槽)。位置取 ±drag-pitch(整行步长):命中行被让位
-    // 挪开(或本体隐形成"洞")之后,那一步的位置正好是空档,取整步长与让位
-    // 幅度同源,不会错位。声明在 card 之前 → 不盖住行内容。
-    // 为什么不做虚线:Slint 的 Rectangle 没有 dashed 描边(border-style),
-    // 拼块模拟要几十个矩形、每帧重排;淡底 + 1px 描边视觉等价,且在 femtovg
-    // 下更稳(贴边 1px 线的重绘教训,见 spec §8)。
-    if root.ghost-over : Rectangle {
-        y: root.drop-after ? root.drag-pitch : -root.drag-pitch;
-        x: 24px;
-        width: root.width - 32px;
+    // (#slot-box-dashed 2026-09-11) 落点空槽框 = **虚线** + **组色**(对齐设计)。
+    // Slint 的 Rectangle 没有 border-style:dashed,用固定段数的小块拼:
+    // 上下边各 16 段、左右边各 3 段,每段按容器宽/高现算位置与长度
+    // (段长 55% + 空隙 45%)。段数固定 → 不需要动态 for,窄卡上只是段更密。
+    // 颜色取**本组的组色**:落点框属于"将要接收它的那个组",用组色比全局
+    // accent 更能说明归属(用户定稿);淡底同色更轻,不抢虚线的读感。
+    // 位置仍取 ±drag-pitch(整行步长):命中行被让位挪开(或本体隐形成"洞")
+    // 之后,那一步正好是空档,与让位幅度同源、不会错位。
+    // (#slot-box-idle 2026-09-11) **拖起即有框**:拖动刚开始、还没命中任何
+    // 行时(`drop-target-id == ""`),框画在**被拖行自己的原槽**(= 洞口),
+    // 对齐原型"拎起来的同时底下就有占位框"(用户定稿)。命中行出现后框交给
+    // 命中行(±整格)。两种角色共用一个元素,38 段虚线拼块不重复。
+    // (#slot-box-idle 2026-09-11) 是否已有落点目标(由 Welcome 的 drop-target-id
+    // 下行):无目标 = 拖起瞬间,虚线框画在被拖行自己的原槽("拖起即有框")。
+    in property <bool> drop-has-target: false;
+    // (#slot-box-no-group-top-r2) 组头自身命中态(gh-overlap):只有它才需要
+    // 抑制虚线框(组头高亮已足够);行命中路径一律保留框。
+    in property <string> header-hit-group: "";
+    // (#slot-box-single 2026-09-11) **当前落点行**(Welcome 聚合的上报者):
+    // 只有它才画虚线框。组首成员的命中带向上扩了一个组头高之后,它与上一行
+    // 的带有重叠区,指针落在重叠区时两行同时 ghost-over → 两个框画在同一槽位,
+    // 边线错开 1px 叠成"下边莫名加粗",指针微动时胜负翻转 → 看着就是抖动。
+    in property <string> drop-owner: "";
+    // (#slot-spine-hot) 组脊线高亮的统一来源(行竖线与虚线框左侧的补线共用):
+    // 悬停/右键锚点/拖动中 ghost 所在组 → 0.90,否则 0.30。
+    property <bool> spine-hot: root.ctx-group-active
+        || (root.hover-group != "" && root.hover-group == root.session.group)
+        || (root.list-dragging && root.drag-group-current != ""
+            && root.drag-group-current == root.session.group);
+    // (#slot-box-edge 2026-09-11) 列表首/尾行 + 越界状态(Welcome 下行):
+    // 拖过内容底 = 移出分组、拖到内容顶之上 = 移到首位。旧实现只有 ghost
+    // 变形,虚线框始终钉在"最后一组最后一个成员"上(用户实测"一直往下拖,
+    // 框永远在最后一组的最后一个位置")——现在框跟到列表首/末槽位。
+    in property <bool> is-first: false;
+    in property <bool> is-last: false;
+    in property <bool> over-head-in: false;
+    in property <bool> over-ungroup-in: false;
+    property <bool> edge-head: root.list-dragging && root.is-first && root.over-head-in;
+    property <bool> edge-tail: root.list-dragging && root.is-last && root.over-ungroup-in;
+    property <bool> box-show:
+        !root.drag-fly-home
+        // (#slot-box-no-group-top-r2 2026-09-11) 只有在**组头自身是落点**
+        // (gh-overlap:进该组)时才不画框——那种情况组头自己的 accent 高亮
+        // 已经说清"松手落到组首",再吊一个框是重复。但"拖到组首成员之前"这条
+        // 路径(行命中)必须**保留框**:它正是"拖到第一位"的可见反馈,上一版把
+        // 两者一起隐藏,导致拖到第一位既没框也难命中(用户实测)。
+        && !(root.ghost-over && root.header-hit-group != ""
+            && root.header-hit-group == session.group && !root.drop-after)
+        // (#ghost-geom-freeze 2026-09-11) **冻结期间框留在上一个有效落点**:
+        // ghost 跨骑组头时,命中行的本次换组报告被丢(见 drop-report 冻结闸),
+        // 落点快照原地不动——框也必须原地不动,否则"框消失/跳到别处"与松手
+        // 结果不一致。故补一条"落点归属行自身恒显示"。
+        && ((root.ghost-over && root.drop-owner == session.id)
+            || (root.list-dragging && root.drag-id != "" && root.drop-owner == session.id)
+            || root.edge-head || root.edge-tail
+            || (root.list-dragging && root.drag-id != ""
+                && session.id == root.drag-id && !root.drop-has-target));
+    if root.box-show : Rectangle {
+        property <color> box-c: Theme.group-hue-color(root.session.group-hue);
+        // (#ghost-geom-freeze 2026-09-11) 冻结期落点行的 ghost-over 会翻假
+        // (ghost 已跨骑到相邻组头),框必须留在上一个有效落点 —— 方向沿用落点
+        // 快照 drop-after,与 box-show 的"落点归属行恒显示"子句同源;否则框会在
+        // 冻结瞬间掉到 0px(行正中),与插入位错开一整格。
+        y: root.edge-head ? -root.drag-pitch
+         : root.edge-tail ? root.drag-pitch
+         : (root.ghost-over
+                || (root.list-dragging && root.drag-id != ""
+                    && root.drop-owner == session.id))
+            ? (root.drop-after ? root.drag-pitch : -root.drag-pitch)
+            : 0px;
+        // (#slot-box-align-r2 2026-09-11) 左缘对齐**成员内容起点**
+        // (10px + content-indent = 28px,即分支横线右端 / 图标方块左缘):
+        // 旧值 24px 落在横线(20..28)中间,看上去"框把横线切断了"(用户
+        // 截图)。右缘保持 8px 内缩,与列表右边界对齐。
+        x: 10px + root.content-indent;
+        width: root.width - (10px + root.content-indent) - 8px;
         height: root.drag-pitch - 2px;
-        border-radius: Theme.radius-md;
-        background: Theme.accent-solid.with-alpha(0.09);
-        border-width: 1px;
-        border-color: Theme.accent-solid.with-alpha(0.55);
+        background: box-c.with-alpha(0.06);
+        // (#slot-spine 2026-09-11) 落点槽位补一段**组脊线**:插入点是一个"洞"
+        // ——那一行让位走了,没有行来画自己的竖线段,于是目标组/本组的脊线在
+        // 虚线框处断掉一截(用户实测"移入组的左侧竖线不存在")。这里在框的左
+        // 侧补一条与脊线同 x / 同宽 / 同色的竖线,贯穿框高,把缺口接上。
+        // x 取自与成员行完全相同的公式(10 + content-indent/2 - 1),再换算成
+        // 框内相对坐标(-content-indent/2 - 1);框是 SessionRow 的直接子元素、
+        // 无 clip,负向溢出正常绘制。
+        // (#slot-box-left-solid 2026-09-11) **框左缘不再画虚线段**:原来左侧
+        // 还有 3 段虚线,与这条实脊线并排 → 同一位置"一虚一实"两条线,样式不
+        // 统一(用户截图)。现在左缘只留这条实线(与成员行竖线同款),虚线只画
+        // 上下边 + 右缘,槽位轮廓照样清楚。
+        Rectangle {
+            x: -(root.content-indent / 2) - 1px;
+            y: 0px;
+            width: 2px;
+            height: parent.height;
+            background: parent.box-c.with-alpha(root.spine-hot ? 0.90 : 0.30);
+        }
+        for i in 16 : Rectangle {
+            x: (parent.width / 16) * i;
+            y: 0px;
+            width: (parent.width / 16) * 0.55;
+            height: 1px;
+            background: parent.box-c.with-alpha(0.85);
+        }
+        for i in 16 : Rectangle {
+            x: (parent.width / 16) * i;
+            y: parent.height - 1px;
+            width: (parent.width / 16) * 0.55;
+            height: 1px;
+            background: parent.box-c.with-alpha(0.85);
+        }
+        // (#slot-box-left-solid-r2 2026-09-11) 左缘**恢复竖虚线**:框要四边完整
+        // (用户定稿"槽位虚线框整体要保持完整,左边的竖虚线也要有")。上一版把
+        // 左边虚线删掉是改过头了 —— 与右侧那条实脊线并存不冲突:虚框表达"这是
+        // 槽位",实线表达"组的竖线没断",各说各的事。
+        for i in 3 : Rectangle {
+            x: 0px;
+            y: (parent.height / 3) * i;
+            width: 1px;
+            height: (parent.height / 3) * 0.55;
+            background: parent.box-c.with-alpha(0.85);
+        }
+        for i in 3 : Rectangle {
+            x: parent.width - 1px;
+            y: (parent.height / 3) * i;
+            width: 1px;
+            height: (parent.height / 3) * 0.55;
+            background: parent.box-c.with-alpha(0.85);
+        }
     }
 
     card := Rectangle {
@@ -611,7 +813,40 @@ component SessionRow inherits Rectangle {
     // 原槽留下一段断线(用户截图反馈"左侧竖线要补全")。移为 SessionRow
     // 根同级元素后它不受 card.opacity 影响,始终锚在原槽位置补全竖线;非
     // 拖动态视觉不变(竖线位于左侧内缩区,不与内容重叠)。
+    // (#spine-continuous-drag-r2 2026-09-11) 既**跟手**又**不断线**:上一版
+    // 拖动期改用组头里的一条固定高脊线 —— 线不动而行在让位位移,视觉上
+    // "组都往下走了竖线没走",而且默认组(成员 indent 为 0)的线位还算错
+    // (用户实测双反馈)。改回**分段线随行移动**,再用"向原位方向多画一格"
+    // (y = min(0, shift-y) / height = 行高 + |shift-y|)把位移留下的缺口自
+    // 己盖住:行移走时它朝原位延一格,正好补上缺口,两端都不露白。
     if root.tree-guide : Rectangle {
+        // 让位位移(0 / ±drag-pitch):作为本段竖线的延展依据。
+        property <length> sy: root.shift-y;
+        // (#spine-seg-gap 2026-09-11) **段间补隙**:本段原只画「本行高」,而行间距
+        // (组内 spacing)恒为 2px —— 相邻两段之间因此留一条 2px 白缝,整条组脊线呈
+        // "虚线感 / 断层"。交互原型的脊线是**组容器级单条线**(.group::before 绝对
+        // 定位:top=组头高 / bottom=1px),天然覆盖行间距,没有这条缝。这里让每段
+        // 向下多盖一个行间距(见 height 的 seg-gap 项),与原型同源。
+        property <bool> seg-exit: root.list-dragging && root.drag-left-group;
+        // (#spine-src-tail) 组尾判定:常规 = 组内末行;出组且被拖行本是末行时,
+        // 收缩后由**倒数第二行**接任组尾(它下方再没有可见成员)。
+        property <bool> seg-tail:
+            root.session.group-index >= root.session.group-size - 1
+            || (self.seg-exit && root.drag-src-tail
+                && root.session.group-index >= root.session.group-size - 2);
+        property <length> seg-gap: self.seg-tail ? 0px : 2px;
+        // (#spine-src-collapse) 被拖行**出组** → 本段整体收缩。组内排序(未出组)
+        // 不收缩,保留"本体隐形后仍补全竖线"的既定行为,否则原槽会露出断线。
+        property <bool> seg-fold: self.seg-exit && root.session.id == root.drag-id;
+        // (#spine-src-slot) 出组时**接替被拖行槽位**的那一段 = 紧邻它下方的一行。
+        // 源组布局不动(被拖行隐形但仍占一格),故由本段向上延展一个 drag-pitch,
+        // 正好盖上被拖行的空槽 → 脊线从组头下方**连续**到组尾,长度少一格(= 原型
+        // splice 后的组高)。若不给这一支,组首/组中出组会在脊线中间留一个 32px 洞
+        // ("断层",用户明确不允许)。被拖行在组尾时无接替段(index+1 越界),
+        // 由 seg-fold + seg-tail 自然收尾。
+        property <bool> seg-take-over: self.seg-exit && !self.seg-fold
+            && root.drag-src-index >= 0
+            && root.session.group-index == root.drag-src-index + 1;
         // (#group-hue-align-html 2026-09-10) 2px + α0.30:对齐 HTML 原型
         // 规格(2px 组色 α0.28);2px 同时更抗 femtovg 邻接重绘闪烁。
         // (#tree-line-full-r2 2026-09-10) 竖线恢复**全行高**。上一版按
@@ -635,13 +870,31 @@ component SessionRow inherits Rectangle {
         // 右击组头,都要求整组竖线保持高亮)。菜单一失效(自动关闭/Esc/选中
         // 一项),ctx-group-active 立刻回落 false,竖线随之熄灭——高亮仍能被
         // "鼠标在哪 + 菜单开没开"完整解释,没有第三个隐藏状态。
-        property <bool> hot: root.ctx-group-active
-            || (root.hover-group != "" && root.hover-group == root.session.group);
+        // (#spine-highlight-drag 2026-09-11) 拖动期间**ghost 所在组**的脊线
+        // 保持点亮(用户定稿"ghost 在哪个组,哪个组的竖线高亮要保留着")。
+        // 专属 hover 在拖拽中会冻结(指针 grab 被持),所以这里改由拖动状态
+        // 驱动:`drag-group-current` = ghost 前导边当前落入的组(Welcome 下行)。
+        // (#slot-spine-hot 2026-09-11) 提到组件级共用:虚线框左侧补的那段竖线
+        // 也要用同一个高亮值,否则相邻两段一深一浅、又是"不统一"(用户实测)。
         x: 10px + (root.content-indent / 2) - 1px;
-        y: 0px;
+        // (#spine-continuous-drag-r3 2026-09-11) 延展方向 = **朝自己的原位**:
+        //   · 行被下移(+pitch,发生在拖动上移时)→ 缺口在它**上方** → 顶边抬到
+        //     -pitch 盖住(高度同时 +pitch);
+        //   · 行被上移(-pitch,发生在拖动下移时)→ 缺口在它**下方** → 顶边不动、
+        //     高度 +pitch。
+        // r2 写的 min(0, sy) 恰好两个方向都反:下移时线顶抬到 -pitch 冲进组名
+        // 区("左侧的线超出了组名"),上移时没人补缺口("竖线没有闭合")。
+        y: -max(0px, self.sy) - (self.seg-take-over ? root.drag-pitch : 0px);
         width: 2px;
-        height: parent.height;
-        background: Theme.group-hue-color(root.session.group-hue).with-alpha(self.hot ? 0.90 : 0.30);
+        // (#spine-src-collapse) 出组时取消"向原位延展" —— 组要变短,不需要盖住
+        // 让位留下的缺口(那不是洞,那一段本就该从组里消失)。
+        // (#spine-fold) seg-fold = 被拖行出组 → 高度归 0,源组脊线到此为止。
+        // (#spine-src-slot) seg-take-over → 高度额外 +1 格,向上接替被拖行槽位。
+        height: self.seg-fold ? 0px : self.seg-take-over ? parent.height + root.drag-pitch + abs(self.sy) + self.seg-gap : parent.height + (self.seg-exit ? 0px : abs(self.sy)) + self.seg-gap;
+        // 与行的让位动画同参数(140ms / cubic-bezier(.22,.61,.36,1)),否则
+        // 线会先跳到新位置、行再滑过去,出现"线比行早到"的错拍。
+        animate y, height { duration: 140ms; easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
+        background: Theme.group-hue-color(root.session.group-hue).with-alpha(root.spine-hot ? 0.90 : 0.30);
         animate background { duration: 120ms; easing: ease-out; }
     }
 
@@ -651,7 +904,10 @@ component SessionRow inherits Rectangle {
     // 宽 8px 至图标方块左缘(28px);conn-state 圆点(x 24..30)绘制在上层,
     // 视觉正好呈现"竖线 — 横线 — 圆点"。竖线/横线同色同透明度,共成一根
     // 连续枝干。
-    if root.tree-guide : Rectangle {
+    // (#tree-branch-drag-hide 2026-09-11) 被拖行本体隐形后**横线一并消失**
+    // (设计:拖起时横线不存在——枝干跟着成员走了);竖线不同,它是**组级**
+    // 脊线,拖走成员后仍要补全(上一条注释的既定行为),二者故意不同。
+    if root.tree-guide && root.session.id != root.drag-id : Rectangle {
         // (#tree-line-hover 2026-09-10) 悬停该成员行 → 它自己的横线提亮。
         // 横线只属于这一行,所以条件用本行 hover 而非组级状态。
         // (#line-highlight-color-only 2026-09-10) **只提亮、不加粗**:与竖线
@@ -714,6 +970,7 @@ export component Welcome inherits Rectangle {
     in-out property <length> card-out-x;
     in-out property <length> card-out-y;
     in-out property <length> drag-out-dy;   // (#session-drag-smooth) 拖动中的指针偏移输出
+    in-out property <length> drag-out-dx;   // (#ghost-follow-x-r2) 指针**窗口绝对 x**:ghost 窄卡横向跟手用
     // (#tree-line-hover 2026-09-10) 组脊线 hover 联动的 Welcome 级状态:
     // 行/组头写入"当前悬停所属组",组内每一行读它决定脊线是否高亮加粗。
     // 成员行(SessionRow)与内联的组头行共用这一对;hover-key 记"谁写的",
@@ -721,6 +978,13 @@ export component Welcome inherits Rectangle {
     in-out property <string> hover-group: "";
     in-out property <string> hover-key: "";
     in-out property <length> drag-dy: 0px;
+    // (#ghost-anchor 2026-09-11) 抓取点位移:按下处距行顶(成员行)/组头顶
+    // (组头拖拽)的距离。ghost 纵向要补这一项才落在指针抓手处(详见 ghost 卡
+    // 的 y 绑定)。只由被拖行写入,其余行为 0。
+    in-out property <length> drag-grab-y: 0px;
+    // (#ghost-follow-x 2026-09-11) 指针 x 偏移(SessionRow 上报),ghost 窄卡
+    // 横向跟手用;与 drag-dy 同生命期,松手归位不清零(moved 会立即重写)。
+    in-out property <length> drag-dx: 0px;   // (#ghost-follow-x-r2) 指针窗口绝对 x(行/组头上报)
     in-out property <length> drag-pitch: 40px;
     // (#drag-ghost-pointer 2026-09-06) 聚合落点:命中行经 drop-report 上报
     // (ghost 中心同一时刻只可能落在一行内,后写覆盖即正确值);
@@ -734,7 +998,8 @@ export component Welcome inherits Rectangle {
     property <string> drop-target-group: "";
     property <int> drop-target-pos: 1;
     // (#ghost-pill / #badge-preview 2026-09-10) 落点归属组:"" = 无落点。
-    //  ① 组头命中(进组第一位) → 该组,位次 1;
+    //  ① 组头命中 → 该组:展开组 = 第 1 位,折叠组 = 末尾
+    //     (位次 = 该组成员数 + 1);
     //  ② 行命中 → 落点行的组,位次取自行上报;
     //  ③ 回原位(待出组)/移出分组/取消归位 → 空,不给任何"将落在这里"的暗示。
     // ghost 右侧的落点标签与组头徽章预览(3 → 4)共用这一个判定。
@@ -744,17 +1009,38 @@ export component Welcome inherits Rectangle {
         : root.drop-over-group != "" ? root.drop-over-group
         : (root.drop-target-id != "" ? root.drop-target-group : "");
     property <int> drop-here-pos:
-        root.drop-over-group != "" ? 1 : root.drop-target-pos;
+        root.drop-over-group != "" ? root.drop-over-pos : root.drop-target-pos;
     // (#ghost-pill 2026-09-10) 落点标签的组名:默认组的存储名是 "default",
     // 展示层要翻成「默认组」,与组头标题同一口径。
     property <string> drop-here-label:
         root.drop-here-group == "default" ? @tr("Default group") : root.drop-here-group;
-    // (#group-drag-reorder 2026-09-06) 组头拖动排序:跟手浮起,松手按方向
-    // 相邻换位(阈值 ±20px,一次一位;Rust 维护 explicit groups 顺序)。
+    // (#ghost-geom-freeze 2026-09-11) ghost 几何冻结的**全局信号**:任一组成头
+    // 与 ghost 矩形相交时把自己的组名写进来(离开即清,写入者标记防误清)。
+    // drop-report 据此拒绝"换组"上报 → 落点快照保持上一个有效值,即原型
+    // "D.slot 在冻结期不变"。这是核查稿 §3.3/§3.4 唯一认可的防抖机制,
+    // 取代此前的 ±3px 指针死区。
+    in-out property <string> ghost-crossing-head: "";
+    // (#group-drag-reorder 2026-09-06 → #group-sort-line-r2 2026-09-11) 组头
+    // 拖动排序:被拖组只半透明(不搬动),落点由**组间插入线**表达,松手按
+    // round(dy/pitch) 换位(Rust 维护 explicit groups 顺序)。
+    // (#spine-src-tail / #spine-src-slot 2026-09-11) 被拖行的"组尾 / 组内索引"。
+    // 拖起时由被拖行经 report-src 回调上抛(唯一写入点)。供源组段间隙与槽位接替
+    // 判定复用:见 SessionRow 的 seg-tail / seg-take-over。
+    property <bool> drag-src-tail: false;
+    property <int> drag-src-index: -1;
     property <bool> group-dragging: false;
     property <string> group-drag-id: "";
     property <length> group-dy: 0px;
-    callback reorder-group(string /* group */, int /* dir */);
+    // (#group-sort-line-r2) 组排序插入线的 y(列表内容坐标)。只有**被指针
+    // 压住上半区的可排序组头**会写它(见组头 insert-here),全列表一条线;
+    // -1000px = 尚无落点(拖动启动时重置,指针还没压到任何组间间隙)。
+    property <length> group-insert-y: -1000px;
+    // 线当前落点所在的目标组名:松手时 reorder-group(被拖组, 它) —— 提交
+    // 与线同源,不会出现"线在 A 前、松手落在 B 前"。
+    property <string> group-insert-group: "";
+    // (#group-sort-line-r2 2026-09-11) 第 2 参从"格数位移 dir"改为**目标组名**:
+    // 线画在哪个组头之前,松手就移到那个组之前 —— 提交与视觉同源。
+    callback reorder-group(string /* group */, string /* before-group */);
     callback new-session();
     callback move-session-to(string /* session-id */, string /* target-id */, bool /* after */);   // (#drag-ghost-pointer) 几何落位转发 AppWindow
     callback import-ssh-config();
@@ -844,7 +1130,7 @@ export component Welcome inherits Rectangle {
     //   出组(out):成员【底边】离开本组组名上边(ghost 完全高于组头壳)
     //     → ghost 组别样式 + accent 蓝框,组名蓝框灭;松手移出分组。
     //   入组:上移碰到上一组最后成员(展开,行命中接管,走组内规则)或
-    //     上一组组名(折叠,gh-overlap 进组第一位)→ 两态解除。
+    //     上一组组名(折叠,gh-overlap 进该组)→ 两态解除。
     // owner 模式规避多组头实例 changed 触发顺序不可靠的老坑。
     property <bool> drop-over-out: false;
     property <string> drop-over-out-owner: "";
@@ -930,10 +1216,16 @@ export component Welcome inherits Rectangle {
         }
     }
     // (#group-head-directional 2026-09-08) ghost 与组头行接触(上移顶边压住
-    // 组头 / 下移底边接触组头)或已越过组头行 = 进该组第一位。由 gh-shell
+    // 组头 / 下移底边接触组头)或已越过组头行 = 进该组(展开组第 1 位、
+    // 折叠组末尾)。由 gh-shell
     // 的 gh-overlap / gh-enter 几何判定上报(owner 模式)。
     property <string> drop-over-group: "";
     property <string> drop-over-group-owner: "";
+    // (#folded-head-into-end 2026-09-11) 组头命中时的落点位次(纯显示,喂 ghost
+    // 右侧 pill):展开组 / 空组 = 第 1 位;折叠组 = 末尾(group-size + 1)。
+    // **真实落点由 Rust 按实时折叠态决定**(见 config::move_session_to_group_top):
+    // 提交侧不传 index,所以 dwell 展开重建行模型后的快照滞后无害。
+    property <int> drop-over-pos: 1;
     // (#group-drag-collapse 2026-09-08) 拖起自动折叠:组头拖动启动时记录
     // 被拖组名,该组成员行在拖拽期间隐藏(组视觉折叠为一行)——展开大组
     // 与折叠组获得统一的行级换位手感(VS Code 拖文件夹同款);松手/取消
@@ -988,7 +1280,9 @@ export component Welcome inherits Rectangle {
     callback remove-session(string);
     // (#drag-tail-drop-r2 2026-09-07) 顶部越界落位,目标由 Rust 端计算。
     callback move-session-to-start(string);
-    // (#group-head-directional 2026-09-08) 进该组第一位;空组直接改组。
+    // (#group-head-directional 2026-09-08) 进该组:展开组 = 第 1 位,折叠组 =
+    // 末尾(折叠态由 Rust 侧实时判定,避免 Slint 快照在 dwell 展开后失效);
+    // 空组无成员,首/末位等价,直接改组字段。
     callback move-session-to-group-top(string /* id */, string /* group */);
     // (#drag-ungroup-pop) 移出分组:group 清空,挪到未分组平铺区。
     callback move-session-ungroup(string);
@@ -1418,6 +1712,12 @@ export component Welcome inherits Rectangle {
                     // 变——"首尾粘住""长列表拖不到位"的公共根因。
                     property <length> drag-pointer-y:
                         root.drag-origin-y + root.drag-dy + root.drag-scroll-dy;
+                    // (#ghost-follow-x-r2 2026-09-11) 指针 x(**列表内容坐标**):
+                    // 行/组头上报的是窗口绝对 x,这里减去列表自身绝对 x。列表无
+                    // 横向滚动,故不需要 origin/scroll 补偿(纵向仍走上面那条,
+                    // 因为它要跨 viewport 换算)。
+                    property <length> drag-pointer-x:
+                        root.drag-dx - self.absolute-position.x;
                     // 显示钳制:内容区 (#slot-y-deferred-r2 2026-09-07)。
                     // r4 曾把上限改成可视高度 self.height——但指针坐标是内容
                     // 坐标,列表滚动过内容远大于可视区:从上往下拖进下半部分
@@ -1429,9 +1729,10 @@ export component Welcome inherits Rectangle {
                     // 卡原钳制上限是"sess-list 内容底 - 卡高",而底部越界
                     // (over-ungroup)判定恰好在指针到达该上限时翻转——蓝框
                     // 一亮卡片就停住,观感"到底了不许再动"。出组判定为真后
-                    // 不再钳制,卡片继续跟手滑出列表底部(由 list-host clip
-                    // 自然裁切),"滑出列表"本身就对应"移出分组"的语义;
-                    // 非出组态保持原钳制,拖不出边界。
+                    // 不再钳制,卡片继续跟手滑出列表底部,"滑出列表"本身就对应
+                    // "移出分组"的语义;(#ghost-panel-overlay 2026-09-11) ghost
+                    // 已移出 flick、list-host 不再裁切 → 滑出列表边界后卡片仍
+                    // **完整可见**,浮于面板之上(不再被切掉一截)。
                     // (#ghost-panel-bound 2026-09-07) 钳制到面板可视边界:
                     // 可视顶内容坐标 = -viewport-y(viewport-y ≤ 0),可视底 =
                     // -viewport-y + flick.height;再与内容底取小,列表短于面板
@@ -1444,27 +1745,35 @@ export component Welcome inherits Rectangle {
                     property <length> ghost-y: clamp(
                         self.drag-pointer-y,
                         max(0px, -flick.viewport-y),
-                        max(max(0px, -flick.viewport-y),
-                            // (#ghost-bottom-limit 2026-09-08) 下移最低限 =
-                            // 面板可视底:出组态钳制上限改为可视底(ghost 底
-                            // 贴面板底),不再受内容底限制、不再探出半格
-                            // (r2 的"滑出半格"用户实测后定稿取消——最低限
-                            // 就是面板底部)。非出组态保持 min(可视底, 内容底)。
-                            (root.drop-over-ungroup
-                                ? -flick.viewport-y + flick.height
-                                : min(-flick.viewport-y + flick.height, sess-list.preferred-height))
-                            - self.ghost-h));
+                        // (#ghost-follow-anywhere 2026-09-11) 下限改为**可视区底**:
+                        // 原来非出组态取 min(可视底, 内容底),内容比面板短时
+                        // ghost 在最后一行下方就停住不再跟指针 —— 这正是用户
+                        // 反馈的"拖动不跟手"(拖到底部附近卡片不走了)。现在
+                        // 与出组态统一:只受面板可视底约束,卡片全程贴指针。
+                        max(0px, -flick.viewport-y + flick.height) - self.ghost-h);
                     x: 16px;
                     y: root.compact ? 128px : 90px;
                     width: parent.width - 32px;
                     height: parent.height - (root.compact ? 144px : 106px);
-                    clip: true;
+                    // (#ghost-panel-overlay 2026-09-11) 裁切职责下移到 flick:
+                    // list-host 不再 clip,ghost 卡才能越出列表边界浮到面板上
+                    // (滚动内容仍由 flick 裁,互不影响)。
                     // (#session-scrollbar 2026-09-05) std ScrollView 的原生滚动
                     // 条与全局自绘细条(终端那套)风格不一致;改为 Flickable +
                     // 自绘 4px overlay 细条。interactive 必须关:interactive 的
                     // Flickable 会延迟子元素 press 并在移动 8px 后抢走手势,成
                     // 员行的拖拽重排会被误判成滚动(tabs.slint #408 同款结论);
                     // 关闭后滚轮/触控板滚动仍由 Flickable 处理,拖滚动条走自绘。
+                    // (#ghost-panel-overlay 2026-09-11) Slint 的 clip 只能加在
+                    // Rectangle / Path 上(Flickable 不支持),故用同尺寸的裁剪层包住
+                    // flick:滚动溢出仍被裁,而 ghost 卡在层之外,可越出列表边界浮到
+                    // 面板上。层内坐标与原先完全等价(flick 本就在 0,0)。
+                    flick-clip := Rectangle {
+                        x: 0px;
+                        y: 0px;
+                        width: parent.width;
+                        height: parent.height;
+                        clip: true;
                     flick := Flickable {
                         interactive: false;
                         viewport-width: self.width;
@@ -1487,7 +1796,8 @@ export component Welcome inherits Rectangle {
                         // (#session-tree-hierarchy-r5 2026-09-05) 间距恒定 8px:
                         // r3 的"折叠 4px/展开 12px"自适应会随点击收展跳变,导致
                         // 点击的组自身上下位移(用户反馈);固定值消除跳变。
-                        padding-top: self.visible && session.group-header != "" && i > 0 ? 8px : 0px;
+                        // (#density) 组间距 8→6:与收紧后的行高成比例。
+                        padding-top: self.visible && session.group-header != "" && i > 0 ? 6px : 0px;
                         spacing: 2px;
                         // Group header on the first row of each group (#41).
                         // Click anywhere on it to collapse / expand the group.
@@ -1507,7 +1817,12 @@ export component Welcome inherits Rectangle {
                             // 派发,拖拽中恒有效。
                             // gh-slot-y 必须走 changed 写入(同 srow.slot-y):
                             // init 期读自身几何会触发 Recursion panic(6e245ea)。
-                            property <bool> drag-live: root.list-dragging;
+                            // (#group-sort-line-r2 2026-09-11) drag-live 扩到
+                            // 组拖动:插入线的 insert-here 判定依赖 gh-slot-y,
+                            // 组拖动时 list-dragging 恒 false,不扩则读到的是
+                            // 上次成员拖动的残留槽位、线的落点整体错位。
+                            property <bool> drag-live:
+                                root.list-dragging || root.group-dragging;
                             // (#slot-y-deferred-r3) 同步写入,同 srow 侧结论:
                             // Timer 延迟模式在 slint 1.8 不触发,回到稳定模式。
                             changed drag-live => {
@@ -1534,7 +1849,15 @@ export component Welcome inherits Rectangle {
                                 // 才下移一格并【保持】,回落(入组)才归 0。
                                 : session.group == root.drag-group
                                     ? ((list-host.drag-pointer-y < root.drag-origin-y
-                                            && list-host.drag-pointer-y <= self.gh-slot-y + 38px)
+                                            // (#src-group-yield 2026-09-11) 阈值从
+                                            // "组头下边(+32)"对齐到**首成员行中线**
+                                            // (+32 头高 + 2 间距 + 15 半行高 = 49):
+                                            // 两者错开 15px 时,组名先下移、成员与竖线
+                                            // 慢一拍跟上 —— 用户实测"拖出的组应该和
+                                            // 组名一起下移"。对齐后组头与首成员同帧
+                                            // 让位,剩下的成员依次级联(正常 FLIP)。
+                                            && list-host.drag-pointer-y
+                                                <= self.gh-slot-y + 49px)
                                         ? root.drag-pitch : 0px)
                                 // (#pending-group-yield r4) 异组组头让位与成员行同向
                                 // 同幅:
@@ -1547,10 +1870,16 @@ export component Welcome inherits Rectangle {
                                 //   → 组名下移一格让位。
                                 : self.gh-slot-y > root.drag-origin-y
                                     && list-host.drag-pointer-y > root.drag-origin-y
-                                    && list-host.drag-pointer-y > self.gh-slot-y - ((root.drag-pitch - 2px) / 2)
+                                    // (#cross-group-yield 2026-09-11) 触发基准改成
+                                    // **ghost 底边越过组头下边**:用户定稿"ghost 底部
+                                    // 离开组头的下边,组头才会发生移动"。原用"指针
+                                    // 越过组头中线"(- half),ghost 还压在组名上时组名
+                                    // 就先跑了,观感是"组名躲 ghost"。
+                                    && self.ghost-bottom > self.gh-slot-y + 32px
                                     ? -(root.drag-pitch)
                                 : self.gh-slot-y < root.drag-origin-y
-                                    && list-host.drag-pointer-y < self.gh-slot-y + ((root.drag-pitch - 2px) / 2)
+                                    // 上移对称:ghost 顶边(= 指针)离开组头上边才让位。
+                                    && list-host.drag-pointer-y < self.gh-slot-y
                                     ? root.drag-pitch
                                 : 0px;
                             // (#group-head-directional 2026-09-08) 旧 gh-hit
@@ -1574,7 +1903,7 @@ export component Welcome inherits Rectangle {
                             //      (底 <= slot):出组 → ghost 组别样式 + accent
                             //      蓝框,组名蓝框灭;松手移出分组。
                             //   ④ gh-enter 底 ∈ [slot+76, slot+114) 且下移且
-                            //      异组:进组过渡,松手 = 进该组第一位。
+                            //      异组:进组过渡,松手 = 进该组。
                             //   入组接管:展开组 = 成员行命中(drop-report)写
                             //   drag-drop-group 并清 pending/out;折叠组 =
                             //   gh-overlap(异组)。组间空隙保持出组态。
@@ -1617,15 +1946,42 @@ export component Welcome inherits Rectangle {
                                 root.list-dragging && root.drag-id != ""
                                 && !root.drag-fly-home
                                 && root.drag-group != session.group
-                                // (#current-group 2026-09-10) 当前所处的组不参与
-                                // "进组第一位":ghost 已在该组内,压它的组名属于
-                                // "待出组/出组"的地盘(见 gh-out-pending / gh-out)。
-                                && session.group != root.drag-current-group
                                 // (#system-group-frozen 2026-09-08) 保留组
                                 // (本地终端)整体冻结:组头不作进组目标。
                                 && !session.builtin
-                                && self.ghost-bottom > self.gh-slot-y
-                                && self.ghost-bottom < self.gh-slot-y + 40px;
+                                // (#folded-head-into-end 2026-09-11) 组头命中按
+                                // 折叠态分两种几何(核查稿 §3.1 区带表):
+                                //  · **折叠组 = 指针点落在组头块内**。必须用
+                                //    指针点而非 ghost 几何 —— 折叠组没有成员行
+                                //    可命中,ghost 前导边一进入组头就把本组置为
+                                //    drag-current-group,而展开分支的"异组"条件
+                                //    会因此把它排除,下移方向压根没有落点(上移
+                                //    也只剩组头上方 30px 的窄窗)。改指针点后上
+                                //    移/下移对称,与交互原型 resolveSession 的
+                                //    `y ∈ [组头top, 组头bottom)` 完全同源。
+                                //  · **展开组 / 空组 = ghost 底缘压在组头上**
+                                //    (原逻辑)。当前所处的组不参与("进组第一位"
+                                //    是 ghost 已在组内时的事,属于待出组/出组的
+                                //    地盘,见 gh-out-pending / gh-out);**空组
+                                //    例外** —— 空组没有成员行可命中,ghost 悬在
+                                //    它的组头/占位行上时它必然就是 drag-current-
+                                //    group,若照旧排除则空组永远没有落点。
+                                && (session.collapsed
+                                    ? (list-host.drag-pointer-y >= self.gh-slot-y
+                                        && list-host.drag-pointer-y
+                                            < self.gh-slot-y + 32px)
+                                    : ((session.group-size == 0
+                                            || session.group != root.drag-current-group)
+                                        && self.ghost-bottom > self.gh-slot-y
+                                        // (#empty-group-droppable 2026-09-11)
+                                        // **空组**命中带扩到"组头 + 空分组占位
+                                        // 行":空组没有成员行可命中,旧带只有
+                                        // 40px,指针落到"空分组"占位提示上时
+                                        // 目标丢失、回落到上一行的落点。非空组
+                                        // 保持 34px(不含成员区,避免与行命中
+                                        // 争用)。
+                                        && self.ghost-bottom < self.gh-slot-y
+                                            + (session.group-size == 0 ? 56px : 34px)));
                             // (#gh-out-group-gate → #current-group 2026-09-10)
                             // 待出组/出组只属于【ghost 当前所处的组】的组头实例。
                             // 历史:曾按本组(drag-group)门控,因为 gh-out 的
@@ -1642,6 +1998,17 @@ export component Welcome inherits Rectangle {
                                 && !root.drag-fly-home
                                 && session.group == root.drag-current-group
                                 && !root.drag-in-member-mode
+                                // (#empty-group-droppable-r2) 空组没有成员可
+                                // "待出/出":它是纯落点(gh-overlap 已放行),若
+                                // 仍参与两态会凭空亮出组名蓝框/幽灵描边。
+                                && session.group-size > 0
+                                // (#folded-head-into-end 2026-09-11) 折叠组不参与
+                                // 两态:它的成员不可见,ghost 悬在组头上时本组会被
+                                // 置为 drag-current-group,若照旧判定会凭空亮出
+                                // "松手回原位"的组名蓝框(用户是从别的组拖来的,
+                                // 谈不上"回原位")。折叠组只作落点 —— 按住即展开、
+                                // 快速松手则落该组末尾。
+                                && !session.collapsed
                                 // (#first-group-no-pending 2026-09-10) 列表最顶的
                                 // 具名组跳过"待出组":其上方没有任何可进入的组,
                                 // 上移不经 pending(组名亮蓝框 / 松手回原位),直接
@@ -1649,11 +2016,12 @@ export component Welcome inherits Rectangle {
                                 && !session.first-group
                                 && self.moving-up
                                 // (#pending-deadzone 2026-09-09) 上界对齐首成员
-                                // 行顶(slot+40=组头 38 + 行间距 2):原 38px 与
-                                // 行命中带之间留 2px 死区,ghost 顶刚接触组名下
+                                // 行顶(slot+34 = 组头 32 + 行间距 2;组头高经
+                                // #density 由 38 收紧到 32):原上界 38px 与行
+                                // 命中带之间留 2px 死区,ghost 顶刚接触组名下
                                 // 边时 pending 不亮、行也未命中(无状态抖动)。
                                 // 与行命中重叠部分由 drag-in-member-mode 抑制。
-                                && list-host.drag-pointer-y < self.gh-slot-y + 40px
+                                && list-host.drag-pointer-y < self.gh-slot-y + 34px
                                 && self.ghost-bottom > self.gh-slot-y;
                             property <bool> gh-out:
                                 root.list-dragging && root.drag-id != ""
@@ -1665,6 +2033,13 @@ export component Welcome inherits Rectangle {
                                 // current 切换到上一组 → 出组态自然交棒(用户定稿)。
                                 && session.group == root.drag-current-group
                                 && !root.drag-in-member-mode
+                                // (#empty-group-droppable-r2) 同 pending:空组不
+                                // 参与两态(没有成员可离开)。
+                                && session.group-size > 0
+                                // (#folded-head-into-end 2026-09-11) 同 pending:
+                                // 折叠组没有可见成员,不存在"ghost 底离开组名上边"
+                                // 这回事(它只作落点)。
+                                && !session.collapsed
                                 && self.moving-up
                                 && self.ghost-bottom <= self.gh-slot-y;
                             property <bool> gh-enter:
@@ -1673,12 +2048,26 @@ export component Welcome inherits Rectangle {
                                 && list-host.drag-pointer-y > root.drag-origin-y
                                 && root.drag-group != session.group
                                 && !session.builtin
-                                && self.ghost-bottom >= self.gh-slot-y + 76px
-                                && self.ghost-bottom < self.gh-slot-y + 114px;
+                                // (#folded-head-into-end 2026-09-11) 折叠组不走
+                                // 此路:它没有可见成员行,gh-enter 的 ghost-bottom
+                                // ∈ [slot+64, slot+96)(组头底下方 32~64px)在折叠组
+                                // 上压的其实是"下方成员区 / 下一个组";且因
+                                // ghost-bottom = 指针 + (pitch - 2) = 指针 + 38,
+                                // 它与 gh-overlap 的折叠分支(指针 ∈ 组头块)有
+                                // 6px 几何重叠,重叠区两个 changed 会争写
+                                // drop-over-pos(pill 位次闪成 1)。折叠组只走
+                                // gh-overlap 的指针判定。
+                                && !session.collapsed
+                                && self.ghost-bottom >= self.gh-slot-y + 64px
+                                && self.ghost-bottom < self.gh-slot-y + 96px;
                             changed gh-overlap => {
                                 if (self.gh-overlap) {
                                     root.drop-over-group = session.group;
                                     root.drop-over-group-owner = session.group;
+                                    // (#folded-head-into-end 2026-09-11) 折叠组 =
+                                    // 末尾位次,展开组 / 空组 = 第 1 位。
+                                    root.drop-over-pos =
+                                        session.collapsed ? session.group-size + 1 : 1;
                                 } else if (root.drop-over-group-owner == session.group
                                     && !self.gh-enter) {
                                     root.drop-over-group = "";
@@ -1689,6 +2078,9 @@ export component Welcome inherits Rectangle {
                                 if (self.gh-enter) {
                                     root.drop-over-group = session.group;
                                     root.drop-over-group-owner = session.group;
+                                    // (#folded-head-into-end 2026-09-11) gh-enter
+                                    // 只命中展开组(落第 1 位),位次复位。
+                                    root.drop-over-pos = 1;
                                 } else if (root.drop-over-group-owner == session.group
                                     && !self.gh-overlap) {
                                     root.drop-over-group = "";
@@ -1736,7 +2128,21 @@ export component Welcome inherits Rectangle {
                                 // 列表"而不是"停留",不停下就展开会把沿途每个
                                 // 折叠组都弹开(原型同款规则)。
                                 interval: 150ms;
-                                running: parent.gh-overlap && session.collapsed
+                                // (#dwell-edge-group 2026-09-11) 首/尾组额外军规:
+                                // 列表最顶的组,指针退到它组名上方(over-head 区)
+                                // 也触发展开;列表最底的组,指针越过它组名下边
+                                // (over-ungroup 区)也触发展开——否则折叠时它在
+                                // 首/尾没有"组间间隙"可停,永远展不开,落不进
+                                // 第一位(用户定稿"最后一组就算未展开,超过最后
+                                // 一个成员的位置也要触发展开;上移同理")。
+                                property <bool> at-edge-zone:
+                                    (i == 0
+                                        && list-host.drag-pointer-y < gh-shell.gh-slot-y)
+                                    || (i == sessions.length - 1
+                                        && list-host.drag-pointer-y
+                                            >= gh-shell.gh-slot-y + 32px);
+                                running: (parent.gh-overlap || self.at-edge-zone)
+                                    && session.collapsed
                                     && flick.edge-step == 0px;
                                 triggered => {
                                     // (#dwell-collapse) 记下"拖拽临时展开的组",
@@ -1745,39 +2151,51 @@ export component Welcome inherits Rectangle {
                                     root.drag-expanded-group = session.group;
                                 }
                             }
-                            height: 38px;
-                            // (#group-sort-line 2026-09-10) 组排序**插入线**:
-                            // 2px 主题色 + 两端圆点,画在**组与组之间的 8px 间隙**
-                            // 里(不是行边)。位置吸附到整格:
-                            //   round(dy / pitch) * pitch - 4px
-                            // —— 吸附值就是松手时提交的换位数(同一个 round),
-                            // 所见即所得;`-4px` 让线落在行顶上方的间隙中点,
-                            // 与组头卡片脱开,避开 femtovg 邻接重绘的 1px 闪烁
-                            // (spec §8:插入线不要贴行边画)。
-                            // 只在【被拖的那一行】上渲染 → 全列表天然只有一条;
-                            // 不可排序组(builtin / 默认组)不参与。
-                            if root.group-dragging && !root.drag-fly-home
-                                    && session.group == root.group-drag-id
-                                    && !session.builtin
-                                    && session.group != "default" : Rectangle {
-                                y: Math.round(root.group-dy / root.drag-pitch)
-                                    * root.drag-pitch - 4px;
-                                x: 6px;
-                                width: parent.width - 12px;
-                                height: 2px;
-                                border-radius: 1px;
-                                background: Theme.accent-solid;
-                                Rectangle {
-                                    x: -3px; y: -2px;
-                                    width: 6px; height: 6px;
-                                    border-radius: 3px;
-                                    background: Theme.accent-solid;
+                            // (#density) 组头 38→32,与成员行同比例收紧。
+                            height: 32px;
+                            // (#group-sort-line-r2 2026-09-11) 组排序**插入线**的
+                            // 落点上报:2px 主题色 + 两端圆点,画在**组与组之间的
+                            // 间隙**里 —— 绝不落进组内成员区(用户定稿)。
+                            // 判定改"谁被压谁上报":指针落在【本组头顶上方间隙
+                            // ~ 本组头中线】= 插入点在本组之前,本行把线的 y
+                            // (内容坐标)报给 Welcome,由列表级统一画,全列表
+                            // 天然只有一条。指针移到成员区时**保持**最后的组间
+                            // 落点(false 不清,换手即覆盖)。r1 在被拖组行内按
+                            // round(dy/pitch) 吸附,组高不等时格位数会落进成员
+                            // 区,已退役。`-4px` 让线悬在行顶上方的间隙中点,
+                            // 与组头卡片脱开,避开 femtovg 贴边重绘闪烁(§8)。
+                            property <bool> insert-here:
+                                root.group-dragging && !root.drag-fly-home
+                                && !session.builtin && session.group != "default"
+                                && session.group != root.group-drag-id
+                                && list-host.drag-pointer-y >= self.gh-slot-y - 12px
+                                && list-host.drag-pointer-y < self.gh-slot-y + 16px;
+                            changed insert-here => {
+                                if (self.insert-here) {
+                                    root.group-insert-y = self.gh-slot-y - 4px;
+                                    root.group-insert-group = session.group;
                                 }
-                                Rectangle {
-                                    x: parent.width - 3px; y: -2px;
-                                    width: 6px; height: 6px;
-                                    border-radius: 3px;
-                                    background: Theme.accent-solid;
+                            }
+                            // (#ghost-geom-freeze 2026-09-11) ghost 矩形与本组头
+                            // 【相交】= 原型 ghostHitsGroupHead 的单组照搬:
+                            //   ghost 底 > 组头顶  &&  ghost 顶 < 组头底
+                            // (ghost 顶 = 指针,ghost 底 = 指针 + 卡高 = ghost-bottom;
+                            //  组头高 32px,与 #density 收紧后一致)。相交期间把本组名
+                            // 写进 Welcome 级全局信号,drop-report 据此拒绝换组 →
+                            // 落点原地不动。宽度 = 组头高,随密度自然变化。
+                            // 写入者标记防误清:只有信号仍指向本组才允许清空,
+                            // 多组成头交叠/换手时旧组不会把新组刚写入的值抹掉。
+                            property <bool> ghost-crossing:
+                                root.list-dragging && root.drag-id != ""
+                                && !root.drag-fly-home
+                                && !session.builtin
+                                && self.ghost-bottom > self.gh-slot-y
+                                && list-host.drag-pointer-y < self.gh-slot-y + 32px;
+                            changed ghost-crossing => {
+                                if (self.ghost-crossing) {
+                                    root.ghost-crossing-head = session.group;
+                                } else if (root.ghost-crossing-head == session.group) {
+                                    root.ghost-crossing-head = "";
                                 }
                             }
                             gh-card := Rectangle {
@@ -1801,7 +2219,11 @@ export component Welcome inherits Rectangle {
                                 animate y { duration: root.drag-fly-home ? 180ms
                                     : (root.group-dragging ? 0ms : 140ms);
                                     easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
-                                opacity: root.group-dragging && session.group == root.group-drag-id ? 0.92 : 1.0;
+                                // (#group-drag-dim 2026-09-11) 被拖组头压到 0.4:
+                                // 它不搬动(设计:落点靠插入线表达),若仍接近不
+                                // 透明,用户就看不出"哪个组正在被拖"。0.4 + 浮起
+                                // 阴影 = "正在搬它、但它留在原位"的唯一视觉信号。
+                                opacity: root.group-dragging && session.group == root.group-drag-id ? 0.4 : 1.0;
                                 border-radius: Theme.radius-sm;
                                 // (#drag-group-head-pop-r2 2026-09-07) 组头命中
                                 // 样式收敛:accent 描边 + 淡底 + 浮起阴影,与
@@ -1851,13 +2273,17 @@ export component Welcome inherits Rectangle {
                                     : (root.group-dragging && session.group == root.group-drag-id ? #00000060 : transparent);
                             // (#ctx-menu-backdrop 2026-09-08) 右键菜单迁往
                             // AppWindow 根集中浮层,组头仅在上报状态。
-                            // 拖动手势状态(本组头局部):按下 y / 是否拖动。
+                            // 拖动手势状态(本组头局部):按下 x/y / 是否拖动。
+                            // (#drag-threshold-omni 2026-09-11) 补 x 基准:
+                            // 阈值改任意方向 5px(对齐设计 §1②),需要 dx。
+                            property <length> g-press-x: 0px;
                             property <length> g-press-y: 0px;
                             property <bool> g-was-drag: false;
                             // TouchArea 前置声明:后面的 Text 引用它的 hover 态
                             // (Slint 不允许向前引用 id)。
                             grp-ta := TouchArea {
-                                mouse-cursor: root.group-dragging ? move : pointer;
+                                // (#ghost-anchor) 组头拖动中同样用闭手。
+                                mouse-cursor: root.group-dragging ? grabbing : pointer;
                                 // (#tree-line-hover 2026-09-10) 组头是"这组的把
                                 // 手":悬停组头同样点亮本组整条脊线,与悬停组
                                 // 内任一成员给出一致的归属反馈。撤销条件与成
@@ -1885,6 +2311,7 @@ export component Welcome inherits Rectangle {
                                 }
                                 pointer-event(e) => {
                                     if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                                        parent.g-press-x = self.mouse-x;
                                         parent.g-press-y = self.mouse-y;
                                         parent.g-was-drag = false;
                                     } else if (e.kind == PointerEventKind.up && e.button == PointerEventButton.left) {
@@ -1899,8 +2326,12 @@ export component Welcome inherits Rectangle {
                                             // 行级多位换位——折叠后组头等高一
                                             // 行,每越一行移一位,一次可跨多行;
                                             // Rust 端 clamp 越界。
+                                            // (#group-sort-line-r2) 提交与插入线
+                                            // 同源:线画在哪个组之前,就移到那个
+                                            // 组之前;没压到任何组间间隙 → 传空 =
+                                            // Rust 侧 no-op,回原位。
                                             root.reorder-group(session.group,
-                                                Math.clamp(Math.round(root.group-dy / root.drag-pitch), -20, 20));
+                                                root.group-insert-group);
                                             root.group-dragging = false;
                                             root.group-drag-id = "";
                                             root.group-dy = 0px;
@@ -1965,13 +2396,44 @@ export component Welcome inherits Rectangle {
                                     // 且不在 explicit groups 里 —— reorder_group
                                     // 找不到它,拖起只会得到"拖了却没变化"的
                                     // 假反馈,直接禁拖(用户定稿:不参与组排序)。
+                                    // (#drag-threshold-omni 2026-09-11) 任意方向
+                                    // 位移 > 5px 即拖起(对齐设计 §1②),不再只看纵向。
                                     if (self.pressed && !root.group-dragging
                                             && !session.builtin
                                             && session.group != "default"
-                                            && abs(self.mouse-y - parent.g-press-y) > 5px) {
+                                            && Math.sqrt(
+                                                ((self.mouse-x - parent.g-press-x) / 1px) * ((self.mouse-x - parent.g-press-x) / 1px)
+                                                + ((self.mouse-y - parent.g-press-y) / 1px) * ((self.mouse-y - parent.g-press-y) / 1px)
+                                            ) * 1px > 5px) {
                                         root.group-dragging = true;
                                         root.group-drag-id = session.group;
                                         root.group-dy = 0px;
+                                        // (#group-sort-line-r2) 拖起**即有线**:
+                                        // 默认落在自己原位之前,用户第一眼就有
+                                        // 落点基准,不会出现"拖起来光秃秃"。
+                                        root.group-insert-y = gh-shell.gh-slot-y - 4px;
+                                        root.group-insert-group = session.group;
+                                        // (#ghost-follow-x) 组 ghost 卡内容:显示
+                                        // 组名(设计图1),无主机副行、无连接圆点。
+                                        // 纵向基准 = 被拖组头的**内容坐标 y**(与成员
+                                        // 拖动同款):ghost-y = origin + dy 才落在指针
+                                        // 附近。⚠️ 不能设 0 —— 那会让 ghost-y 退化成
+                                        // "纯相对位移",再被 clamp 到列表顶,卡片直接
+                                        // 飞到最上面(实测 bug)。
+                                        root.drag-origin-y = gh-shell.gh-slot-y;
+                                        // (#ghost-follow-x-r2) 起手即写**窗口绝对 x**
+                                        // (与成员行同口径),否则 x 会先按 0 算一帧、
+                                        // 卡片闪到列表最左。
+                                        root.drag-dx = self.absolute-position.x + self.mouse-x;
+                                        root.drag-dy = 0px;
+                                        // (#ghost-anchor) 组 ghost 也要补抓取点偏移
+                                        // (按下处距组头顶的距离),否则卡片比指针高
+                                        // 一个抓取偏移 = "组别抓起的 ghost 不跟手"。
+                                        root.drag-grab-y = parent.g-press-y;
+                                        root.drag-name = session.group-header;
+                                        root.drag-host = "";
+                                        root.drag-conn = 0;
+                                        root.drag-builtin = session.builtin;
                                         // (#group-drag-collapse 2026-09-08) 拖起
                                         // 自动折叠:把被拖组收起来,组头之间距离
                                         // 就统一成一行,"拖过几格 = 换几位"才成立
@@ -1981,6 +2443,13 @@ export component Welcome inherits Rectangle {
                                     }
                                     if (root.group-dragging && session.group == root.group-drag-id) {
                                         root.group-dy = self.mouse-y - parent.g-press-y;
+                                        // (#ghost-follow-x-r2) 组 ghost 卡跟手:组头
+                                        // 不是 SessionRow(没有 drag-out-* 上报通道),
+                                        // 直接写 Welcome —— 同成员行口径上报**窗口
+                                        // 绝对 x**(self = grp-ta,其绝对位置 + 行内
+                                        // 指针 x)。
+                                        root.drag-dx = self.absolute-position.x + self.mouse-x;
+                                        root.drag-dy = self.mouse-y - parent.g-press-y;
                                     }
                                 }
                             }
@@ -2090,32 +2559,28 @@ export component Welcome inherits Rectangle {
                                 VerticalLayout {
                                     alignment: center;
                                     Rectangle {
-                                        // (#badge-preview 2026-09-10) 落点预览:
-                                        // 有成员将落入本组时,徽章写成 `3 → 4`
-                                        // 并用主题色点亮(对齐交互原型)——
-                                        // 松手之前就能确认"这组会多一个"。
-                                        property <bool> preview:
-                                            root.drop-here-group == session.group;
+                                        // (#badge-plain 2026-09-11) 去掉落点预览:
+                                        // 原来拖拽中把徽章改写成 `5 → 6` 并转主题色
+                                        // (对齐原型),但——① 组内拖动时数量根本不变,
+                                        // 显示"会多一个"是错的(用户实测"展示的也不
+                                        // 准确");② 那个箭头标识本身也被要求去掉。
+                                        // 现在徽章恒为**本组成员数**,不再随拖动变化,
+                                        // 主题色预览一并退役。
                                         height: 16px;
                                         width: num.preferred-width + 12px;
                                         border-radius: 8px;
-                                        background: self.preview ? Theme.accent-solid
-                                            : ((grp-ta.has-hover
+                                        background: (grp-ta.has-hover
                                                 || root.ctx-open-key == "hdr:" + session.group-header)
-                                                ? Theme.bg-active : Theme.bg-elevated);
+                                                ? Theme.bg-active : Theme.bg-elevated;
                                         animate background { duration: 120ms; }
                                         num := Text {
                                             x: 6px;
                                             height: parent.height;
-                                            text: parent.preview
-                                                ? "\{session.group-size} → \{session.group-size + 1}"
-                                                : "\{session.group-size}";
+                                            text: "\{session.group-size}";
                                             // 数字用等宽字体:行盒比 CJK UI 字
                                             // 体小得多,宽度也可预测。
                                             font-family: Theme.font-mono;
-                                            // (#badge-preview) 预览时徽章是主题色
-                                            // 实底,文字随之翻白。
-                                            color: parent.preview ? #ffffff : Theme.text-secondary;
+                                            color: Theme.text-secondary;
                                             font-size: Theme.fs-xs;
                                             vertical-alignment: center;
                                             y: 1px;
@@ -2149,7 +2614,10 @@ export component Welcome inherits Rectangle {
                             // 不能设 y(VL 拥有位置),由本层承载几何、内部 srow
                             // 用 y 偏移绘制。clip 关掉:位移出界时溢出绘制盖住
                             // 邻行,正是让位效果。缩进沿用原 srow 块。
-                            height: root.compact ? 38px : 36px;
+                            // (#density 2026-09-11) 行高收紧 36→30(窄栏 38→32):36/38px 配 13px 字号
+    // 显得空旷(用户反馈),30/32 更接近设计稿的紧凑列表观感,同时保留
+    // "桌面端比 28px 宽松一档"的可点性。drag-pitch = 本高 + 2 自动跟随。
+    height: root.compact ? 32px : 30px;
                             clip: false;
                             srow := SessionRow {
                                 width: parent.width;
@@ -2177,6 +2645,16 @@ export component Welcome inherits Rectangle {
                             // 本行内容坐标 y(与 sess-list 同为 flick 子元素,
                             // viewport 平移相消,得到纯内容坐标)。
                             drag-out-dy <=> root.drag-dy;
+                            drag-out-dx <=> root.drag-dx;
+                            drag-group-current: root.drag-current-group;
+                            drop-has-target: root.drop-target-id != "";
+                            header-hit-group: root.drop-over-group;
+                            drop-owner: root.drag-drop-owner;
+                            // (#slot-box-edge) 首/末行 + 越界状态下行,虚线框跟到首末槽位。
+                            is-first: i == 0;
+                            is-last: i == sessions.length - 1;
+                            over-head-in: flick.over-head;
+                            over-ungroup-in: flick.over-ungroup;
                             drag-dy <=> root.drag-dy;
                             drag-id <=> root.drag-id;
                             drag-pitch <=> root.drag-pitch;
@@ -2186,6 +2664,21 @@ export component Welcome inherits Rectangle {
                             // (#shift-drop-same-source) 两态标志下发。
                             drop-over-pending: root.drop-over-pending;
                             drop-over-out: root.drop-over-out;
+                            // (#spine-src-collapse 2026-09-11) 出组判据下发(仅**源组**
+                            // 行):本行属于被拖行的组,且落点已落在别的组 / 已拖出分组。
+                            drag-left-group: root.list-dragging
+                                && session.group == root.drag-group
+                                && (root.drop-over-ungroup
+                                    || (root.drop-here-group != ""
+                                            && root.drop-here-group != root.drag-group));
+                            // (#spine-src-tail / #spine-src-slot) 源组元信息:下行取值、
+                            // 上行经回调写入 Welcome(唯一写入点,无多源歧义)。
+                            drag-src-tail: root.drag-src-tail;
+                            drag-src-index: root.drag-src-index;
+                            report-src(idx, tail) => {
+                                root.drag-src-index = idx;
+                                root.drag-src-tail = tail;
+                            }
                             drag-fly-home: root.drag-fly-home;
                             drag-cancel-pending <=> root.drag-cancel-pending;
                             // (#drag-ghost-pointer 2026-09-06) slot-y 改为私有
@@ -2211,6 +2704,20 @@ export component Welcome inherits Rectangle {
                                 }
                             }
                             drop-report(id, after, group, position) => {
+                                // (#ghost-geom-freeze 2026-09-11) **ghost 几何冻结**
+                                // (核查稿 §3.3/§3.4 的唯一防抖机制):本次命中要【换组】
+                                // 且 ghost 正跨骑某组的组头 → 本次不提交,落点快照保持
+                                // 上一个有效值(drop-target-id 只在 drop-leave 清)。效果
+                                // = 原型"换组必须让 ghost 先完全越过组头",天然滞回、
+                                // 零指针死区,杜绝两组横跳。
+                                // 豁免"该组第一位"(position == 1 且 !after):这就是"拖到
+                                // 第一位"的明确意图,不豁免会永远卡在冻结落不下去
+                                // (同交互原型 `!t.head && t.idx !== 0` 的豁免)。
+                                if (group != root.drop-here-group
+                                        && root.ghost-crossing-head != ""
+                                        && !(position == 1 && !after)) {
+                                    return;
+                                }
                                 // (#group-head-exit-two-state-r3) 行命中 = 入组
                                 // 接管(展开组):清待出组/出组两态与组头态,
                                 // ghost 卡样式由 drag-drop-group 切回成员样式。
@@ -2330,11 +2837,14 @@ export component Welcome inherits Rectangle {
                             duplicate => { root.duplicate-session(session.id); }
                             move-to-group(g) => { root.move-session(session.id, g); }
                             reorder(dir) => { return root.reorder-session(root.drag-id, dir); }
-                            drag-start => {
+                            drag-start(gy) => {
                                 // (#drag-fly-home-r2 2026-09-10) 新拖拽从干净归位
                                 // 态起:极端时序下上一轮归位未落地时先强制解除,
                                 // 避免残留的让位/命中冻结干扰本次拖拽。
                                 root.drag-fly-home = false;
+                                // (#ghost-anchor) 抓取点:按下处距本行顶的距离,
+                                // 供 ghost 纵向锚点补偿(回调参数一次带入)。
+                                root.drag-grab-y = gy;
                                 root.drag-id = session.id;
                                 // (#slot-shift-same-group) 记录被拖行组:
                                 // 让位仅同组,跨组不画框不让人。
@@ -2424,9 +2934,10 @@ export component Welcome inherits Rectangle {
                                 root.commit-id = session.id;
                                 // 先算 op 再赋 target:Slint 会把 let 局部
                                 // move 进属性 set,赋值后再引用会 E0382。
-                                // 优先级:待出组(回原位,不提交) > 进该组第
-                                // 一位(组头接触/折叠组名) > 移出分组(出组态
-                                // 或列表底越界) > 移到首位 > 行落点。
+                                // 优先级:待出组(回原位,不提交) > 进该组
+                                // (组头接触 / 折叠组名;展开 = 第 1 位、折叠 =
+                                // 末尾,落位由 Rust 按实时折叠态决定) > 移出
+                                // 分组(出组态或列表底越界) > 移到首位 > 行落点。
                                 root.commit-op = op ? ""
                                     : og != "" ? "group"
                                     : (ou || oo) ? "ungroup"
@@ -2450,8 +2961,10 @@ export component Welcome inherits Rectangle {
                     // (#autoscroll-tiers 2026-09-09) 速度分级:原单一 7px/帧
                     // 在长列表里"拖到底要等半天",放大步长又会过头。按进入
                     // 边缘区的深度分两档——浅区 7px 精调、深区 14px 快滚。
+                    // (#group-sort-scroll 2026-09-11) 组拖动同样吃边缘自动
+                    // 滚动(组多于一屏时,不滚动就永远拖不到上面的组)。
                     property <length> edge-step:
-                        !root.list-dragging ? 0px
+                        !root.list-dragging && !root.group-dragging ? 0px
                         : (self.pointer-visible-y < 12px ? -14px
                         : (self.pointer-visible-y < 28px ? -7px
                         : (self.pointer-visible-y > flick.height - 12px ? 14px
@@ -2514,156 +3027,34 @@ export component Welcome inherits Rectangle {
                     // (行中线)即让位,判定见 SessionRow #slot-shift-line-base。
                     // 落点感知 = 让位动画本身,无额外指示元素。
 
-                    // (#drag-ghost 2026-09-06) tabs #408 同款 ghost:被拖行
-                    // 本体在原槽隐形(opacity 0 = 洞,落点由占位框标出),这张
-                    // 浮动卡是唯一跟手元素。声明在 sess-list 之后 → 恒在最
-                    // 上层(Slint 无运行时 z,叠放靠声明序),卡片本体从此不再
-                    // 压住未让位的邻行;位置钳制在列表内容区内,拖不出边界。
-                    if root.list-dragging && root.drag-id != "" : ghost-card := Rectangle {
-                        property <length> ghost-h: max(1px, root.drag-pitch - 2px);
-                        // (#drag-ungroup-pop 2026-09-07) 底部越界变形:ghost 卡
-                        // accent 描边提示"松手 = 移出分组"(唯一出组入口)。
-                        // (#group-head-exit-two-state-r3) 蓝框亮于出组态
-                        // (drop-over-out:底边离开组名上边)与底部越界两种;
-                        // 待出组(pending)无框,组别样式由 in-group 排除表达。
-                        // (#default-group-ghost-consistent 2026-09-10) 默认组
-                        // 拖动与其它组完全同款。原 #ungrouped-keep-out 给
-                        // "未分组"开的特判(无所属组 = 恒亮 accent 出组描边)
-                        // 随"默认组升格为正式组"一并退役:默认组成员静态显示
-                        // 带缩进与树线,拖起时 ghost 却脱缩进变顶层样式、松手
-                        // 又缩回去 —— 明显的视觉跳变(用户定稿:与其它组一致)。
-                        property <bool> switch-hit:
-                            root.drop-over-out || root.drop-over-ungroup;
-                        // (#ghost-band 2026-09-07) 层级样式跟随落点:落点行属于
-                        // 某个组 = 成员样式(缩进 + 16px 图标 + fs-md);落点在
-                        // 空组 / 无组 = 顶层样式(无缩进 + 20px 图标 + fs-lg 700)。
-                        // 归属判定复用提交侧的落点行 group,保证"卡长什么
-                        // 样"与"松手后落在哪一层"恒一致。
-                        // (#default-group-ghost-consistent 2026-09-10) 默认组已
-                        // 升格为正式组(成员静态带缩进与树线),不再算"顶层区"
-                        // —— 原先对 "default" 的两处排除会让默认组内拖动时
-                        // ghost 脱缩进、松手又缩回(视觉跳变),现一并移除。
-                        // (#group-head-tri-state-r3 2026-09-08) 兜底链补最后一
-                        // 环 drag-group(拖起时自己的组):未命中任何行(拖起瞬
-                        // 间/组间空隙)时 ddg 与 group 均为空,旧判定回落成
-                        // 顶层样式 —— 组内成员刚拖起就变成"组别样式"(用户实
-                        // 测)。优先级:组头接触 > 行落点 > 拖起时自身。
-                        // (#group-head-exit-two-state-r2 2026-09-08) 出组只看
-                        // 底部越界(over-ungroup);组头两带已退役。
-                        // (#group-head-exit-two-state-r3) 待出组/出组均为
-                        // "组别样式"(顶层样式):in-group 排除两态。
-                        property <bool> in-group: !root.drop-over-out
-                            && !root.drop-over-ungroup
-                            && !root.drop-over-pending
-                            && (root.drop-over-group != ""
-                                || root.drag-drop-group != ""
-                                || root.drag-group != "");
-                        x: 0px;
-                        width: sess-list.width;
-                        height: ghost-h;
-                        // (#drag-fly-home 2026-09-10) 取消时 180ms 飞回拖起
-                        // 原槽(拖动中 0ms 跟手不变);落地 Timer 清态、本体
-                        // 行已复现,观感 = 卡片归位没入行中。
-                        // (#ease-align-spec) 180ms 对齐规格 §5「取消归位」。
-                        y: root.drag-fly-home ? root.drag-origin-y : list-host.ghost-y;
-                        animate y { duration: root.drag-fly-home ? 180ms : 0ms;
-                            easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
-                        border-radius: Theme.radius-sm;
-                        // (#drag-ghost-opaque-r2 2026-09-07) 半透明 + 描边、
-                        // 无投影:用户要求"拖动的组员半透明"——62% 透明度下
-                        // 底行轻微透出,漂移感自然;去投影避免脏阴影。移出
-                        // 分组/进组(switch-hit)时描边转 accent。
-                        background: Theme.bg-elevated.with-alpha(0.62);
-                        border-width: 1px;
-                        border-color: switch-hit ? Theme.accent : Theme.border-subtle;
-                        animate border-color { duration: 140ms; }
-                        HorizontalLayout {
-                            padding-left: ghost-card.in-group ? 10px + 18px : 10px;
-                            padding-right: 10px;
-                            animate padding-left { duration: 140ms; easing: ease-out; }
-                            spacing: root.compact ? 8px : 12px;
-                            Rectangle {
-                                width: ghost-card.in-group ? 16px : 20px;
-                                height: ghost-card.in-group ? 16px : 20px;
-                                animate width, height { duration: 140ms; easing: ease-out; }
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 3px;
-                                background: Theme.bg-hover;
-                                Text {
-                                    text: root.drag-builtin ? "\u{E30A}" : "\u{E875}";   // terminal / server
-                                    font-family: "Material Icons";
-                                    color: Theme.text-secondary;
-                                    font-size: ghost-card.in-group ? 11px : Theme.fs-xl;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                                if root.drag-conn == 1 : Rectangle {
-                                    x: -4px;
-                                    y: (parent.height - self.height) / 2;
-                                    width: 6px; height: 6px;
-                                    border-radius: 3px;
-                                    background: Theme.warning;
-                                }
-                                if root.drag-conn == 2 : Rectangle {
-                                    x: -4px;
-                                    y: (parent.height - self.height) / 2;
-                                    width: 6px; height: 6px;
-                                    border-radius: 3px;
-                                    background: Theme.success;
-                                }
-                            }
-                            if root.compact : Text {
-                                horizontal-stretch: 1;
-                                text: root.drag-name;
-                                color: Theme.text-primary;
-                                // (#fs-align-design 2026-09-10) ghost 字号与本体
-                                // 同步收口 fs-md:ghost 是"被拎起的本体",字号
-                                // 与本体不一致会在起手/落位瞬间跳字号。
-                                font-size: Theme.fs-md;
-                                font-weight: ghost-card.in-group ? 400 : 700;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                            if !root.compact : Text {
-                                text: root.drag-name;
-                                color: Theme.text-primary;
-                                font-size: Theme.fs-md;
-                                font-weight: ghost-card.in-group ? 400 : 700;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                            if !root.compact : Text {
-                                text: root.drag-host;
-                                color: Theme.text-secondary;
-                                font-size: Theme.fs-sm;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                            }
-                            // (#ghost-pill 2026-09-10) 落点标签:贴在 ghost 卡
-                            // 右端,把"松手会落到哪个组的第几位"说清楚(对齐
-                            // 交互原型)。放卡**内**右端而非卡外——卡片就是
-                            // sess-list 全宽行,卡外右侧会越过 list-host 的
-                            // clip 边界被裁掉。
-                            if !root.compact && root.drop-here-group != "" : Rectangle {
-                                height: 18px;
-                                width: pill-txt.preferred-width + 16px;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: 9px;
-                                background: Theme.accent-solid;
-                                pill-txt := Text {
-                                    x: 8px;
-                                    y: 1px;
-                                    // 中英文都靠 @tr 承载:"→ {组名} · #{位次}"
-                                    // 的参数形式让两种语言的语序各自成立。
-                                    text: @tr("→ {} · #{}",
-                                        root.drop-here-label, root.drop-here-pos);
-                                    color: #ffffff;
-                                    font-size: Theme.fs-xs;
-                                    vertical-alignment: center;
-                                }
-                            }
+                    // (#group-sort-line-r2 2026-09-11) 组排序插入线:全列表唯一
+                    // 一条,y 由被指针压住上半区的可排序组头行上报(见组头
+                    // insert-here),-1000px = 尚无落点。画在 sess-list 之后、
+                    // ghost 之前 = 列表上层、ghost 下层。
+                    if root.group-dragging && root.group-insert-y > -999px : Rectangle {
+                        y: root.group-insert-y;
+                        // 换手时短滑(80ms):线"滑"到新间隙,比瞬跳柔和;
+                        // 首次出现时 y 无前值、不触发动画,不受影响。
+                        animate y { duration: 80ms; easing: ease-out; }
+                        x: 6px;
+                        width: sess-list.width - 12px;
+                        height: 2px;
+                        border-radius: 1px;
+                        background: Theme.accent-solid;
+                        Rectangle {
+                            x: -3px; y: -2px;
+                            width: 6px; height: 6px;
+                            border-radius: 3px;
+                            background: Theme.accent-solid;
                         }
+                        Rectangle {
+                            x: parent.width - 3px; y: -2px;
+                            width: 6px; height: 6px;
+                            border-radius: 3px;
+                            background: Theme.accent-solid;
+                        }
+                    }
+
                     }
                     }
                     // (#session-scrollbar) 自绘滚动条:右缘 4px overlay,仅
@@ -2709,6 +3100,150 @@ export component Welcome inherits Rectangle {
                             background: sb-ta.pressed || sb-ta.has-hover
                                 ? Theme.text-secondary : Theme.border-strong;
                             animate background { duration: 120ms; }
+                        }
+                    }
+
+                    // (#drag-ghost 2026-09-06) tabs #408 同款 ghost:被拖行
+                    // 本体在原槽隐形(opacity 0 = 洞,落点由占位框标出),这张
+                    // 浮动卡是唯一跟手元素。(#ghost-panel-overlay 2026-09-11)
+                    // 声明在滚动条之后 → 在 list-host 内恒在最上层(Slint 无运行时
+                    // z,叠放靠声明序),卡片本体不再压住未让位的邻行;而 list-host
+                    // 已不再裁切(裁切下移到 flick-clip),故卡片越出列表边界时**不
+                    // 会被切**,而是浮到面板/主内容区之上完整呈现 —— 这是"拖到四边
+                    // 不许消失或缺一部分"的实现基础。
+                    // (#ghost-follow-x 2026-09-11) 显示条件扩到**组拖动**:
+                    // 拖组头时同样浮一张窄卡(显示组名,对齐设计图1),被拖
+                    // 组头本体只半透明;取消归位窗口期组卡直接隐藏——组本体
+                    // 一直显示在原位,没有"洞"要补,飞回没有意义。
+                    if (root.list-dragging && root.drag-id != "")
+                            || (root.group-dragging && root.group-drag-id != ""
+                                && !root.drag-fly-home) : ghost-card := Rectangle {
+                        property <length> ghost-h: max(1px, root.drag-pitch - 2px);
+                        // (#drag-ungroup-pop 2026-09-07) 底部越界变形:ghost 卡
+                        // accent 描边提示"松手 = 移出分组"(唯一出组入口)。
+                        // (#group-head-exit-two-state-r3) 蓝框亮于出组态
+                        // (drop-over-out:底边离开组名上边)与底部越界两种;
+                        // 待出组(pending)不亮框(它是"松手回原位"的提示,
+                        // 由组名蓝框承担)。
+                        // (#default-group-ghost-consistent 2026-09-10) 默认组
+                        // 拖动与其它组完全同款。原 #ungrouped-keep-out 给
+                        // "未分组"开的特判(无所属组 = 恒亮 accent 出组描边)
+                        // 随"默认组升格为正式组"一并退役:默认组成员静态显示
+                        // 带缩进与树线,拖起时 ghost 却脱缩进变顶层样式、松手
+                        // 又缩回去 —— 明显的视觉跳变(用户定稿:与其它组一致)。
+                        property <bool> switch-hit:
+                            root.drop-over-out || root.drop-over-ungroup;
+                        // (#ghost-compact-card 2026-09-11) 原 #ghost-band 的
+                        // "成员样式 / 顶层样式"两套层级(由 in-group 驱动的缩进、
+                        // 图标尺寸、字号字重)随 ghost 卡改**纯文字紧凑卡**一并
+                        // 退役 —— 卡里已无图标/缩进可切,名字字号恒定即最简,
+                        // 也符合设计"卡大小 = 名字大小"。
+                        // (#ghost-compact-r2 2026-09-11) **宽度必须显式绑到内容**:
+                        // Slint 对不在布局里的 Rectangle 默认填满父元素
+                        // (compiler 的 default_geometry pass),不绑宽就整行通栏
+                        // —— x 的 clamp 随之退化成常数 8px、横向完全跟不上指针
+                        // (用户实测:卡片贴左缘不动)。宽 = 名称+可选主机+左右各
+                        // 10px 内边距,对齐设计"ghost 大小与成员名字一样大";
+                        // 再**封顶到列表宽 - 16px**:卡宽以列表项为基准(它模拟的
+                        // 就是一个成员行),超长名字不把卡片撑得比列表还宽、盖住主
+                        // 内容区;卡内 Text 走 elide。注意封顶的是**卡宽**而非位移
+                        // —— 卡仍严格随指针移动(见 #ghost-unclamped)。
+                        width: min(ghost-row.preferred-width, sess-list.width - 16px);
+                        // (#ghost-anchor 2026-09-11) 横向锚点对齐原型
+                        // `left = 指针x - 60px`,但**抓手必须落在卡内**:窄卡
+                        // (组名/短名)宽度可能不足 60px,硬减 60 会让指针跑到
+                        // 卡片右侧之外 —— 观感就是"没抓住、不跟手"(用户实测)。
+                        // 取 min(60, 宽-12):宽卡照原型,窄卡让指针落在卡内右缘
+                        // 12px 处。
+                        // (#ghost-unclamped 2026-09-11) **去掉横向钳制**:用户
+                        // 定稿"ghost 拖动不作限制",钳制会让指针继续右移时卡片
+                        // 停住不动(= 又一次"不跟手")。现在卡片严格随指针。
+                        // (#ghost-panel-overlay 2026-09-11) 已按规格 §8.1 迁到
+                        // **面板级 overlay**:ghost 是 list-host 的直接子元素(与
+                        // flick 同级、在滚动条之后),list-host 不再 clip,故左右
+                        // 越出列表边界也不会被切 —— 卡片完整跟随指针。
+                        x: list-host.drag-pointer-x
+                            - min(60px, max(12px, self.width - 12px));
+                        height: ghost-h;
+                        // (#ghost-anchor) 纵向:`top = 指针y - 16`(设计 §1④)。
+                        // ghost-y 是"行槽顶 + 指针位移",而抓取点通常在行内部
+                        // (按下处距行顶 grab-y)—— 不补这一项,卡片会比指针高
+                        // 一个抓取偏移,"不在点击抓起的地方"(用户实测)。补上
+                        // drag-grab-y 后 = 指针真实内容 y,再上移 16px。
+                        // 取消归位时 180ms 飞回拖起原槽;落地 Timer 清态、本体
+                        // 行已复现,观感 = 卡片归位没入行中(设计 §5)。
+                        y: (root.drag-fly-home
+                            ? root.drag-origin-y
+                            : list-host.ghost-y + root.drag-grab-y) - 16px
+                            // (#ghost-panel-overlay 2026-09-11) ghost 已移出 flick,
+                            // 基准从 flick 内容坐标变为 list-host 局部坐标,须补偿
+                            // 滚动偏移(内容坐标 → 可视坐标 = +viewport-y)。
+                            + flick.viewport-y;
+                        animate y { duration: root.drag-fly-home ? 180ms : 0ms;
+                            easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
+                        border-radius: Theme.radius-sm;
+                        // (#ghost-opaque 2026-09-11) 实底:落点已由占位虚线框
+                        // 表达,ghost 再半透明只会让底下的行透出来像污渍
+                        // (用户定稿:不需要透明样式)。
+                        background: Theme.bg-elevated;
+                        border-width: 1px;
+                        // (#ghost-follow-x) 组拖动同样亮 accent 描边(设计图1)。
+                        border-color: (switch-hit || root.group-dragging)
+                            ? Theme.accent : Theme.border-subtle;
+                        animate border-color { duration: 140ms; }
+                        // (#ghost-compact-card 2026-09-11) ghost 卡 = **纯文字**
+                        // (名字 + 可选主机),尺寸紧贴内容 —— 对齐设计"ghost 大小
+                        // 与成员名字一样大"。原 16/20px 图标方块 + 连接状态圆点
+                        // 整体退役:它们把卡撑得比名字宽一大截,而拖动中看图标
+                        // 并不提供额外信息(名字已说清是谁)。
+                        // (#ghost-compact-r2) 命名以便卡宽绑到它:首选宽 = 内容宽。
+                        ghost-row := HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 8px;
+                            Text {
+                                text: root.drag-name;
+                                color: Theme.text-primary;
+                                // (#fs-align-design 2026-09-10) 字号与本体同步
+                                // 收口 fs-md:ghost 是"被拎起的本体",字号不一致
+                                // 会在起手/落位瞬间跳字号。
+                                font-size: Theme.fs-md;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            if !root.compact && root.drag-host != "" : Text {
+                                text: root.drag-host;
+                                color: Theme.text-secondary;
+                                font-size: Theme.fs-sm;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        // (#ghost-pill-r3 2026-09-11) 落点标签放**卡外**:卡片窄
+                        // 化后卡外右侧就在列表界内;若右侧放不下(卡片已靠近
+                        // 右缘)则翻到卡片左侧,保证 pill 恒可见(旧版卡通栏时
+                        // pill 落到 list-host 的 clip 外 = 完全看不见)。
+                        if !root.compact && root.drop-here-group != "" : Rectangle {
+                            property <length> pw: pill-txt.preferred-width + 16px;
+                            x: parent.x + parent.width + 8px + self.pw > sess-list.width
+                                ? -self.pw - 8px
+                                : parent.width + 8px;
+                            height: 18px;
+                            width: self.pw;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 9px;
+                            background: Theme.accent-solid;
+                            pill-txt := Text {
+                                x: 8px;
+                                y: 1px;
+                                // 中英文都靠 @tr 承载:"→ {组名} · #{位次}"
+                                // 的参数形式让两种语言的语序各自成立。
+                                text: @tr("→ {} · #{}",
+                                    root.drop-here-label, root.drop-here-pos);
+                                color: #ffffff;
+                                font-size: Theme.fs-xs;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
