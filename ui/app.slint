@@ -548,7 +548,15 @@ export component AppWindow inherits Window {
     // (#ctx-menu-backdrop) 弹层迁 AppWindow 根集中渲染:全窗口透明
     // backdrop + 菜单本体,点背景即关+清 key,关闭事件 100% 确定。
     in-out property <string> ctx-open-key;
-    in-out property <string> ctx-menu-kind;      // "row" | "group"
+    in-out property <string> ctx-menu-kind;      // "row" | "group" | "blank"
+    // (#ctx-blank-menu 2026-09-13) 列表空白处右键菜单:全部展开 / 全部折叠,
+    // 以及"本地终端"保留组的可见性(AppWindow 持有,双向给 Welcome 做列表过滤、
+    // 给两个菜单切文案)。
+    in-out property <bool> system-hidden: false;
+    callback set-all-groups-collapsed(bool /* collapsed */);
+    // (#hide-system-group) 隐藏 / 显示"本地终端":走 Rust 侧从**模型**里过滤,
+    // 不是 Slint 的 visible(那只隐藏不回收空间,列表上方会留一块空白)。
+    callback set-system-group-hidden(bool /* hidden */);
     in-out property <string> ctx-menu-group;     // 被右击对象的组
     in-out property <bool> ctx-menu-empty;       // 组头菜单:空组才有"删除"
     in-out property <length> ctx-menu-x;
@@ -1722,6 +1730,11 @@ export component AppWindow inherits Window {
                     reorder-session(id, dir) => { return root.reorder-session(id, dir); }
                     reorder-end => { root.reorder-session-end(); }
                     toggle-group(group) => { root.toggle-group(group); }
+                    // (#ctx-blank-menu) 空白菜单与 Welcome 共用:全部展开/折叠 +
+                    // 本地终端可见性双向绑定。
+                    set-all-groups-collapsed(c) => { root.set-all-groups-collapsed(c); }
+                    set-system-group-hidden(h) => { root.set-system-group-hidden(h); }
+                    system-hidden <=> root.system-hidden;
                     new-group => {
                         root.group-dialog-orig = "";
                         root.group-dialog-name = "";
@@ -2192,6 +2205,11 @@ export component AppWindow inherits Window {
                         reorder-session(id, dir) => { return root.reorder-session(id, dir); }
                         reorder-end => { root.reorder-session-end(); }
                         toggle-group(group) => { root.toggle-group(group); }
+                    // (#ctx-blank-menu) 空白菜单与 Welcome 共用:全部展开/折叠 +
+                    // 本地终端可见性双向绑定。
+                    set-all-groups-collapsed(c) => { root.set-all-groups-collapsed(c); }
+                    set-system-group-hidden(h) => { root.set-system-group-hidden(h); }
+                    system-hidden <=> root.system-hidden;
                         new-group => {
                             root.group-dialog-orig = "";
                             root.group-dialog-name = "";
@@ -2778,6 +2796,12 @@ export component AppWindow inherits Window {
             if (e.text == Key.Escape) {
                 root.ctx-open-key = "";
                 root.ctx-menu-kind = "";
+                // (#esc-cancel-drag 2026-09-13) Esc 也要**取消正在进行的拖拽**:
+                // 走与 Rust 轮询完全同一条通路(seq +1 → Welcome 的
+                // changed drag-cancel-seq → cancel-drag),ghost 飞回原槽、
+                // 让位与两态一起复位。原来这里只关菜单,拖拽中按 Esc 毫无反应
+                // (用户实测:"ghost 飞回原位置的功能没生效")。
+                root.session-drag-cancel-seq += 1;
                 accept
             } else {
                 reject
@@ -2862,12 +2886,23 @@ export component AppWindow inherits Window {
                 }
             }
             Rectangle { height: 1px; background: Theme.border-subtle; }
-            HorizontalLayout {
-                padding-left: 10px;
-                padding-top: 2px;
-                spacing: 6px;
-                Text { text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-muted; font-size: Theme.fs-xs; vertical-alignment: center; }
-                Text { text: @tr("Move to"); color: Theme.text-muted; font-size: Theme.fs-xs; vertical-alignment: center; horizontal-stretch: 1; }
+            // (#move-to-hierarchy 2026-09-13) "移动到"改成**纯标签行**:小字、
+            // 次要色、不带图标,只在分组上方起一个标题作用;下面的组名项再整体
+            // 缩进一档 —— 标题 12px、条目 22px,两级靠**缩进差**立住层级,不靠
+            // 字号硬拉。原来标题和条目共用同一个图标、同一档缩进,看不出谁统辖
+            // 谁(用户截图:"移动到"和下面的组名展示没有层级)。
+            Rectangle {
+                height: 22px;
+                HorizontalLayout {
+                    padding-left: 12px;
+                    Text {
+                        text: @tr("Move to");
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-xs;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+                }
             }
             for s in root.sessions : Rectangle {
                 visible: s.group-header != ""
@@ -2881,7 +2916,8 @@ export component AppWindow inherits Window {
                     clicked => { root.move-session(root.ctx-open-key, s.group-header); root.ctx-open-key = ""; }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
+                    // 比标题多缩进 10px:层级由这一档缩进表达。
+                    padding-left: 22px; spacing: 8px;
                     Text { text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: s.group-header; color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                 }
@@ -2890,6 +2926,76 @@ export component AppWindow inherits Window {
     }
     // 组头菜单(key = "hdr:"+组名):编辑分组/删除分组(空组)/新建分组。
     // 同成员菜单:条件带 key 非空,否则关闭后不消失。
+    // (#ctx-blank-menu 2026-09-13) 列表**空白处**右键菜单:全部展开 / 全部折叠 /
+    // 隐藏·显示本地终端。三项都是**全局**动作,与具体组无关。
+    if root.ctx-open-key == "blank" && root.ctx-menu-kind == "blank" : blank-menu-rect := Rectangle {
+        x: max(8px, min(root.ctx-menu-x, parent.width - self.width - 8px));
+        y: min(
+            self.height > root.ctx-menu-space-below
+                ? max(8px, root.ctx-menu-y - self.height)
+                : root.ctx-menu-y,
+            parent.height - self.height - 8px);
+        // (#ctx-menu-fit 2026-09-13) 宽度**跟着内容走**:固定宽会让较长的条目
+        // (如英文 "Hide Local Terminals")顶出右缘、和左边距也不对称。取布局
+        // 首选宽 + 10px —— 与条目内部的 padding-left(10px) 相加后,左右两侧
+        // 留下的空白完全一致,任何语言都刚好包住文字。
+        width: blank-menu-vl.preferred-width + 10px;
+        height: blank-menu-vl.preferred-height;
+        background: Theme.popup-bg;
+        border-radius: Theme.radius-sm;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 10px;
+        drop-shadow-color: #00000050;
+        b-pad := TouchArea { width: 100%; height: 100%; }
+        blank-menu-vl := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: b-exp-ta.has-hover ? Theme.bg-hover : transparent;
+                b-exp-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ctx-open-key = ""; root.set-all-groups-collapsed(false); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E5D7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Expand all"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: b-col-ta.has-hover ? Theme.bg-hover : transparent;
+                b-col-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ctx-open-key = ""; root.set-all-groups-collapsed(true); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: "\u{E5D6}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Collapse all"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: b-sys-ta.has-hover ? Theme.bg-hover : transparent;
+                b-sys-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ctx-open-key = ""; root.set-system-group-hidden(!root.system-hidden); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: root.system-hidden ? @tr("Show Local Terminals") : @tr("Hide Local Terminals"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+        }
+    }
+
     if root.ctx-open-key != "" && root.ctx-menu-kind == "group" : grp-menu-rect := Rectangle {
         x: max(8px, min(root.ctx-menu-x, parent.width - self.width - 8px));
         y: min(
@@ -2897,7 +3003,9 @@ export component AppWindow inherits Window {
                 ? max(8px, root.ctx-menu-y - self.height)
                 : root.ctx-menu-y,
             parent.height - self.height - 8px);
-        width: 140px;
+        // (#ctx-menu-fit 2026-09-13) 同空白菜单:宽度跟着内容走,左右留白一致
+        // (固定 140px 时较长的条目会顶出右缘)。
+        width: grp-menu-vl.preferred-width + 10px;
         height: grp-menu-vl.preferred-height;
         background: Theme.popup-bg;
         border-radius: Theme.radius-sm;
@@ -2968,6 +3076,22 @@ export component AppWindow inherits Window {
                     padding-left: 10px; spacing: 8px;
                     Text { text: "\u{E2CC}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("New group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            // (#ctx-blank-menu 2026-09-13) 组头菜单里也放一份"隐藏 / 显示本地终端":
+            // 手上正按着某个组时不必先去找空白处。文案随状态切换。
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                background: g-sys-ta.has-hover ? Theme.bg-hover : transparent;
+                g-sys-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ctx-open-key = ""; root.set-system-group-hidden(!root.system-hidden); }
+                }
+                HorizontalLayout {
+                    padding-left: 10px; spacing: 8px;
+                    Text { text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: root.system-hidden ? @tr("Show Local Terminals") : @tr("Hide Local Terminals"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
         }

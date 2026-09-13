@@ -1674,6 +1674,24 @@ impl ConfigStore {
         self.cache.collapsed_session_groups.as_deref()
     }
 
+    /// (#hide-system-group) 是否隐藏欢迎列表里的"本地终端"保留组
+    /// (列表空白处 / 组头右键菜单切换)。默认 false = 显示。
+    pub fn system_group_hidden(&self) -> bool {
+        self.cache.hide_system_group
+    }
+
+    /// 切换并**立即落盘**:与其它偏好(hide_cmd_bar 等)同一条持久化路径,
+    /// 重启后保持上次的显隐状态。
+    pub fn set_system_group_hidden(&mut self, hidden: bool) {
+        if self.cache.hide_system_group == hidden {
+            return;
+        }
+        self.cache.hide_system_group = hidden;
+        if let Err(err) = self.save() {
+            tracing::warn!("failed to save system group visibility: {err:#}");
+        }
+    }
+
     /// Remember a Quick Connect folder's open/closed state. On the first
     /// interaction, materialise the default-collapsed state for every existing
     /// folder so expanding one folder does not accidentally expand the rest.
@@ -1727,6 +1745,21 @@ impl ConfigStore {
             })
     }
 
+    /// (#group-order-materialize 2026-09-12) 把**显示组序**物化进 explicit
+    /// groups:组排序前必须先补这一步,否则"会话对话框里自由输入过组名"
+    /// (GroupCombo 可编辑,#179)的组会漏在显式列表外 —— 它照常显示
+    /// (named_display_groups 把 session-only 组按首现顺序附在末尾),却不在
+    /// cache.groups 里,下面两个组排序函数按名字查列表直接找不到,表现为
+    /// **组头拖动完全没反应**(拖了不换位、也不能作为落点)。
+    /// 顺序不变、幂等:只是把隐含组按它当前显示的位置写成显式,顺带丢掉
+    /// 保留组名等脏数据(与 normalize_reserved_session_groups 同口径)。
+    fn materialize_group_order(&mut self) {
+        let display = named_display_groups(&self.cache.groups, &self.cache.sessions);
+        if display != self.cache.groups {
+            self.cache.groups = display;
+        }
+    }
+
     /// (#group-sort-line-r2 2026-09-11) 组排序的提交语义与**插入线同源**:
     /// 线画在哪个组头之前,松手就把 `name` 移到 `target` 之前。旧公式
     /// `round(dy/pitch)` 按格数估位移,组高不等时会与线的落点脱节
@@ -1737,6 +1770,7 @@ impl ConfigStore {
         if name.is_empty() || target.is_empty() || name == target {
             return false;
         }
+        self.materialize_group_order();
         let Some(from) = self.cache.groups.iter().position(|g| g == name) else {
             return false;
         };
@@ -1763,6 +1797,9 @@ impl ConfigStore {
         if name.is_empty() {
             return false;
         }
+        // (#group-order-materialize 2026-09-12) 同 move_group_before:session-only
+        // 组要先物化进显式列表,否则"移到末位"对这个组同样静默无效。
+        self.materialize_group_order();
         let Some(from) = self.cache.groups.iter().position(|g| g == name) else {
             return false;
         };
@@ -2301,6 +2338,30 @@ mod tests {
         assert!(store.reorder_session(&id_of(&store, "b2"), 1));
         let last = store.sessions().iter().find(|s| s.name == "b2").unwrap();
         assert_eq!(last.group, "gamma");
+    }
+
+    /// (#group-order-materialize 2026-09-12) 组头拖动排序必须能作用在"只在
+    /// 会话上出现过"的组(会话对话框的组名可自由输入 #179):这类组能显示、
+    /// 但不在 explicit 列表里 —— 排序前先按**显示顺序**物化,否则
+    /// move_group_before / move_group_to_end 按名字查列表直接找不到,表现
+    /// 为"拖了没反应"。同时保证物化不会打乱显示顺序(幂等)。
+    #[test]
+    fn group_reorder_materializes_session_only_groups() {
+        let mut store = reorder_store();
+        // delta 是显式空文件夹;alpha / beta 只出现在会话的 group 字段上。
+        store.cache.groups = vec!["delta".into()];
+        assert_eq!(
+            named_display_groups(store.groups(), store.sessions()),
+            ["delta", "alpha", "beta"]
+        );
+
+        // 把隐式的 beta 移到同样隐式的 alpha 之前:两者都要先物化。
+        assert!(store.move_group_before("beta", "alpha"));
+        assert_eq!(store.groups(), ["delta", "beta", "alpha"]);
+
+        // 末位:显式组 delta 移到末尾(此前它会静默 no-op)。
+        assert!(store.move_group_to_end("delta"));
+        assert_eq!(store.groups(), ["beta", "alpha", "delta"]);
     }
 
     /// (#group-dropdown-dedup 2026-09-08) 拼接结果无相邻重复时 Vec::dedup

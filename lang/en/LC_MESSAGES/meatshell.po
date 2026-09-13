@@ -273,6 +273,18 @@ msgstr "Duplicate"
 msgid "New group"
 msgstr "New group"
 
+msgid "Expand all"
+msgstr "Expand all"
+
+msgid "Collapse all"
+msgstr "Collapse all"
+
+msgid "Hide Local Terminals"
+msgstr "Hide Local Terminals"
+
+msgid "Show Local Terminals"
+msgstr "Show Local Terminals"
+
 msgid "Edit group"
 msgstr "Edit group"
 

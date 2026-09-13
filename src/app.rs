@@ -3262,6 +3262,9 @@ fn open_window(
         // 150ms 重复上报、反复扰动 UI 的归位过程。UI 侧另有幂等兜底,
         // 此处双保险。
         let cancel_sent = std::cell::Cell::new(false);
+        // (#drag-cancel-diag) 诊断用:确认轮询真的读到"拖拽活跃"。只打印首次,
+        // 避免 150ms 一次刷屏。定位完可以删。
+        let drag_seen = std::cell::Cell::new(false);
         let key_watch = slint::Timer::default();
         key_watch.start(
             slint::TimerMode::Repeated,
@@ -3271,7 +3274,11 @@ fn open_window(
                 if !w.get_session_drag_active() {
                     // 拖拽已结束:复位节流,供下一次拖拽使用。
                     cancel_sent.set(false);
+                    drag_seen.set(false);
                     return;
+                }
+                if !drag_seen.get() {
+                    drag_seen.set(true);
                 }
                 if cancel_sent.get() {
                     return;
@@ -3285,10 +3292,20 @@ fn open_window(
                 // 只有本窗口确实失去前台才取消。窗口尚未就绪时
                 // with_winit_window 返回 None → 该路不触发,不影响左键/右键/
                 // Esc 三路判定。
+                // (#drag-cancel-tap 2026-09-13) Esc / 右击用 **低位** 判定。
+                // GetAsyncKeyState 的返回值有两部分:高位(0x8000)= 此刻是否按住,
+                // 低位(0x0001)= **自上次调用以来是否被按过**。原先只看高位,
+                // 而用户的 Esc 是点按(几十毫秒),150ms 轮询几乎必然错过 ——
+                // "Esc 按了没反应、日志也不打"的根因就在这。低位会在两次调用
+                // 之间累积,点按也能被捕捉到。
+                // ⚠ 低位是"读一次即清",同一轮里每个键只查一次。
                 let down = |vk: i32| unsafe { GetAsyncKeyState(vk) & KEY_PRESSED != 0 };
+                let tapped = |vk: i32| unsafe { GetAsyncKeyState(vk) & 1 != 0 };
+                let rbutton = tapped(VK_RBUTTON);
+                let escape = tapped(VK_ESCAPE);
                 let cancelled = !down(VK_LBUTTON)
-                    || down(VK_RBUTTON)
-                    || down(VK_ESCAPE)
+                    || rbutton
+                    || escape
                     || w.window()
                         .with_winit_window(|ww| unsafe {
                             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -4563,6 +4580,73 @@ fn wire_session_callbacks(
             if let Some(w) = weak.upgrade() {
                 let _ = w.get_sessions();
             }
+        });
+    }
+
+    // (#ctx-blank-menu 2026-09-13) 空白处右键菜单:全部展开 / 全部折叠。
+    // 与单元折叠同一条路径 —— 逐行改 collapsed、逐组落盘、再刷一次会话列表。
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        window.on_set_all_groups_collapsed(move |collapsed: bool| {
+            if weak
+                .upgrade()
+                .map(|window| !window.get_host_search_query().trim().is_empty())
+                .unwrap_or(false)
+            {
+                return;
+            }
+            use slint::Model as _;
+            let n = sessions_model.row_count();
+            let mut names: Vec<String> = Vec::new();
+            for i in 0..n {
+                if let Some(row) = sessions_model.row_data(i) {
+                    let group = row.group.to_string();
+                    if !group.is_empty() && !names.iter().any(|g| g == &group) {
+                        names.push(group);
+                    }
+                    if row.collapsed != collapsed {
+                        let mut r = row;
+                        r.collapsed = collapsed;
+                        sessions_model.set_row_data(i, r);
+                    }
+                }
+            }
+            {
+                let mut store = store.borrow_mut();
+                for g in &names {
+                    store.set_session_group_collapsed(g, collapsed);
+                }
+                if let Err(err) = store.save() {
+                    tracing::warn!("failed to save group collapsed state: {err:#}");
+                }
+            }
+            if let Some(w) = weak.upgrade() {
+                let _ = w.get_sessions();
+            }
+        });
+    }
+
+    // (#hide-system-group 2026-09-13) 隐藏 / 显示"本地终端"保留组。
+    // 切换走**模型层过滤**(见 session_models::build_session_rows)并持久化;
+    // 启动时先把落盘的状态同步给 UI —— 菜单文案与列表过滤都读它。
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        weak.upgrade()
+            .inspect(|w| w.set_system_hidden(store.borrow().system_group_hidden()));
+        window.on_set_system_group_hidden(move |hidden: bool| {
+            store.borrow_mut().set_system_group_hidden(hidden);
+            let Some(w) = weak.upgrade() else { return };
+            w.set_system_hidden(hidden);
+            let query = w.get_host_search_query();
+            session_models::sync_sessions_to_model_with_filter(
+                &store.borrow(),
+                &sessions_model,
+                &query,
+            );
         });
     }
 

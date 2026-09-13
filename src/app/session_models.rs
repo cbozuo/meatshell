@@ -154,11 +154,42 @@ fn build_session_rows(
     collapsed_groups: Option<&[String]>,
     builtin_sessions: &[Session],
     query: &str,
+    // (#hide-system-group 2026-09-13) 隐藏"本地终端"保留组:**模型层过滤**。
+    // Slint 的 `visible:false` 只隐藏不回收空间,列表上方会残留一整块空白;
+    // 在这里把 system 组从数据里剔掉,后面的组自然上移补位。
+    hide_system: bool,
 ) -> Vec<SessionInfo> {
     // Group sessions by their `group` (named groups alphabetically, ungrouped
     // last), then by name within each group, and tag the first row of every
     // group with a header so the welcome list can render a folder heading (#41).
     let query = normalized_query(query);
+    // 隐藏时把 system 组从输入里剔掉 —— 组头、成员、显式分组一起消失。
+    let owned_sessions: Vec<Session> = if hide_system {
+        sessions
+            .iter()
+            .filter(|s| s.group != "system")
+            .cloned()
+            .collect()
+    } else {
+        sessions.to_vec()
+    };
+    let owned_builtins: Vec<Session> = if hide_system {
+        Vec::new()
+    } else {
+        builtin_sessions.to_vec()
+    };
+    let owned_groups: Vec<String> = if hide_system {
+        explicit_groups
+            .iter()
+            .filter(|g| g.as_str() != "system")
+            .cloned()
+            .collect()
+    } else {
+        explicit_groups.to_vec()
+    };
+    let sessions = owned_sessions.as_slice();
+    let builtin_sessions = owned_builtins.as_slice();
+    let explicit_groups = owned_groups.as_slice();
     let searching = !query.is_empty();
     let matches = |session: &Session| session_matches_normalized_query(session, &query);
     let group_is_collapsed = |group: &str| {
@@ -397,13 +428,17 @@ pub(super) fn sync_sessions_to_model_with_filter(
     query: &str,
 ) {
     let builtin_sessions = builtin_local_sessions(store.wsl_profiles());
-    model.set_vec(build_session_rows(
+    // (#hide-system-group) 隐藏"本地终端"时把 system 组整组从**模型**里剔除:
+    // Slint 的 `visible: false` 只是不画、位置照占,列表上方会残留一块空白。
+    let mut rows = build_session_rows(
         store.sessions(),
         store.groups(),
         store.collapsed_session_groups(),
         &builtin_sessions,
         query,
-    ));
+        store.system_group_hidden(),
+    );
+    model.set_vec(rows);
 }
 
 /// Same rows as `sync_sessions_to_model_with_filter`, but when the row count
@@ -419,12 +454,13 @@ pub(super) fn refresh_session_rows_in_place(
 ) -> bool {
     use slint::Model as _;
     let builtin_sessions = builtin_local_sessions(store.wsl_profiles());
-    let rows = build_session_rows(
+    let mut rows = build_session_rows(
         store.sessions(),
         store.groups(),
         store.collapsed_session_groups(),
         &builtin_sessions,
         query,
+        store.system_group_hidden(),
     );
     if rows.len() == model.row_count() {
         for (i, row) in rows.into_iter().enumerate() {
@@ -629,7 +665,7 @@ mod search_tests {
         let groups = vec!["empty".to_string(), "prod".to_string()];
         let collapsed = vec!["prod".to_string(), "system".to_string()];
 
-        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &builtins, "prod");
+        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &builtins, "prod", false);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name.as_str(), "Prod API");
@@ -647,6 +683,7 @@ mod search_tests {
             Some(&["system".to_string()]),
             &builtins,
             "LOCALHOST",
+            false,
         );
 
         assert_eq!(rows.len(), 1);
@@ -661,7 +698,7 @@ mod search_tests {
         let saved = vec![session("1", "Prod API", "10.0.0.8", "prod")];
         let builtins = vec![session("local", "Local terminal", "localhost", "system")];
 
-        let rows = build_session_rows(&saved, &[], None, &builtins, "staging");
+        let rows = build_session_rows(&saved, &[], None, &builtins, "staging", false);
 
         assert!(rows.is_empty());
     }
@@ -672,7 +709,7 @@ mod search_tests {
         let groups = vec!["empty".to_string(), "prod".to_string()];
         let collapsed = vec!["prod".to_string()];
 
-        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &[], "");
+        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &[], "", false);
 
         assert!(rows
             .iter()
@@ -712,7 +749,7 @@ mod drag_order_tests {
         // 存储顺序:测试 在 Test 之前(字母序会把它排到后面)。
         let groups = vec!["测试".to_string(), "Test".to_string()];
 
-        let rows = build_session_rows(&saved, &groups, None, &[], "");
+        let rows = build_session_rows(&saved, &groups, None, &[], "", false);
 
         let headers: Vec<&str> = rows
             .iter()
@@ -753,7 +790,7 @@ mod serial_display_tests {
             session.data_bits = bits;
             session.parity = parity.into();
             session.stop_bits = stops;
-            let rows = build_session_rows(&[session], &[], None, &[], "");
+            let rows = build_session_rows(&[session], &[], None, &[], "", false);
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].serial_detail.as_str(), expected);
         }
@@ -767,7 +804,7 @@ mod serial_display_tests {
             session.host = "example.com".into();
             session.port = 2222;
             session.user = "alice".into();
-            let rows = build_session_rows(&[session], &[], None, &[], "");
+            let rows = build_session_rows(&[session], &[], None, &[], "", false);
             assert!(rows[0].serial_detail.is_empty());
             assert_eq!(rows[0].host.as_str(), "example.com");
             assert_eq!(rows[0].port, 2222);

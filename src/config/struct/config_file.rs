@@ -158,6 +158,11 @@ pub struct ConfigFile {
     /// Hide the quick-command bar under the terminal. Defaults to false.
     #[serde(default)]
     pub hide_cmd_bar: bool,
+    /// (#hide-system-group) Hide the "Local Terminals" reserved group in the
+    /// welcome list. Toggled from the blank-area / group-header context menus.
+    /// Defaults to false (visible).
+    #[serde(default)]
+    pub hide_system_group: bool,
     /// Stored inverted so multiline paste confirmation remains enabled for
     /// existing configurations unless the user explicitly disables it (#300).
     #[serde(default)]

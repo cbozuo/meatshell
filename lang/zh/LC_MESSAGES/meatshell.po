@@ -273,6 +273,18 @@ msgstr "复制副本"
 msgid "New group"
 msgstr "新建分组"
 
+msgid "Expand all"
+msgstr "全部展开"
+
+msgid "Collapse all"
+msgstr "全部折叠"
+
+msgid "Hide Local Terminals"
+msgstr "隐藏本地终端"
+
+msgid "Show Local Terminals"
+msgstr "显示本地终端"
+
 msgid "Edit group"
 msgstr "编辑分组"
 

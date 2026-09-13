@@ -6,6 +6,28 @@ All notable changes are documented here. 本文件记录所有重要变更。
 
 ## [Unreleased]
 
+- **修复分组脊线上的亮点与分组拖动的浮卡错位。** 组内成员之间的组色竖线不再因上下两段重叠而出现比线身更亮的短段；把一个分组拖到末位后再拖动它时，跟手的浮起卡片不再飞到列表顶部，落点判定也同步恢复正常。
+- **Fix the bright spot on group spines and the misplaced drag card when dragging a group.** The group-colored spine no longer shows a brighter 2px segment between rows, and the floating drag card no longer jumps to the top of the list — the drop target tracks correctly again — when a group that was just moved to the end is dragged once more.
+
+- **修复分组拖到末位后一直自我展开收缩。** 指针停在列表首/尾的越界区时，分组的"临时展开"与"拖离收起"会互相触发，形成每约 450ms 一次的展开收缩死循环（再点一次组名才停）；现在收起判定不再把越界停留当成"已离开"，组拖动期间也不收起，非拖动状态下更不会因残留的指针坐标自动展开。
+- **Fix a group that keeps expanding and collapsing by itself after being dragged to the end.** With the pointer parked in the top/bottom overflow zone, a group's temporary expand and its "dragged away" collapse kept retriggering each other in a ~450ms loop (clicking the group name again was the only way to stop it). Collapsing no longer treats parking in the overflow zone as leaving, never runs during a group drag, and no longer auto-expands outside a drag at all.
+
+- **拖到列表末尾的落点更好读，也不再把最后一组弹开。** 拖动分组到最下方时，折叠的最后一组不再被自动展开；插入线按最后一组的中线分区 —— 上半区仍是"插到它之前"，下半区改为"放到最后"：未展开时线落在组名下方，已展开时落在最后一个成员之后，并整体画在内容底下方一点，避免与成员行的组色脊线末端叠在一起。
+- **Clearer drop feedback at the end of the list, and the last group no longer pops open.** Dragging a group to the bottom no longer expands a collapsed last group. The insert line now splits the last group at its middle: above means "before it", below means "at the end" — drawn under the group name when collapsed and after the last member when expanded, sitting just below the content bottom so it no longer overlaps the group-colored spine.
+
+- **拖动成员到组内第一位时组名不再让位，落点框与让位同步推进。** 组头只在"待出组 / 出组"时下移（那才是抽屉动作），指针瞄准组内某一位时组名钉住不动，第一位才拖得进去；虚线框改为跟随让位位移、钉在真实插入位上，成员依次级联让位，不再出现"框先跳到组名下面、成员还没动"的错拍；浮卡顶边压住哪一行，那一行左侧与竖线相接的枝干横线就点亮。
+- **The group name no longer yields while dragging a member to the first slot, and the drop box moves in step with yielding.** The group header now only shifts in the pending/leaving states (the real drawer motion), so aiming at a slot inside the group keeps the name in place and the first slot stays reachable. The dashed drop box follows the row's yield offset and stays pinned to the actual insertion point, members cascade in step, and the branch line of any row the card's top edge covers lights up.
+
+- **成员拖动的手感与落点修正。** 拖动方向改由**指针位移**判定（原先看"指针是否在被拖行下方"，而拖起瞬间指针本就在行内，落点会凭空深一行、把虚线框推到下面去）；组名作为容器标题**恒定不动**——整条"组头让位"逻辑删除，ghost 碰到组名下边不再带动组名；组名的中线成为"上一组末位"与"本组第一位"的分界，跨组时虚线框跟着 ghost 翻到上一组末尾。
+- **Drag feel and drop targeting for member sorting.** The drag direction now comes from the pointer's displacement (it used to ask whether the pointer sat below the dragged row — always true at pickup, which pushed the drop target a row too deep and sent the dashed box downwards). The group name now stays put as a container title: the whole header-yield path is gone, so the ghost touching the name no longer moves it. The name's midline divides "end of the previous group" from "first slot of this group", so the box flips to the previous group's tail as the ghost crosses it.
+
+- **组排序插入线跟着浮卡走，不再提前一格。** 插入线原来按**指针**判定、且命中区覆盖整个组段（组头 + 全部成员），于是 ghost 还在组的中间或尾部时，线已经挂到该组名上方一格（拖动组别上移时尤其明显）。现在判定基准换成浮卡自己的**前导边**，命中区收窄成"本组头上方 → 下一组头上方"这一段，线与卡同拍换手。
+
+- **成员拖动的落点框与让位严格对齐。** 落点框的位置改为"本行原位减去本行的让位位移"，唯一来源、不再叠加方向偏移（旧式在下移时会把框甩到**两个身位**之外）；命中行也改为"**前导边刚越过中线的那一行**"——也就是真正让位的那一行，于是"ghost 只负责定位、最终落点就是框的位置"这条规则成立：上移看顶边、下移看底边，越过成员一半即让位，框同时落到那一格。
+
+- **新增列表空白处右键菜单，并统一成员拖动的命中基准。** 在列表空白处右键可"全部展开 / 全部折叠"分组，以及隐藏或显示"本地终端"保留组；组头右键菜单里同样放了一份，文案随当前状态切换。成员拖动时命中行与让位行共用浮卡的前导边，虚线框不会再压在成员身上、也不会甩出一个身位。
+- **Right-click menu for empty list space, plus a unified hit basis for member dragging.** Right-clicking empty space in the list now offers "Expand all", "Collapse all", and hiding/showing the "Local Terminals" reserved group; the group header menu carries the same hide/show entry with a label that follows the current state. Member dragging derives both its hit row and its yield row from the drag card's leading edge, so the dashed box never covers a row or lands a slot off.
+
 ## [0.7.3] - 2026-09-07
 
 - **停止 Android Beta 支持。** 移除 Android 客户端源码、APK 构建和发布任务，发布流程仅保留桌面平台。
