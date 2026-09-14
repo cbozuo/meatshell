@@ -20,6 +20,16 @@ export struct TriggerDraft {
     repeat: bool,
 }
 
+// (#group-entry 2026-09-14) 会话对话框「分组」下拉的一项:组名 + 该组颜色。
+// 名称与颜色在 Rust 侧配好一起注入 —— Slint 侧既没有"按名查色",也没有
+// color → "#RRGGBB" 的转换能力。hex 为空 = 该组没设色 → 色点位置**留空**
+// (分组色是身份标识,没有身份就不该有标识)。
+export struct GroupEntry {
+    name: string,
+    hex: string,
+    color: color,
+}
+
 export struct SessionDraft {
     id: string,
     name: string,
@@ -267,7 +277,7 @@ component GroupCombo inherits VerticalLayout {
     in property <string> label;
     in property <string> placeholder;
     in-out property <string> value;
-    in property <[string]> groups;       // existing group names
+    in property <[GroupEntry]> groups;   // existing groups (+ their colour)
     spacing: 4px;
 
     Text {
@@ -283,10 +293,25 @@ component GroupCombo inherits VerticalLayout {
     border-color: ginput.has-focus ? Theme.accent : Theme.border-strong;
     background: Theme.bg-elevated;
 
+        // (#group-dot 2026-09-14) 输入框左缘的组色回显:value 对应的那个组的
+        // 色点。Slint 没有"按名查数组"的写法,这里用一组**绝对定位叠放**的色点,
+        // 只有名字匹配的那一个 visible —— 不可见元素既不占位也不吃事件,等价于
+        // "回显选中组的色",且不需要任何额外状态。色点位置恒定预留,该组无色或
+        // 用户正在输入新组名时只留空位,文字不左右跳动。
+        for ge in root.groups : Rectangle {
+            visible: ge.hex != "" && ge.name == root.value;
+            x: 12px;
+            y: (parent.height - self.height) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: ge.color;
+        }
+
         // Hide on focus: IME preedit is visible before value is committed.
         if root.value == "" && !ginput.has-focus : Text {
-            x: 10px;
-            width: parent.width - 44px;
+            x: 26px;
+            width: parent.width - 60px;
             height: parent.height;
             overflow: elide;
             text: root.placeholder;
@@ -297,8 +322,8 @@ component GroupCombo inherits VerticalLayout {
         }
 
         ginput := TextInput {
-            x: 10px;
-            width: parent.width - 44px;     // room for the ▾ button
+            x: 26px;                        // 让位给左缘色点
+            width: parent.width - 60px;     // room for the ▾ button
             height: parent.height;
             text <=> root.value;
             color: Theme.text-primary;
@@ -351,12 +376,22 @@ component GroupCombo inherits VerticalLayout {
                         background: g-ta.has-hover ? Theme.bg-hover : transparent;
                         g-ta := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.value = g; groups-popup.close(); }
+                            clicked => { root.value = g.name; groups-popup.close(); }
+                        }
+                        // (#group-dot 2026-09-14) 色点 + 组名。无色组不画点,但
+                        // **保留 8px 空位**,所有组名左缘因此对齐(与输入框同口径)。
+                        Rectangle {
+                            x: 10px;
+                            y: (parent.height - self.height) / 2;
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: g.hex != "" ? g.color : transparent;
                         }
                         Text {
-                            x: 10px;
-                            width: parent.width - 20px;
-                            text: g;
+                            x: 26px;
+                            width: parent.width - 36px;
+                            text: g.name;
                             color: Theme.text-primary;
                             font-size: Theme.fs-md;
                             vertical-alignment: center;
@@ -481,7 +516,7 @@ export component SessionDialog inherits Rectangle {
     in-out property <string> draft-proxy-type: "none";  // "none" | "socks5" | "http"
     in-out property <string> draft-proxy-hostport;
     in-out property <string> draft-group;
-    in property <[string]> session-groups;   // existing groups for the dropdown (#179)
+    in property <[GroupEntry]> session-groups;   // existing groups (+ colour) for the dropdown (#179)
     // SSH jump host picker (#211): parallel label/id lists (index 0 = "none")
     // plus the selected index. The id is resolved on submit via `jump-ids`.
     in property <[string]> jump-choices;

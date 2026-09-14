@@ -288,6 +288,12 @@ msgstr "Show Local Terminals"
 msgid "Edit group"
 msgstr "Edit group"
 
+msgid "Group color"
+msgstr "Group color"
+
+msgid "No color"
+msgstr "No color"
+
 msgid "Delete group"
 msgstr "Delete group"
 

@@ -288,6 +288,12 @@ msgstr "显示本地终端"
 msgid "Edit group"
 msgstr "编辑分组"
 
+msgid "Group color"
+msgstr "分组颜色"
+
+msgid "No color"
+msgstr "无颜色"
+
 msgid "Delete group"
 msgstr "删除分组"
 

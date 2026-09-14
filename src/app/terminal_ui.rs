@@ -29,17 +29,6 @@ pub(super) fn output_highlight_rule_model(store: &ConfigStore) -> ModelRc<Output
     ModelRc::from(Rc::new(VecModel::from(rows)))
 }
 
-pub(super) fn parse_hex_color(value: &str) -> Option<slint::Color> {
-    let digits = value.trim().strip_prefix('#').unwrap_or(value.trim());
-    if digits.len() != 6 || !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    let red = u8::from_str_radix(&digits[0..2], 16).ok()?;
-    let green = u8::from_str_radix(&digits[2..4], 16).ok()?;
-    let blue = u8::from_str_radix(&digits[4..6], 16).ok()?;
-    Some(slint::Color::from_rgb_u8(red, green, blue))
-}
-
 pub(super) fn validate_output_highlight_rule(
     pattern: &str,
     is_regex: bool,

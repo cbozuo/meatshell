@@ -333,7 +333,7 @@ pub(crate) fn is_reserved_session_group(name: &str) -> bool {
 /// 折叠、可作拖放落点)后,拖拽的每个判定点都必须用同一套显示组语义——
 /// reorder_session 的邻组查找、build_session_rows 的渲染分组同源,
 /// 否则落点与实际行对不上。
-fn display_group_of(session: &Session) -> String {
+pub(crate) fn display_group_of(session: &Session) -> String {
     if session.group.is_empty() || is_reserved_session_group(session.group.trim()) {
         "default".to_string()
     } else {
@@ -1531,6 +1531,12 @@ impl ConfigStore {
         self.cache.collapsed_session_groups.as_deref()
     }
 
+    /// (#group-color 2026-09-14) 全部分组颜色(组名 -> "#RRGGBB"),供模型层
+    /// 组装 SessionInfo 时查表。未设色的组不在表里。
+    pub fn group_colors(&self) -> &std::collections::HashMap<String, String> {
+        &self.cache.group_colors
+    }
+
     /// (#hide-system-group) 是否隐藏欢迎列表里的"本地终端"保留组
     /// (列表空白处 / 组头右键菜单切换)。默认 false = 显示。
     pub fn system_group_hidden(&self) -> bool {
@@ -1689,6 +1695,9 @@ impl ConfigStore {
             return;
         }
         self.cache.groups.retain(|g| g != name);
+        // (#group-color 2026-09-14) 组没了,颜色条目也要跟着清掉:否则以后
+        // 建一个同名组时会"继承"上一个组的颜色,看起来像凭空冒出来的。
+        self.cache.group_colors.remove(name);
         if let Some(groups) = &mut self.cache.collapsed_session_groups {
             groups.retain(|group| group != name);
         }
@@ -1715,6 +1724,11 @@ impl ConfigStore {
                 *g = n.clone();
             }
         }
+        // (#group-color 2026-09-14) 颜色是按组名存的 key,改名时必须一起迁移 ——
+        // 否则"改个名颜色就没了"(用户设的色静默丢失)。
+        if let Some(hex) = self.cache.group_colors.remove(old) {
+            self.cache.group_colors.insert(n.clone(), hex);
+        }
         for s in &mut self.cache.sessions {
             if s.group == old {
                 s.group = n.clone();
@@ -1731,6 +1745,25 @@ impl ConfigStore {
         }
         self.cache.groups.sort();
         self.cache.groups.dedup();
+    }
+
+    /// 设定分组颜色;`hex` 传空串 = 清除(回到无色)。
+    /// (#group-color-reserved 2026-09-14) **保留组也可着色**:system(本地终端)与
+    /// default(默认组)默认仍无色(不参与自动配色),但用户右击设色后照常显示 ——
+    /// 用户定稿"系统组、默认组都支持右击修改分组颜色"。因此这里只拒绝空名。
+    pub fn set_group_color(&mut self, name: &str, hex: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let hex = hex.trim();
+        if hex.is_empty() {
+            self.cache.group_colors.remove(name);
+        } else {
+            self.cache
+                .group_colors
+                .insert(name.to_string(), hex.to_string());
+        }
     }
 
     pub fn save(&self) -> Result<()> {

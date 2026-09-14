@@ -27,11 +27,14 @@ export struct SessionInfo {
     note: string,
     // (#session-drag-smooth 2026-09-05) 组内序(0..n,Rust 按过滤后顺序填):
     // 拖拽让位计算用——被拖行越过的同组成员向反方向平移一行高。
-    // (#group-hue 2026-09-10) 组色相索引:Rust 按【组名 hash】算出(同一组
-    // 恒同色、与排序/顺序无关),具体色值在 theme.slint 的 group-hue-color()
-    // 里按明暗主题取——颜色定义留在主题层,主题切换自动生效。-1 = 无组
-    // (group == ""),回落中性 border-subtle。
-    group-hue: int,
+    // (#group-color 2026-09-14) 分组颜色 = 用户在右键菜单里设定的值。
+    // `group-color-hex == ""` 即**无色**:渲染时回落该主题的次级前景色
+    // (不是置灰 —— 用户定稿"无色就是普通前景色")。旧有的"组名 hash 派生色"
+    // 已整体退役:颜色随机、改个名就变,无法承担身份标识的职责。
+    group-color: color,
+    // (#group-color 2026-09-14) hex 原文("" = 无色):取色面板的输入框要显示
+    // 它,"有没有设过色"也看它(非空即有色),不再另开一个 bool 字段。
+    group-color-hex: string,
 }
 
 // (#ctx-menu-autoclose 2026-09-09) 右键菜单"一步换目标"的行命中注册项:
@@ -560,7 +563,7 @@ component SessionRow inherits Rectangle {
             || (session.id == root.drag-id && !root.drop-has-target
                 && root.drop-owner == ""));
     if root.box-show : Rectangle {
-        property <color> box-c: Theme.group-hue-color(root.session.group-hue);
+        property <color> box-c: Theme.group-color(root.session.group-color-hex != "", root.session.group-color);
         // (#slot-spine-head-gap 2026-09-14) 框占据的恒是**本行原槽**(y = -shift-y
         // 抵消行自身位移),而"组头 ↔ 组首成员"之间有一道 **2px 布局间距**
         // (成员行之间没有,见 #spine-seg-flush)。于是组首成员的槽位上方空出
@@ -666,23 +669,9 @@ component SessionRow inherits Rectangle {
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
-            // (#session-status-dot-r4 2026-09-05) 徽章位置:贴在图标方块左侧
-            // 垂直中心(右缘与图标左缘搭接 2px),像信号灯挂在侧边,不再压角
-            // 溢出,与左侧树引导线也保持距离(树线 x≈19,点 24..30)。
-            if root.session.conn-state == 1 : Rectangle {
-                x: -4px;
-                y: (parent.height - self.height) / 2;
-                width: 6px; height: 6px;
-                border-radius: 3px;
-                background: Theme.warning;
-            }
-            if root.session.conn-state == 2 : Rectangle {
-                x: -4px;
-                y: (parent.height - self.height) / 2;
-                width: 6px; height: 6px;
-                border-radius: 3px;
-                background: Theme.success;
-            }
+            // (#session-status-dot-removed 2026-09-14) 连接状态点已移除：会话行
+            // 不再用图标左侧的 6px 圆点表达"连接中 / 已连接"。该点原本是绝对
+            // 定位(x: -4px，不占布局)，删除后图标方块与文字位置完全不变。
         }
 
         // (#session-hover-card-r2 2026-09-05) 成员行单行化:只显示名称,
@@ -806,7 +795,7 @@ component SessionRow inherits Rectangle {
         // 与行的让位动画同参数(140ms / cubic-bezier(.22,.61,.36,1)),否则
         // 线会先跳到新位置、行再滑过去,出现"线比行早到"的错拍。
         animate y, height { duration: 140ms; easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
-        background: Theme.group-hue-color(root.session.group-hue).with-alpha(root.spine-hot ? 0.90 : 0.30);
+        background: Theme.group-color(root.session.group-color-hex != "", root.session.group-color).with-alpha(root.spine-hot ? 0.90 : 0.30);
         animate background { duration: 120ms; easing: ease-out; }
     }
 
@@ -859,7 +848,7 @@ component SessionRow inherits Rectangle {
         y: (parent.height - 1px) / 2;
         width: 8px;
         height: 1px;
-        background: Theme.group-hue-color(root.session.group-hue).with-alpha(self.hot ? 0.90 : 0.30);
+        background: Theme.group-color(root.session.group-color-hex != "", root.session.group-color).with-alpha(self.hot ? 0.90 : 0.30);
         animate background { duration: 120ms; easing: ease-out; }
     }
 
@@ -1082,6 +1071,12 @@ export component Welcome inherits Rectangle {
     // 窗口坐标、点击点到快速连接面板底的余量(浮层据此上翻)。
     in-out property <string> ctx-menu-kind: "";
     in-out property <string> ctx-menu-group: "";
+    // (#group-color 2026-09-14) 被右击组的**当前颜色** + 取色面板展开态。
+    // 菜单是单实例复用:颜色必须随 ctx-menu-group 在右击时一起注入(见组头
+    // 右击分支),否则会残留上一组的色。面板展开态在每次换菜单时复位。
+    in-out property <color> ctx-menu-group-color: transparent;
+    in-out property <string> ctx-menu-group-color-hex: "";
+    in-out property <bool> group-color-picker-open: false;
     in-out property <bool> ctx-menu-empty: false;   // 组头菜单:空组才有"删除"
     in-out property <length> ctx-menu-x: 0px;
     in-out property <length> ctx-menu-y: 0px;
@@ -1513,6 +1508,10 @@ export component Welcome inherits Rectangle {
                                 // `ctx-menu-group == 本组`,留着旧值会让**最后一组**
                                 // (或上次右击的那组)在空白右击时被点亮(用户实测)。
                                 root.ctx-menu-group = "";
+                                // (#group-color 2026-09-14) 非组菜单:收起取色面板
+                                // (面板只在 kind == "group" 时渲染,但状态留着会
+                                // 在下次开组菜单前闪一帧展开态)。
+                                root.group-color-picker-open = false;
                                 root.ctx-menu-x = self.absolute-position.x + self.mouse-x;
                                 root.ctx-menu-y = self.absolute-position.y + self.mouse-y;
                                 // 余量按面板底算(self 就是列表可视区),供浮层
@@ -1852,7 +1851,14 @@ export component Welcome inherits Rectangle {
                                         } else {
                                             parent.g-was-drag = false;
                                         }
-                                    } else if (!session.builtin && !root.group-dragging
+                                    // (#group-color-reserved 2026-09-14) 去掉原
+                                    // `!session.builtin`:**本地终端(system)的组头
+                                    // 同样要能右击** —— 用户定稿"系统组、默认组
+                                    // 都支持修改分组颜色"。组头壳的 session 恒为
+                                    // 组头行(group-header 非空),不存在"内置成员行
+                                    // 误开组菜单"的副作用;菜单里"编辑分组"一项另
+                                    // 用保留组条件隐藏(见 app.slint grp-menu-rect)。
+                                    } else if (!root.group-dragging
                                         && e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
                                         // (#ctx-menu-backdrop) 弹层状态直写
                                         // Welcome 级,由 AppWindow 根浮层渲染;
@@ -1861,6 +1867,12 @@ export component Welcome inherits Rectangle {
                                         root.ctx-open-key = "hdr:" + session.group-header;
                                         root.ctx-menu-kind = "group";
                                         root.ctx-menu-group = session.group;
+                                        // (#group-color 2026-09-14) 当前组色随
+                                        // 菜单一起注入(单实例复用,不注入会残留
+                                        // 上一组的色);取色面板每次换菜单收起。
+                                        root.ctx-menu-group-color = session.group-color;
+                                        root.ctx-menu-group-color-hex = session.group-color-hex;
+                                        root.group-color-picker-open = false;
                                         root.ctx-menu-empty = session.id == "";
                                         root.ctx-menu-x = self.absolute-position.x + self.mouse-x;
                                         root.ctx-menu-y = self.absolute-position.y + self.mouse-y;
@@ -2015,16 +2027,13 @@ export component Welcome inherits Rectangle {
                                 Text {
                                     text: session.collapsed ? "\u{E5CC}" : "\u{E5CF}";
                                     font-family: "Material Icons";
-                                    // (#group-hue-align-html 2026-09-10) chevron
-                                    // 染组色(对齐 HTML 原型:caret = var(--gc))——
-                                    // 折叠箭头是组身份的一部分,灰色削弱归属感。
-                                    // hover 仍提亮为 text-primary 保留交互反馈。
-                                    // (#group-hue-keep 2026-09-10) 悬停**不再**把组
-                                    // 色抹成 text-primary:底色 bg-hover 已经承担
-                                    // hover 反馈,再把 chevron/文件夹漂白,等于把
-                                    // "这是哪个组"的唯一色标抹掉(用户截图:悬浮时
-                                    // 组头整行变白)。组身份色恒定,变的只有底色。
-                                    color: Theme.group-hue-color(session.group-hue);
+                                    // (#group-color 2026-09-14) **chevron 不跟组色**:
+                                    // 它是"展开 / 折叠"的**功能控件**,不是身份标记 ——
+                                    // 染色会被读成"这是个可点的彩色按钮",而且它和
+                                    // 左侧文件夹并排时,两个彩色元素一起压在组名前,
+                                    // 视觉太重。用户定稿:只有文件夹染组色,颜色只
+                                    // 出现在"表达分组"的地方。
+                                    color: Theme.text-secondary;
                                     font-size: Theme.fs-xl;
                                     vertical-alignment: center;
                                 }
@@ -2034,15 +2043,14 @@ export component Welcome inherits Rectangle {
                                     // chevron(▸/▾)同向联动。
                                     text: session.collapsed ? "\u{E2C7}" : "\u{E2C8}";
                                     font-family: "Material Icons";
-                                    // (#group-hue-align-html 2026-09-10) 文件夹
-                                    // 同染组色:与 chevron、脊线、成员行构成同源
-                                    // 色彩链,组身份一眼可辨。
-                                    // (#group-hue-keep 2026-09-10) 悬停**不再**把组
-                                    // 色抹成 text-primary:底色 bg-hover 已经承担
-                                    // hover 反馈,再把 chevron/文件夹漂白,等于把
-                                    // "这是哪个组"的唯一色标抹掉(用户截图:悬浮时
-                                    // 组头整行变白)。组身份色恒定,变的只有底色。
-                                    color: Theme.group-hue-color(session.group-hue);
+                                    // (#group-color 2026-09-14) **文件夹 = 组色的
+                                    // 主载体**(用户定稿)。用文件夹表达分组最自然:
+                                    // 图标本身就是"容器"的隐喻,位置又早已固定,
+                                    // 不新增元素。无色时由 group-color() 回落次级
+                                    // 前景色,不是置灰。
+                                    // 悬停不改前景:底色 bg-hover 已承担 hover 反馈,
+                                    // 再把色标抹掉等于丢掉"这是哪个组"。
+                                    color: Theme.group-color(session.group-color-hex != "", session.group-color);
                                     font-size: Theme.fs-xl;
                                     vertical-alignment: center;
                                 }
@@ -2271,6 +2279,9 @@ export component Welcome inherits Rectangle {
                                 root.ctx-open-key = session.id;
                                 root.ctx-menu-kind = "row";
                                 root.ctx-menu-group = session.group;
+                                // (#group-color 2026-09-14) 成员行菜单无取色面板:
+                                // 收起状态,避免切到组菜单时残留展开态。
+                                root.group-color-picker-open = false;
                                 root.ctx-menu-x = srow.absolute-position.x + px;
                                 root.ctx-menu-space-below =
                                     flick.absolute-position.y + flick.height

@@ -2,6 +2,72 @@ use super::*;
 // (#drag-cross-group-fix 2026-09-06) 显式导入:此前经 `use super::*` 隐式
 // 继承 app.rs 的 use 项,app.rs 内不再直接使用该函数后需在此声明。
 use crate::config::named_display_groups;
+// (#tab-group-bar 2026-09-14) 标签底部色条要用与左侧会话行同一套"显示组"语义。
+use crate::config::display_group_of;
+// (#group-color 2026-09-14) 分组颜色表:组名 -> "#RRGGBB"。
+use std::collections::HashMap;
+
+/// (#group-color 2026-09-14) 解析 `"#RRGGBB"` / `"#RGB"`(前导 `#` 可省)为颜色。
+/// Slint 的 `Color` **没有实现 `FromStr`**,所以这里手工解析。其他形式一律视为
+/// 无效 → 该组回落"无色"。
+pub(super) fn parse_hex_color(hex: &str) -> Option<slint::Color> {
+    let h = hex.trim().trim_start_matches('#');
+    let (r, g, b) = match h.len() {
+        3 => {
+            // `#abc` 简写:每位重复一次(a → 0xaa)。
+            let dup = |i: usize| u8::from_str_radix(&h[i..i + 1], 16).ok().map(|v| v * 17);
+            (dup(0)?, dup(1)?, dup(2)?)
+        }
+        6 => (
+            u8::from_str_radix(&h[0..2], 16).ok()?,
+            u8::from_str_radix(&h[2..4], 16).ok()?,
+            u8::from_str_radix(&h[4..6], 16).ok()?,
+        ),
+        _ => return None,
+    };
+    Some(slint::Color::from_rgb_u8(r, g, b))
+}
+
+/// (#group-color 2026-09-14) 把用户输入的 hex 归一到 `#rrggbb`(小写、带 `#`)。
+/// 存储形式统一后,面板里"当前选中色"的判定就是一次字符串相等,不必反复解析。
+/// 非法输入返回 `None`。
+pub(super) fn normalize_hex(hex: &str) -> Option<String> {
+    let c = parse_hex_color(hex)?;
+    Some(format!(
+        "#{:02x}{:02x}{:02x}",
+        c.red(),
+        c.green(),
+        c.blue()
+    ))
+}
+
+/// (#tab-group-bar 2026-09-14) 标签底部色条用的组色:`(绘制色, hex)`。
+///
+/// **必须与左侧会话行同源** —— 复用同一张 `group_colors` 表和同一套"显示组"
+/// 规则(空组名 / 保留名 → "default"),否则标签色条会和它所属的组头对不上色。
+/// 唯一的例外是内建本地终端:它在列表里恒归 `system` 组(见 `build_session_rows`),
+/// 若直接走 `display_group_of` 会被归到 `default`,故先用内建列表判一次身份。
+///
+/// hex 为空 = 该组未设色 → Slint 侧不绘制色条。
+pub(super) fn tab_group_color(store: &ConfigStore, session: &Session) -> (slint::Color, String) {
+    let builtin = builtin_local_sessions(store.wsl_profiles());
+    let group = if builtin.iter().any(|b| b.id == session.id) {
+        "system".to_string()
+    } else {
+        display_group_of(session)
+    };
+    match store
+        .group_colors()
+        .get(group.as_str())
+        .filter(|hex| !hex.trim().is_empty())
+    {
+        Some(hex) => (
+            parse_hex_color(hex).unwrap_or_default(),
+            hex.trim().to_string(),
+        ),
+        None => (slint::Color::default(), String::new()),
+    }
+}
 
 fn serial_session_detail(session: &Session) -> String {
     if session.kind != SessionKind::Serial {
@@ -79,18 +145,29 @@ pub(super) fn parse_batch_import(text: &str) -> Vec<Session> {
     out
 }
 
-/// Distinct named groups (explicit folders ∪ the groups sessions are filed under),
-/// de-duplicated and sorted alphabetically — feeds the new/edit dialog's group
-/// dropdown (#179). Ungrouped ("") is excluded; the dialog leaves the field blank
-/// for that case.
-pub(super) fn session_groups_model(store: &ConfigStore) -> ModelRc<SharedString> {
+/// (#group-dot 2026-09-14) 同上,但每项**多带该组的颜色**:会话对话框的「分组」
+/// 下拉要在组名前画色点,而 Slint 侧既无"按名查色"也无 color→hex 的能力,故在
+/// Rust 侧把名称与颜色配成对一起注入(与 named_display_groups 同源)。
+/// 未设色的组 hex = "" → Slint 侧只留空位、不画点。
+pub(super) fn session_groups_model(store: &ConfigStore) -> ModelRc<GroupEntry> {
     let named = named_display_groups(store.groups(), store.sessions());
-    ModelRc::from(Rc::new(VecModel::from(
-        named
-            .into_iter()
-            .map(SharedString::from)
-            .collect::<Vec<_>>(),
-    )))
+    let colors = store.group_colors();
+    let entries: Vec<GroupEntry> = named
+        .into_iter()
+        .map(|name| {
+            let hex = colors
+                .get(name.as_str())
+                .map(|h| h.trim())
+                .filter(|h| !h.is_empty())
+                .unwrap_or("");
+            GroupEntry {
+                name: name.as_str().into(),
+                hex: hex.into(),
+                color: parse_hex_color(hex).unwrap_or_default(),
+            }
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(entries)))
 }
 
 /// (#move-to-groups 2026-09-14) 成员右键菜单「移动到」的组清单,顺序 =
@@ -176,6 +253,8 @@ fn build_session_rows(
     sessions: &[Session],
     explicit_groups: &[String],
     collapsed_groups: Option<&[String]>,
+    // (#group-color 2026-09-14) 用户在右键菜单里设的分组颜色(组名 -> hex)。
+    group_colors: &HashMap<String, String>,
     builtin_sessions: &[Session],
     query: &str,
     // (#hide-system-group 2026-09-13) 隐藏"本地终端"保留组:**模型层过滤**。
@@ -268,46 +347,37 @@ fn build_session_rows(
     }
     display_groups.extend(named);
 
-    // (#group-hue 2026-09-10) 组色相索引:按【组名】做 FNV-1a 32 位 hash 取模。
-    // 为什么放 Rust:Slint 1.8 的字符串 API 只有 length / is-empty,拿不到字符,
-    // 纯 .slint 侧只能按"组名长度"取色,而 "3"/"1"/"2" 这类单字组名会全部
-    // 撞成同一色,不可用。
-    // 为什么按组名而不是序号:hash 与排序位置无关,组被拖动到任何位置都保持
-    // 原色,否则用户一排序颜色就变,颜色失去"身份标识"的意义。
-    // 返回值即 Theme.group-hue-* 调色板下标;-1 = 无组(group == ""),Slint 侧
-    // 回落中性描边色。调色板长度变更时只需同步此处的 HUE_COUNT。
-    const HUE_COUNT: u32 = 8;
-    let group_hue = |group: &str| -> i32 {
-        // (#system-group-plain 2026-09-14) **本地终端(system)完全无组色**:
-        // 它是固定保留区、不参与组排序,给它任何颜色(包括主题色)都会被读成
-        // "它也是一个身份分组"(用户定稿"不需要任何颜色,主题也要去掉")。
-        // 回落 -2 → theme 的中性描边灰;树线、组头 caret/文件夹图标一并中性。
-        if group.eq_ignore_ascii_case("system") {
-            return -2;
+    // (#group-color 2026-09-14) 分组颜色 = **用户在右键菜单里设定的 hex**。
+    // 未设 = 无色(has 为 false),由 Slint 回落该主题的次级前景色。
+    //
+    // 旧的"组名 hash → 8 色调色板"派生机制整体退役:那是临时方案,颜色随机、
+    // 且**改个组名就换色**,无法承担"身份标识"的职责。用户定稿:"默认就是
+    // 没有色彩的"。落点(组头文件夹 + 成员树线)全部由这一个来源驱动。
+    //
+    // 返回 (颜色, 是否已设):已设时把 hex 解析成 Color 一并传下去,Slint 侧
+    // 不必做字符串→颜色的转换。
+    // (#group-color-reserved 2026-09-14) **保留组一视同仁**:system(本地终端)与
+    // default(默认组)不再被排除在设色表之外 —— 用户定稿"系统组、默认组都支持
+    // 右击修改分组颜色"。二者仍**默认无色**(不参与自动配色),只是用户手动设色
+    // 后照常显示。组名为空(内部哨兵)才是真正的无色。
+    let group_color = |group: &str| -> (slint::Color, String) {
+        if group.is_empty() {
+            return (slint::Color::default(), String::new());
         }
-        if group.is_empty() || group.eq_ignore_ascii_case("default") {
-            return -1;
+        match group_colors.get(group).filter(|hex| !hex.is_empty()) {
+            Some(hex) => match parse_hex_color(hex) {
+                Some(color) => (color, hex.clone()),
+                None => (slint::Color::default(), String::new()),
+            },
+            None => (slint::Color::default(), String::new()),
         }
-        let mut h: u32 = 0x811c9dc5; // FNV-1a offset basis
-        for b in group.as_bytes() {
-            h ^= *b as u32;
-            h = h.wrapping_mul(0x01000193); // FNV prime
-        }
-        // 雪崩混合(murmur3 finalizer)。必须做:FNV 的**低位**分布很差,
-        // 直接 `% 8` 只取低 3 位,实测 16 个常见组名只落到 7 档且严重偏斜
-        // (system / 1 / prod / dev 全挤在同一档)。混合后 8 档全部用上,
-        // 且 system(本地终端)稳定独占 0 号绿。
-        h ^= h >> 16;
-        h = h.wrapping_mul(0x85ebca6b);
-        h ^= h >> 13;
-        h = h.wrapping_mul(0xc2b2ae35);
-        h ^= h >> 16;
-        (h % HUE_COUNT) as i32
     };
 
     // Placeholder row for an empty folder; id == "" marks it as a group header
     // with no session (used by the UI to gate the "delete group" action).
-    let blank = |group: &str| SessionInfo {
+    // (#group-color 2026-09-14) 空组占位行也要带组色 —— 组头行的文件夹
+    // 靠它上色,占位组同样要显示自己的颜色。
+    let blank = |group: &str, gc: slint::Color, hex: &str| SessionInfo {
         id: "".into(),
         name: "".into(),
         host: "".into(),
@@ -324,7 +394,8 @@ fn build_session_rows(
         note: "".into(),
         group_index: 0,
         group_size: 0,
-        group_hue: group_hue(group),
+        group_color: gc,
+        group_color_hex: hex.into(),
     };
 
     let mut rows: Vec<SessionInfo> = Vec::new();
@@ -334,6 +405,9 @@ fn build_session_rows(
         .filter(|session| matches(session))
         .collect();
     for (i, s) in builtin_matched.iter().enumerate() {
+        // (#group-color-reserved 2026-09-14) 本地终端组默认无色,但支持用户右击
+        // 设色 —— 与具名组读同一张表,不再硬编码无色。
+        let (sys_gc, sys_hex) = group_color("system");
         rows.push(SessionInfo {
             id: s.id.clone().into(),
             name: s.name.clone().into(),
@@ -344,7 +418,8 @@ fn build_session_rows(
             auth: s.kind.as_str().into(),
             last_used: "".into(),
             group: "system".into(),
-            group_hue: group_hue("system"),
+            group_color: sys_gc,
+            group_color_hex: sys_hex.as_str().into(),
             group_header: if i == 0 { "system".into() } else { "".into() },
             collapsed: group_is_collapsed("system"),
             note: "".into(),
@@ -381,8 +456,10 @@ fn build_session_rows(
         // 可折叠、可作跨组拖放的落点。空占位(blank)仍只给具名组——default 组
         // 只在存在未分组成员时才进入 display_groups(见上面的 has_default),
         // 恒有成员,该分支天然走不到。
+        // (#group-color 2026-09-14) 本组的颜色,组头与成员行共用同一个值。
+        let (gc, hex) = group_color(group);
         if gs.is_empty() && !searching && group != "default" {
-            rows.push(blank(group));
+            rows.push(blank(group, gc, &hex));
         } else {
             for (i, s) in gs.iter().enumerate() {
                 rows.push(SessionInfo {
@@ -400,7 +477,8 @@ fn build_session_rows(
                         .unwrap_or_else(|| "never".to_string())
                         .into(),
                     group: group.clone().into(),
-                    group_hue: group_hue(group),
+                    group_color: gc,
+                    group_color_hex: hex.as_str().into(),
                     // (#default-group-header 2026-09-10) default 组现在也生成
                     // 组头行:未分组的会话不再是"顶层平铺的单独会话",而是挂在
                     // "默认组"下面的普通成员(用户要求:每个会话必须属于某个组,
@@ -440,6 +518,7 @@ pub(super) fn sync_sessions_to_model_with_filter(
         store.sessions(),
         store.groups(),
         store.collapsed_session_groups(),
+        store.group_colors(),
         &builtin_sessions,
         query,
         store.system_group_hidden(),
@@ -464,6 +543,7 @@ pub(super) fn refresh_session_rows_in_place(
         store.sessions(),
         store.groups(),
         store.collapsed_session_groups(),
+        store.group_colors(),
         &builtin_sessions,
         query,
         store.system_group_hidden(),
@@ -671,7 +751,7 @@ mod search_tests {
         let groups = vec!["empty".to_string(), "prod".to_string()];
         let collapsed = vec!["prod".to_string(), "system".to_string()];
 
-        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &builtins, "prod", false);
+        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &HashMap::new(), &builtins, "prod", false);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name.as_str(), "Prod API");
@@ -687,6 +767,7 @@ mod search_tests {
             &[],
             &[],
             Some(&["system".to_string()]),
+            &HashMap::new(),
             &builtins,
             "LOCALHOST",
             false,
@@ -704,7 +785,7 @@ mod search_tests {
         let saved = vec![session("1", "Prod API", "10.0.0.8", "prod")];
         let builtins = vec![session("local", "Local terminal", "localhost", "system")];
 
-        let rows = build_session_rows(&saved, &[], None, &builtins, "staging", false);
+        let rows = build_session_rows(&saved, &[], None, &HashMap::new(), &builtins, "staging", false);
 
         assert!(rows.is_empty());
     }
@@ -715,7 +796,7 @@ mod search_tests {
         let groups = vec!["empty".to_string(), "prod".to_string()];
         let collapsed = vec!["prod".to_string()];
 
-        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &[], "", false);
+        let rows = build_session_rows(&saved, &groups, Some(&collapsed), &HashMap::new(), &[], "", false);
 
         assert!(rows
             .iter()
@@ -755,7 +836,7 @@ mod drag_order_tests {
         // 存储顺序:测试 在 Test 之前(字母序会把它排到后面)。
         let groups = vec!["测试".to_string(), "Test".to_string()];
 
-        let rows = build_session_rows(&saved, &groups, None, &[], "", false);
+        let rows = build_session_rows(&saved, &groups, None, &HashMap::new(), &[], "", false);
 
         let headers: Vec<&str> = rows
             .iter()
@@ -796,7 +877,7 @@ mod serial_display_tests {
             session.data_bits = bits;
             session.parity = parity.into();
             session.stop_bits = stops;
-            let rows = build_session_rows(&[session], &[], None, &[], "", false);
+            let rows = build_session_rows(&[session], &[], None, &HashMap::new(), &[], "", false);
             assert_eq!(rows.len(), 1);
             assert_eq!(rows[0].serial_detail.as_str(), expected);
         }
@@ -810,7 +891,7 @@ mod serial_display_tests {
             session.host = "example.com".into();
             session.port = 2222;
             session.user = "alice".into();
-            let rows = build_session_rows(&[session], &[], None, &[], "", false);
+            let rows = build_session_rows(&[session], &[], None, &HashMap::new(), &[], "", false);
             assert!(rows[0].serial_detail.is_empty());
             assert_eq!(rows[0].host.as_str(), "example.com");
             assert_eq!(rows[0].port, 2222);

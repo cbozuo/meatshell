@@ -74,6 +74,11 @@ export global Theme {
     out property <brush> tab-active-border: root.wallpaper-active
         ? root.wp-accent.with-alpha(0.72)
         : (dark ? #06070a : #c7c7cc);
+    // (#tab-bar-bg 2026-09-14) 标签栏底色。**独立于 base-bg-panel-alt**：亮色下
+    // 后者(#f2f2f7)与白色选中标签只有 1.05:1，而选中态已去掉 2px accent 外框、
+    // 改为靠"背景分野"辨识，所以浅色档单独加深到 #eaeaef。不动全局 token，
+    // 其它使用 bg-panel-alt 的面板不受影响。
+    out property <brush> tab-bar-bg: dark ? #2a2d35 : #eaeaef;
 
     out property <brush> border-subtle: dark ? #3a3d46 : #e2e2e8;
     out property <brush> border-strong: dark ? #4a4e59 : #c7c7cc;
@@ -142,49 +147,39 @@ export global Theme {
     in-out property <length> term-font-size: 13px;
     in-out property <bool> term-font-bold: false;
 
-    // --- Group hue palette (#group-hue 2026-09-10) -------------------------
-    // 组色由【组名 hash】映射而来(Rust 侧算索引,见 session_models::group_hue),
-    // 同一组恒同色、与排序位置无关。色值在主题层定义,明暗主题各自一套,
-    // 切换主题自动跟着换。8 档色相,相邻档在色环上拉开距离,保证常用组
-    // 不易撞色;饱和度压低一档,避免 1px 竖线过于跳眼。
-    out property <[color]> group-hue-dark: [
-        #9ece6a,  // 0 绿   本地终端常用
-        #7aa2f7,  // 1 蓝
-        #bb9af7,  // 2 紫
-        #e0af68,  // 3 黄
-        #2ac3de,  // 4 青
-        #f7768e,  // 5 粉
-        #ff9e64,  // 6 橙
-        #7dcfff,  // 7 天蓝
-    ];
-    out property <[color]> group-hue-light: [
-        #3b6d11,  // 0 绿
-        #185fa5,  // 1 蓝
-        #534ab7,  // 2 紫
-        #854f0b,  // 3 黄
-        #0f6e56,  // 4 青
-        #993556,  // 5 粉
-        #993c1d,  // 6 橙
-        #0c447c,  // 7 天蓝
-    ];
-    // (#default-group-accent 2026-09-10) hue < 0 = 默认组(「默认组」),改用
-    // 主题强调色(用户定稿)。它是"未填写分组"的收容处:跟随主题色既能一眼
-    // 认出"这是系统给的组",也避免与具名组的身份色(调色板)混淆。越界同样
-    // 回落强调色。
-    // (#group-hue-align-html 2026-09-10) 必须显式 `public`:函数被 welcome.slint
-    // 调用,Slint 1.8 起跨组件调用私有函数会报 warning(下一版直接升为 error),
-    // 提前标注豁免。
-    public pure function group-hue-color(hue: int) -> color {
-        // (#system-group-plain 2026-09-14) hue == -2 = **完全无组色**:本地终端
-        // (system)是固定保留区、不属于任何"身份分组"—— 用户定稿"不需要任何
-        // 颜色,主题也要去掉"。"无色" = 普通前景色 text-secondary(与组头文字
-        // 同一档),不是更暗的置灰:此前回落 border-subtle(#3a3d46),暗底上
-        // caret/文件夹图标几乎隐形(用户实测"不要置灰,无色就好")。
-        // 与 -1(默认组 → 主题强调色)区分开,两条语义各自独立。
-        if (hue == -2) { return root.dark ? #b4b9c4 : #45454a; }
-        if (hue < 0 || hue >= root.group-hue-dark.length) { return root.accent-solid; }
-        return root.dark ? root.group-hue-dark[hue] : root.group-hue-light[hue];
+    // --- Group colour (#group-color 2026-09-14) ----------------------------
+    // 分组颜色由**用户在右键菜单里设定**(Rust 侧存 HashMap<组名, hex>,
+    // 见 config::set_group_color / group_colors),主题层不再派生任何颜色。
+    //
+    // 旧的"组名 hash → 8 色调色板"派生机制整体退役:颜色随机、且**改个组名
+    // 就换色**,无法承担"身份标识"的职责。用户定稿:"默认就是没有色彩的"。
+    //
+    // 无色(has-color == false)= 回落该主题的**次级前景色**(text-secondary,
+    // 与组头文字同一档),**不是更暗的置灰** —— 此前回落 border-subtle
+    // (#3a3d46)时,暗底上 caret / 文件夹图标几乎隐形(用户实测"不要置灰,
+    // 无色就好")。
+    //
+    // 显式 `public`:被 welcome.slint 跨组件调用(Slint 1.8 起对私有跨组件
+    // 调用会告警,下一版升为 error)。
+    public pure function group-color(has-color: bool, value: color) -> color {
+        return has-color ? value : root.text-secondary;
     }
+
+    // (#group-color 2026-09-14) 取色面板的 24 色候选:色环上均匀取 18 档 +
+    // 6 档中性灰。明暗主题各一套 —— 暗底取亮档、浅底取深档,保证 1px 树线
+    // 与组头图标在各自背景上都清晰可辨。面板按索引取色,两套长度必须一致。
+    out property <[color]> group-color-dark: [
+        #f87171, #fb923c, #fbbf24, #facc15, #a3e635, #4ade80,
+        #34d399, #2dd4bf, #22d3ee, #38bdf8, #60a5fa, #818cf8,
+        #a78bfa, #c084fc, #e879f9, #f472b6, #fb7185, #fda4af,
+        #f1f5f9, #e2e8f0, #cbd5e1, #a8a29e, #94a3b8, #64748b,
+    ];
+    out property <[color]> group-color-light: [
+        #dc2626, #ea580c, #d97706, #ca8a04, #65a30d, #16a34a,
+        #059669, #0d9488, #0891b2, #0284c7, #2563eb, #4f46e5,
+        #7c3aed, #9333ea, #c026d3, #db2777, #e11d48, #f43f5e,
+        #475569, #334155, #1e293b, #57534e, #78716c, #a8a29e,
+    ];
 
     // --- Geometry ----------------------------------------------------------
     out property <length> radius-sm: 4px * root.ui-scale;

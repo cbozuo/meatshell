@@ -18,7 +18,7 @@ import { Theme } from "theme.slint";
 import { Sidebar, DiskInfo } from "sidebar.slint";
 import { TabBar, TabInfo } from "tabs.slint";
 import { Welcome, SessionInfo, CtxRowHit } from "welcome.slint";
-import { SessionDialog, SessionDraft, PortFwd, TriggerDraft } from "session_dialog.slint";
+import { SessionDialog, SessionDraft, PortFwd, TriggerDraft, GroupEntry } from "session_dialog.slint";
 import { ConfirmDialog } from "confirm_dialog.slint";
 import { LabeledInput, PrimaryButton, GhostButton, DockExpandButton, IconButton, ToolStrip } from "widgets.slint";
 import { TerminalView, TermSpan, TermMatch, QuickCmd, QuickDockPanel } from "terminal_view.slint";
@@ -109,6 +109,130 @@ export struct SplitterInfo {
     w: length,
     h: length,
     vertical: bool,   // true = vertical handle (drag left/right)
+}
+
+// (#group-color 2026-09-14) 取色面板的一个候选色。`hex` 是提交给 Rust 的原文
+// (也用作"当前选中"的判定依据),`swatch` 是画色块用的颜色。两者由 Rust 从
+// 同一份调色板常量一并注入 —— Slint 1.8 没有 color → "#RRGGBB" 的转换,
+// 若在 .slint 侧定义颜色数组,点色格时就拿不到可提交的 hex 字符串。
+export struct GroupSwatch {
+    hex: string,
+    swatch: color,
+}
+
+// (#group-color-field 2026-09-14) 「分组颜色」字段 —— **一套控件,三处复用心**:
+// ① 组头右键菜单的取色面板 ② 新建分组对话框 ③ 编辑分组对话框。此前色板/hex 在
+// 取色面板里写过一遍,再往两个对话框里各抄一遍就会三份实现各自演化,故抽组件。
+//
+// 结构:一行「当前色块 + hex 输入」→ 24 色网格 → 「无颜色」。
+//  · 当前色块无色时画成**透明底 + 描边**(空就是空,不填一块灰);
+//  · 色格恒定 2px 边框(透明也算),否则选中描边一出现,色块尺寸就变;
+//  · 网格用两侧等宽占位块居中 —— 面板(200px)与对话框(304px)内容宽不同,
+//    固定左对齐会让对话框里右半边空一大片。
+//
+// picked(hex, color) 回调的语义完全交给调用方:取色面板点即提交(写盘),对话框
+// 则先暂存、随「确定」提交(取消可回退)。color 是**预览色**,手输 hex 时组件
+// 无从解析字符串,会把调用方之前给的预览色原样回传。
+component GroupColorField inherits VerticalLayout {
+    in-out property <string> hex;      // "" = 无色
+    in property <color> value;         // hex 对应的颜色
+    in property <[GroupSwatch]> palette;
+    // 只回传 hex。**不再回传 color**:手输 hex 时组件根本无从解析字符串(Slint
+    // 没有 string → color),只能把调用方上次给的预览色原样回传,那会让色块显示
+    // 一个**实际颜色并不对应**的值。改由调用方按需解析:
+    //  · 取色面板 → 交给 Rust(set-group-color 落盘后回写颜色);
+    //  · 对话框   → 走 resolve-color 只解析、不落盘。
+    callback picked(string /* hex */);
+
+    spacing: 8px;
+
+    HorizontalLayout {
+        // 纵向居中交给**布局**的 alignment。此处与 Rectangle 无关:RECTANGLE 没有
+        // vertical-alignment 是对的,但布局有 —— 早先用"撑满壳 + 手算 y"是把
+        // 布局对齐当成了元素属性。
+        alignment: center;
+        spacing: 8px;
+        Rectangle {
+            width: 22px;
+            height: 22px;
+            border-radius: Theme.radius-sm;
+            background: root.hex != "" ? root.value : transparent;
+            border-width: 1px;
+            border-color: root.hex != "" ? Theme.border-strong : Theme.text-muted;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 26px;
+            border-radius: Theme.radius-sm;
+            background: Theme.bg-elevated;
+            border-width: 1px;
+            border-color: gcf-edit.has-focus ? Theme.accent-solid : Theme.border-strong;
+            gcf-edit := LineEdit {
+                x: 8px;
+                width: parent.width - 16px;
+                font-size: Theme.fs-sm;
+                // 双向绑定:输入即时反映"选中"判定;Rust 规范化后的值(如
+                // `#f00` → `#ff0000`)也能回写输入框。
+                text <=> root.hex;
+                placeholder-text: "#RRGGBB";
+                accepted(t) => { root.picked(t); }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        Rectangle { horizontal-stretch: 1; }
+        GridLayout {
+            spacing: 5px;
+            for i in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23] : Rectangle {
+                row: i / 6;
+                // Slint 没有 `%`,取模走 Math.mod。
+                col: Math.mod(i, 6);
+                width: 25px;
+                height: 22px;
+                border-radius: Theme.radius-sm;
+                // 色格本身就是"手感"的主战场:边框 2px **恒定**占位(透明也要占),
+                // 否则描边一出现色块就缩一圈,扫过色板时整行都在抖。
+                border-width: 2px;
+                // 优先级:当前色(前景色描边)> 悬停(次级色描边)> 无。
+                // 悬停反馈是后加的 —— 原先扫过 24 格毫无反应,像在点图片。
+                border-color: root.palette[i].hex == root.hex
+                    ? Theme.text-primary
+                    : (sw-ta.has-hover ? Theme.text-secondary : transparent);
+                background: root.palette[i].swatch;
+                sw-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.picked(root.palette[i].hex); }
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        // 定宽而非撑满:面板与对话框宽度差 100px,撑满会让按钮在两处胖瘦不一。
+        Rectangle {
+            width: 92px;
+            height: 26px;
+            border-radius: Theme.radius-sm;
+            background: gcf-none.has-hover ? Theme.bg-hover : transparent;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            gcf-none := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(""); }
+            }
+            Text {
+                text: @tr("No color");
+                color: Theme.text-primary;
+                font-size: Theme.fs-xs;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
 }
 
 // A 26×26 top-bar icon button with a hover tooltip (right-aligned so it never
@@ -558,6 +682,20 @@ export component AppWindow inherits Window {
     // 不是 Slint 的 visible(那只隐藏不回收空间,列表上方会留一块空白)。
     callback set-system-group-hidden(bool /* hidden */);
     in-out property <string> ctx-menu-group;     // 被右击对象的组
+    // (#group-color 2026-09-14) 被右击组的**当前颜色**。菜单是单实例复用,所以
+    // 必须右击时注入(不能靠控件自己保存状态):见 welcome.slint 里给
+    // ctx-menu-group 赋值的每一处,那里同时写这两个。hex 空串 = 该组无色。
+    in-out property <color> ctx-menu-group-color;
+    in-out property <string> ctx-menu-group-color-hex;
+    // (#group-color 2026-09-14) 取色面板是否展开(点菜单项切换)。**菜单本身
+    // 不关闭** —— 改色时左侧列表要实时联动、看得见才有意义。
+    in-out property <bool> group-color-picker-open: false;
+    // (#group-color 2026-09-14) 取色面板的 24 个候选色(hex 原文 + 已解析色值)。
+    // 由 Rust 注入:单一数据源在 Rust(GROUP_COLOR_PALETTE),见 app.rs。
+    in property <[GroupSwatch]> group-palette: [];
+    // (#group-color 2026-09-14) 提交分组颜色:hex 形如 "#RRGGBB",空串 = 清除
+    // (回落无色)。保留组(system / 本地终端、default / 默认组)一并支持。
+    callback set-group-color(string /* name */, string /* hex */);
     in-out property <bool> ctx-menu-empty;       // 组头菜单:空组才有"删除"
     in-out property <length> ctx-menu-x;
     in-out property <length> ctx-menu-y;
@@ -930,8 +1068,16 @@ export component AppWindow inherits Window {
     in-out property <string> group-dialog-orig;    // "" = create, else rename
     in-out property <string> group-dialog-name;
     in-out property <string> group-dialog-error;
+    // (#group-dialog-color 2026-09-14) 对话框里的分组颜色草稿。与右键菜单的
+    // "点即写盘"不同:这里只改草稿,随「确定」一起提交,取消即回退。
+    in-out property <string> group-dialog-color-hex;
+    in-out property <color> group-dialog-color;
     callback delete-group(string /* name */);
-    callback submit-group(string /* orig */, string /* name */) -> string;
+    callback submit-group(string /* orig */, string /* name */, string /* hex */) -> string;
+    // (#group-dialog-color 2026-09-14) 纯解析、**不落盘**:对话框的颜色草稿要
+    // 即时回显(点色格 / 手输 hex 都要让色块跟着变),但此时还不该写配置。
+    // hex 非法时返回全透明,由色块的描边兜底(仍是"空"的样子)。
+    callback resolve-color(string /* hex */) -> color;
     callback toggle-theme();               // flip dark ↔ light
     // Session sync / broadcast input (#78 pt.4): mirror keystrokes to every
     // online session. Default off (it types into ALL sessions at once).
@@ -1048,7 +1194,8 @@ export component AppWindow inherits Window {
     in-out property <string> dialog-proxy-hostport;
     in-out property <string> dialog-group;
     // Existing group names (from Rust) for the dialog's group dropdown (#179).
-    in property <[string]> session-groups;
+    // (#group-dot 2026-09-14) 组名 + 组色:会话对话框的分组下拉要画色点。
+    in property <[GroupEntry]> session-groups;
     // SSH jump host picker (#211): parallel label/id lists + selected index.
     in property <[string]> jump-choices;
     in property <[string]> jump-ids;
@@ -1672,6 +1819,9 @@ export component AppWindow inherits Window {
                     ctx-open-key <=> root.ctx-open-key;
                     ctx-menu-kind <=> root.ctx-menu-kind;
                     ctx-menu-group <=> root.ctx-menu-group;
+                    ctx-menu-group-color <=> root.ctx-menu-group-color;
+                    ctx-menu-group-color-hex <=> root.ctx-menu-group-color-hex;
+                    group-color-picker-open <=> root.group-color-picker-open;
                     ctx-menu-empty <=> root.ctx-menu-empty;
                     ctx-menu-x <=> root.ctx-menu-x;
                     ctx-menu-y <=> root.ctx-menu-y;
@@ -1735,12 +1885,19 @@ export component AppWindow inherits Window {
                         root.group-dialog-orig = "";
                         root.group-dialog-name = "";
                         root.group-dialog-error = "";
+                        // (#group-dialog-color 2026-09-14) 这两个 Welcome 入口只带
+                        // **组名**、拿不到颜色,故一律以"无色"起(实际入口在组头
+                        // 右键菜单,那里会连同当前色一起注入)。
+                        root.group-dialog-color-hex = "";
+                        root.group-dialog-color = #00000000;
                         root.group-dialog-open = true;
                     }
                     edit-group(name) => {
                         root.group-dialog-orig = name;
                         root.group-dialog-name = name;
                         root.group-dialog-error = "";
+                        root.group-dialog-color-hex = "";
+                        root.group-dialog-color = #00000000;
                         root.group-dialog-open = true;
                     }
                     delete-group(name) => { root.delete-group(name); }
@@ -2098,8 +2255,9 @@ export component AppWindow inherits Window {
                             && root.tab-drag-px >= pane.x
                             && root.tab-drag-px <= pane.x + pane.w
                             && root.tab-drag-py >= pane.y
-                            // The strip row is the TabBar's own 36px.
-                            && root.tab-drag-py <= pane.y + 36px;
+                            // The strip row is the TabBar's own 40px (#tab-flush:
+                            // 顶部 4px 留白 + 36px 标签)。
+                            && root.tab-drag-py <= pane.y + 40px;
                         ext-drag-x: root.tab-drag-px - pane.x;
                         tab-selected(id) => { root.pane-tab-selected(pane.id, id); }
                         tab-closed(id) => { root.pane-tab-closed(pane.id, id); }
@@ -2175,6 +2333,9 @@ export component AppWindow inherits Window {
                         ctx-open-key <=> root.ctx-open-key;
                         ctx-menu-kind <=> root.ctx-menu-kind;
                         ctx-menu-group <=> root.ctx-menu-group;
+                        ctx-menu-group-color <=> root.ctx-menu-group-color;
+                        ctx-menu-group-color-hex <=> root.ctx-menu-group-color-hex;
+                        group-color-picker-open <=> root.group-color-picker-open;
                         ctx-menu-empty <=> root.ctx-menu-empty;
                         ctx-menu-x <=> root.ctx-menu-x;
                         ctx-menu-y <=> root.ctx-menu-y;
@@ -2207,12 +2368,16 @@ export component AppWindow inherits Window {
                             root.group-dialog-orig = "";
                             root.group-dialog-name = "";
                             root.group-dialog-error = "";
+                            root.group-dialog-color-hex = "";
+                            root.group-dialog-color = #00000000;
                             root.group-dialog-open = true;
                         }
                         edit-group(name) => {
                             root.group-dialog-orig = name;
                             root.group-dialog-name = name;
                             root.group-dialog-error = "";
+                            root.group-dialog-color-hex = "";
+                            root.group-dialog-color = #00000000;
                             root.group-dialog-open = true;
                         }
                         delete-group(name) => { root.delete-group(name); }
@@ -3042,7 +3207,9 @@ export component AppWindow inherits Window {
             // (Rust rename_group 会以"该名称为系统保留分组"拒绝)。隐藏入口,
             // 避免"点开对话框 → 提交 → 才报错"的空转。删除项本就不出现:
             // 默认组头行是成员行(id 非空),ctx-menu-empty 恒 false。
-            if root.ctx-menu-group != "default" : Rectangle {
+            // (#group-color-reserved 2026-09-14) system 组头现在也能右击(为改色),
+            // 同样按保留名收起"编辑分组" —— 这条判断是唯一的门禁。
+            if root.ctx-menu-group != "default" && root.ctx-menu-group != "system" : Rectangle {
                 height: 28px;
                 border-radius: Theme.radius-sm;
                 background: g-edit-ta.has-hover ? Theme.bg-hover : transparent;
@@ -3053,6 +3220,11 @@ export component AppWindow inherits Window {
                         root.group-dialog-orig = root.ctx-menu-group;
                         root.group-dialog-name = root.ctx-menu-group;
                         root.group-dialog-error = "";
+                        // (#group-dialog-color 2026-09-14) 带上该组**当前色**做草稿
+                        // 初值 —— 右击时已注入 ctx-menu-group-color(-hex),这里直接
+                        // 借用,不必再让 Rust 查一次。
+                        root.group-dialog-color-hex = root.ctx-menu-group-color-hex;
+                        root.group-dialog-color = root.ctx-menu-group-color;
                         root.group-dialog-open = true;
                     }
                 }
@@ -3060,6 +3232,47 @@ export component AppWindow inherits Window {
                     padding-left: 10px; spacing: 8px;
                     Text { text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Edit group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            // (#group-color 2026-09-14) 分组颜色入口。点击**不清 ctx-open-key**
+            // —— 菜单保持打开,取色面板贴菜单边缘出现(用户定稿:"点击色卡出现
+            // 控件、菜单不消失,左侧面板一起联动")。
+            // 对**所有组**可见(含 default / system):"编辑分组"那项只对具名组
+            // 可见(default 是保留名),两者条件不同,故是两个独立块。
+            Rectangle {
+                height: 28px;
+                border-radius: Theme.radius-sm;
+                // 面板展开时保持高亮,提示"正在调这一组的色"。
+                background: g-color-ta.has-hover || root.group-color-picker-open ? Theme.bg-hover : transparent;
+                g-color-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.group-color-picker-open = !root.group-color-picker-open; }
+                }
+                HorizontalLayout {
+                    // 色块纵向居中改由布局 alignment 负责(见 GroupColorField 注释)。
+                    alignment: center;
+                    padding-left: 10px; padding-right: 10px; spacing: 8px;
+                    Text { text: "\u{E40A}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#group-color) 色块**紧跟文字**:不给文字 horizontal-stretch,
+                    // 否则色块会被推到菜单右缘、留一大片空白(用户定稿"色块往左侧
+                    // 文字靠靠")。不显示 hex 原文,只有色块。
+                    Text { text: @tr("Group color"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; }
+                    // 色块:外层撑满行高,内层 14×14 垂直居中 —— Slint 的
+                    // Rectangle 没有 vertical-alignment(那是 Text / 布局的属性),
+                    // 居中只能靠一层"撑满 + 手算 y"的壳。
+                    // (#group-color-field 2026-09-14) 无色 = 透明底 + 描边,与
+                    // 取色面板 / 对话框里的当前色块同口径 —— 早先无色回落
+                    // text-secondary,菜单里看着像"选了一块浅灰",读不出"没设色"。
+                    Rectangle {
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 3px;
+                        background: root.ctx-menu-group-color-hex != ""
+                            ? root.ctx-menu-group-color : transparent;
+                        border-width: 1px;
+                        border-color: root.ctx-menu-group-color-hex != ""
+                            ? Theme.border-strong : Theme.text-muted;
+                    }
                 }
             }
             if root.ctx-menu-empty : Rectangle {
@@ -3087,6 +3300,9 @@ export component AppWindow inherits Window {
                         root.group-dialog-orig = "";
                         root.group-dialog-name = "";
                         root.group-dialog-error = "";
+                        // 新建组的颜色草稿从"无色"起(默认就不该有颜色)。
+                        root.group-dialog-color-hex = "";
+                        root.group-dialog-color = #00000000;
                         root.group-dialog-open = true;
                     }
                 }
@@ -3110,6 +3326,55 @@ export component AppWindow inherits Window {
                     padding-left: 10px; spacing: 8px;
                     Text { text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: root.system-hidden ? @tr("Show Local Terminals") : @tr("Hide Local Terminals"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+        }
+
+        // (#group-color 2026-09-14) 取色面板:与菜单**并存**(菜单不消失)。
+        // 必须声明在 grp-menu-rect **内部** —— Slint 不允许从条件元素外部访问
+        // 它的 id(实测 "Cannot access id 'grp-menu-rect'"),而面板要贴菜单边缘
+        // 就得读菜单几何。作为菜单的子元素绝对定位到菜单矩形之外即可(父元素
+        // 默认不裁剪)。z 序在 grp-menu-vl 之后 = 最上层:指针落在面板上时
+        // backdrop 的 has-hover 为 false,自动关闭逻辑天然把它算作安全区。
+        if root.group-color-picker-open : gc-panel := Rectangle {
+            property <length> pw: 200px;
+            // 相对菜单:右侧(菜单宽 + 4px)/ 左侧(x 为负)。4px 缝是刻意的
+            // (两块卡片分离),鼠标横穿几毫秒,不足以触发 150ms 的关闭防抖。
+            property <length> right-x: parent.width + 4px;
+            property <length> left-x: -self.pw - 4px;
+            // 菜单贴窗口右缘时右侧放不下 → 翻到左侧;左侧也越界则钳到窗口左缘
+            // (极端窄窗口下与菜单重叠,兜底)。
+            property <bool> fits-right: parent.x + self.right-x + self.pw + 8px <= root.width;
+            x: self.fits-right ? self.right-x : max(8px - parent.x, self.left-x);
+            // 顶与菜单对齐;面板比菜单高时上移,保证底边不越窗口底。
+            y: min(0px, root.height - parent.y - self.height - 8px);
+            width: self.pw;
+            height: gc-body.preferred-height;
+            background: Theme.popup-bg;
+            border-radius: Theme.radius-md;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #00000060;
+
+            // 垫底:吃掉面板空白处的点击(与菜单的 g-pad 同责),不让它落到
+            // backdrop 上把菜单关掉。
+            gc-pad := TouchArea { width: 100%; height: 100%; }
+
+            gc-body := VerticalLayout {
+                padding: 10px;
+                spacing: 0px;
+                // (#group-color-field 2026-09-14) 面板内容整体交给共用组件:与新建 /
+                // 编辑分组对话框**同一套控件**,布局只在组件里维护一份。
+                // 面板语义 = 点即提交(写盘 + 广播 + 回写菜单色块),与对话框的
+                // "先暂存、随确定提交"区别只体现在这个回调里。
+                GroupColorField {
+                    hex <=> root.ctx-menu-group-color-hex;
+                    value: root.ctx-menu-group-color;
+                    palette: root.group-palette;
+                    // 面板语义 = 点即提交:落盘 + 广播 + 回写这两个 property,
+                    // 颜色因此由 Rust 归一化后的结果决定,不在 UI 侧猜。
+                    picked(hex) => { root.set-group-color(root.ctx-menu-group, hex); }
                 }
             }
         }
@@ -4212,7 +4477,9 @@ export component AppWindow inherits Window {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             width: 340px;
-            height: 208px;
+            // (#group-dialog-color 2026-09-14) 高度改为随内容自适应:对话框新增
+            // 了「分组颜色」字段,固定 208px 会把色板挤出卡片外。
+            height: gd-body.preferred-height;
             background: Theme.popup-bg;
             border-radius: Theme.radius-md;
             border-width: 1px;
@@ -4221,7 +4488,7 @@ export component AppWindow inherits Window {
             drop-shadow-color: #000000a0;
             TouchArea {}   // swallow inside clicks
 
-            VerticalLayout {
+            gd-body := VerticalLayout {
                 padding: 18px;
                 spacing: 12px;
                 Text {
@@ -4248,6 +4515,7 @@ export component AppWindow inherits Window {
                             root.group-dialog-error = root.submit-group(
                                 root.group-dialog-orig,
                                 root.group-dialog-name,
+                                root.group-dialog-color-hex,
                             );
                             if (root.group-dialog-error == "") {
                                 root.group-dialog-open = false;
@@ -4260,6 +4528,25 @@ export component AppWindow inherits Window {
                     color: Theme.danger;
                     font-size: Theme.fs-xs;
                     height: 18px;
+                }
+                // (#group-dialog-color 2026-09-14) 分组颜色:与右键菜单的取色面板
+                // **共用 GroupColorField**。这里不即时写盘 —— 改动只落在
+                // group-dialog-color-hex 草稿上,随「确定」一起提交(取消即回退)。
+                Text {
+                    text: @tr("Group color");
+                    color: Theme.text-secondary;
+                    font-size: Theme.fs-sm;
+                }
+                GroupColorField {
+                    hex <=> root.group-dialog-color-hex;
+                    value: root.group-dialog-color;
+                    palette: root.group-palette;
+                    // 只改草稿(含手输 hex —— 手动打的原文要留在输入框里,故先写
+                    // hex 再让 Rust 解析颜色;提交时才归一化)。
+                    picked(hex) => {
+                        root.group-dialog-color-hex = hex;
+                        root.group-dialog-color = root.resolve-color(hex);
+                    }
                 }
                 Rectangle { vertical-stretch: 1; }
                 HorizontalLayout {
@@ -4277,6 +4564,7 @@ export component AppWindow inherits Window {
                             root.group-dialog-error = root.submit-group(
                                 root.group-dialog-orig,
                                 root.group-dialog-name,
+                                root.group-dialog-color-hex,
                             );
                             if (root.group-dialog-error == "") {
                                 root.group-dialog-open = false;

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{OutputHighlightRule, QuickCommand, Secret, Session};
@@ -146,6 +148,12 @@ pub struct ConfigFile {
     /// `Some([])` means the user explicitly expanded every folder.
     #[serde(default)]
     pub collapsed_session_groups: Option<Vec<String>>,
+    /// (#group-color 2026-09-14) 用户为分组指定的颜色:组名 -> "#RRGGBB"。
+    /// **没有条目 = 无色**(渲染时回落主题的次级前景色,不是置灰)。
+    /// 迁移时不种子任何值:旧的 hash 派生色按设计丢弃,所有组默认中性,
+    /// 直到用户手动选一个。
+    #[serde(default)]
+    pub group_colors: HashMap<String, String>,
     /// Stored inverted ("don't follow") so both serde and the Default derive
     /// yield `false` = the feature defaults to ON: the SFTP panel follows the
     /// terminal's cd (OSC 7) unless the user opts out in Interface settings.

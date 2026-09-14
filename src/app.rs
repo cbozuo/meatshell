@@ -1805,6 +1805,10 @@ fn open_window(
         connected: false,
         session_id: "".into(),
         state: -1,
+        // (#tab-group-bar 2026-09-14) welcome 标签不属于任何会话，没有所属分组，
+        // 因此不画底部色条（hex 为空 → Slint 侧跳过绘制）。
+        group_color_hex: "".into(),
+        group_color: slint::Color::default(),
     });
     window.set_tabs(ModelRc::from(tabs_model.clone()));
     window.set_active_tab_id("welcome".into());
@@ -4594,13 +4598,78 @@ fn wire_session_callbacks(
         });
     }
 
+    // (#group-color 2026-09-14) 分组取色面板的候选色。**单一数据源在这里**:
+    // 24 个 hex 既作"提交原文"又解析成色值,一起注入 Slint —— 色格用色值画、
+    // 点击时用原文提交。之所以不把调色板定义在 .slint 侧:Slint 1.8 没有
+    // color → "#RRGGBB" 的转换,点色格时拿不到可提交的 hex 字符串。
+    {
+        // 明暗主题共用这一套:候选色是"用户将得到的颜色"本身,不随主题变,
+        // 取 500 档中等饱和,深底/浅底都清晰。前 18 个走色环,后 6 个中性灰。
+        const GROUP_PALETTE: [&str; 24] = [
+            "#ef4444", "#f97316", "#f59e0b", "#eab308", "#84cc16", "#22c55e",
+            "#10b981", "#14b8a6", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
+            "#8b5cf6", "#a855f7", "#d946ef", "#ec4899", "#f43f5e", "#fb7185",
+            "#cbd5e1", "#94a3b8", "#64748b", "#475569", "#334155", "#1e293b",
+        ];
+        let swatches: Vec<GroupSwatch> = GROUP_PALETTE
+            .iter()
+            .map(|hex| GroupSwatch {
+                hex: (*hex).into(),
+                swatch: parse_hex_color(hex).unwrap_or_default(),
+            })
+            .collect();
+        window.set_group_palette(ModelRc::from(Rc::new(VecModel::from(swatches))));
+    }
+
+    // (#group-color 2026-09-14) 提交分组颜色:name = 组名,hex = "#RRGGBB"
+    // (空串 = 清除回到无色)。保留组(system / 本地终端、default / 默认组)一并
+    // 支持 —— 用户定稿"系统组、默认组都支持修改分组颜色"。
+    {
+        let weak = window.as_weak();
+        let store = store.clone();
+        let sessions_model = sessions_model.clone();
+        let registry = registry.clone();
+        window.on_set_group_color(move |name: SharedString, hex: SharedString| {
+            let raw = hex.trim();
+            // 非法输入直接忽略(输入框是自由文本,允许用户打到一半)。
+            // 空串是合法的:语义为"清除颜色"。
+            let stored = if raw.is_empty() {
+                String::new()
+            } else {
+                match normalize_hex(raw) {
+                    Some(normalized) => normalized,
+                    None => return,
+                }
+            };
+            {
+                let mut s = store.borrow_mut();
+                s.set_group_color(name.as_str(), &stored);
+                if let Err(err) = s.save() {
+                    tracing::warn!("failed to save config: {err:#}");
+                }
+            }
+            sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
+            registry.broadcast_config_changed();
+            if let Some(w) = weak.upgrade() {
+                let _ = w.get_sessions();
+                // 菜单项右侧小色块 + 面板顶栏都读这两个:提交后立即同步,
+                // 否则菜单里的色块要等下一次右击才更新。
+                w.set_ctx_menu_group_color(parse_hex_color(&stored).unwrap_or_default());
+                w.set_ctx_menu_group_color_hex(stored.into());
+            }
+        });
+    }
+
     // Group create / rename (#41).
     {
         let weak = window.as_weak();
         let store = store.clone();
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
-        window.on_submit_group(move |orig: SharedString, name: SharedString| {
+        window.on_resolve_color(move |hex: SharedString| -> slint::Color {
+            parse_hex_color(hex.trim()).unwrap_or_default()
+        });
+        window.on_submit_group(move |orig: SharedString, name: SharedString, hex: SharedString| {
             let trimmed = name.trim();
             let error = {
                 let s = store.borrow();
@@ -4626,14 +4695,35 @@ fn wire_session_callbacks(
                 } else {
                     s.rename_group(orig.as_str(), trimmed.to_string());
                 }
+                // (#group-dialog-color 2026-09-14) 颜色随「确定」一起落盘。
+                //  · 改名组:rename_group 已把旧色迁到新名,这里用草稿值**覆盖**;
+                //  · 草稿为空 = 用户点了「无颜色」→ 清除;
+                //  · 草稿非法(用户打到一半)→ **不动**该组颜色,保留原值/迁移值,
+                //    否则一次误输入就把色静默清掉了。
+                let draft = hex.trim();
+                if draft.is_empty() {
+                    s.set_group_color(trimmed, "");
+                } else if let Some(normalized) = normalize_hex(draft) {
+                    s.set_group_color(trimmed, &normalized);
+                }
                 if let Err(err) = s.save() {
                     tracing::warn!("failed to save config: {err:#}");
                 }
             }
+            // 菜单 / 取色面板的当前色回写,与 on_set_group_color 同口径 —— 否则
+            // 右击同一组时菜单色块还停在旧色上。
+            let final_hex = store
+                .borrow()
+                .group_colors()
+                .get(trimmed)
+                .cloned()
+                .unwrap_or_default();
             sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
             registry.broadcast_config_changed();
             if let Some(w) = weak.upgrade() {
                 let _ = w.get_sessions();
+                w.set_ctx_menu_group_color(parse_hex_color(&final_hex).unwrap_or_default());
+                w.set_ctx_menu_group_color_hex(final_hex.into());
             }
             SharedString::new()
         });
@@ -5164,6 +5254,9 @@ fn wire_session_callbacks(
             );
 
             // Register tab + terminal state (SFTP fields start empty/loading).
+            // (#tab-group-bar 2026-09-14) 标签底部色条取该会话的所属分组色，
+            // 与左侧会话行同源（同走 display_group_of + group_colors）。
+            let (tab_gc, tab_gc_hex) = tab_group_color(&store.borrow(), &session);
             tabs_model.push(TabInfo {
                 id: tab_id.clone().into(),
                 title_len: tab_title_len(&tab_title),
@@ -5172,6 +5265,8 @@ fn wire_session_callbacks(
                 connected: false,
                 session_id: id.clone().into(),
                 state: 0,
+                group_color_hex: tab_gc_hex.into(),
+                group_color: tab_gc,
             });
             // Each session keeps its own SFTP collapse state + sizes, seeded from
             // the global defaults (the "collapse SFTP by default" pref and the
