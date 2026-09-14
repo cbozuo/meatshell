@@ -65,7 +65,9 @@ component SingleTab inherits Rectangle {
     background: lifted ? Theme.bg-active
         : (touch.pressed ? Theme.bg-active
         : (active ? Theme.tab-active-bg
-        : (touch.has-hover ? Theme.bg-hover : transparent)));
+        // (#tab-shape 2026-09-15) 非活动常态给 bg-elevated 底色:比条带亮一档,
+        // 页签块轮廓清晰可辨(旧版透明底彼此黏连,多页签时读不出块)。
+        : (touch.has-hover ? Theme.bg-hover : Theme.bg-elevated)));
     animate background { duration: 130ms; }
     // Lift the ghost off the strip so it reads as "in hand".
     // 选中态另有一层很轻的外投影把标签从条带上托起（暗/亮各一档）；ghost 的投影
@@ -195,23 +197,19 @@ component SingleTab inherits Rectangle {
         }
     }
 
-    // --- 底部分组色条 (#tab-group-bar 2026-09-14) ---------------------------
-    // 声明在内容之后 → z 序最高，盖住标签内容的下缘一行。撑满宽度 + 下沿跟随
-    // radius-md 圆角，因此不需要父级 clip。无色(hex 为空)时整个元素不创建。
+    // --- 左缘分组色竖条 (#tab-group-bar-r2 2026-09-15) ----------------------
+    // 旧版画在页签底部、贴住与终端区的连通缝,且非活动页签也全亮 —— 一排色条
+    // 连片,页签块轮廓被吞掉(用户实测"看不到页签块")。改为**左缘竖条**:
+    // 与左侧会话列表的组头图标/成员脊线同方位,全程悬浮在页签内部,不碰连通缝。
+    // 透明度分级:活动/悬停 100%,非活动 55%。无色(hex 为空)整个元素不创建。
     if info.group_color_hex != "" : Rectangle {
-        x: 0;
-        y: parent.height - self.height;
-        width: parent.width;
-        // 悬停即时反馈：未选中的标签把色条顶高 1px，手上有"活"的感觉；
-        // 选中态固定 3px，避免 hover 把当前标签的色条也撑起来。
-        height: touch.has-hover && !active ? 4px : 3px;
+        x: 4px;
+        y: 7px;
+        width: 3px;
+        height: parent.height - 14px;
+        border-radius: 2px;
         background: info.group_color;
-        opacity: active || touch.has-hover ? 1.0 : 0.88;
-        // (#tab-flush 2026-09-14) 标签底角方角化后色条同步方角，才能与终端区
-        // 顶边严丝合缝（否则圆角处露出条带底色的小三角）。
-        border-bottom-left-radius: 0px;
-        border-bottom-right-radius: 0px;
-        animate height { duration: 140ms; }
+        opacity: active || touch.has-hover ? 1.0 : 0.55;
         animate opacity { duration: 140ms; }
     }
 
@@ -452,9 +450,11 @@ export component TabBar inherits Rectangle {
         // (#tab-polish 2026-09-14) 3/2 → 4/3px：与标签同成 4 的倍数，标签之间
         // 也给底部色条留出呼吸。
         // (#tab-flush 2026-09-14) 只保留**上方** 4px：下方归零，标签下沿贴住终端区。
+        // (#tab-shape 2026-09-15) 左内边距 4 → 3px：与页签间距(spacing)一致,
+        // 首个页签"贴边"的观感 = 侧面板边框 + 3px,和后续页签同节奏(用户定稿)。
         padding-top: 4px;
         padding-bottom: 0px;
-        padding-left: 4px;
+        padding-left: 3px;
         padding-right: 4px;
         spacing: 3px;
 
@@ -518,9 +518,12 @@ export component TabBar inherits Rectangle {
                         x: root.slot-shift(i, parent.passed);
                         width: parent.width;
                         height: parent.height;
-                        // The dragged tab leaves a hole; the ghost carries it.
-                        opacity: root.reordering && i == root.drag-from ? 0.0 : 1.0;
+                        // (#tab-drag-ghost-shape 2026-09-15) 原位变暗而非完全消失:
+                        // 35% 残影保留"从这里拿走的"的槽位感,与插入线/浮层一起构成
+                        // 拖动三态(设计稿 #tab-dnd-3state)。旧版 0.0 完全隐形。
+                        opacity: root.reordering && i == root.drag-from ? 0.35 : 1.0;
                         animate x { duration: 120ms; easing: ease-out; }
+                        animate opacity { duration: 120ms; }
                         info: tab;
                         active: tab.id == root.active-id;
                         selected => { root.tab-selected(tab.id); }
@@ -538,6 +541,31 @@ export component TabBar inherits Rectangle {
                         drag-cancelled => {
                             root.end-drag();
                             root.tab-drag-cancel();
+                        }
+                    }
+
+                    // (#tab-dnd-3state 2026-09-15) 拖动插入线:落在"移除被拖项后"
+                    // 索引 == drag-to 的槽位左缘(间隙中央),最尾落点画在末槽右缘。
+                    // accent 竖线 + 顶圆点,只在实际排序中显示。
+                    if root.reordering && i != root.drag-from
+                            && (self.shifted-index == root.drag-to
+                                || (root.drag-to == root.tabs.length - 1
+                                    && i == root.tabs.length - 1)) : Rectangle {
+                        x: self.tail ? parent.width - 1.5px : -1.5px;
+                        property <bool> tail:
+                            root.drag-to == root.tabs.length - 1 && i == root.tabs.length - 1;
+                        y: 4px;
+                        width: 3px;
+                        height: parent.height - 12px;
+                        border-radius: 2px;
+                        background: Theme.accent-solid;
+                        Rectangle {
+                            x: -2.5px;
+                            y: -5px;
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Theme.accent-solid;
                         }
                     }
                 }
@@ -569,28 +597,132 @@ export component TabBar inherits Rectangle {
         Rectangle { width: root.reserve-right; }
     }
 
-    // Scroll arrows are absolute overlays so toggling them can't
-    // change the layout that `tab-overflow` reads (avoids a binding loop). Shown
-    // only on overflow, masking the edge tab beneath them (#122).
+    // (#tab-overflow-list 2026-09-15) 溢出 UI 整体重做(用户定稿):废弃左右
+    // "<"">"滚动箭头(丑、且盖在页签上),改为**右缘渐隐遮罩 + 「⋯」胶囊按钮**,
+    // 点击弹出全部页签列表面板(自上而下 = 自左而右,行首组色竖条,悬停出
+    // 红色关闭键,点击行切换)。横向滚动仍由滚轮/拖拽边界自动滚动承担,
+    // overlay 用绝对定位,显隐不影响 tab-overflow 的布局判定(避免绑定环)。
     if root.tab-overflow : Rectangle {
-        x: 4px;
-        y: (parent.height - self.height) / 2;
-        width: 26px; height: 26px;
-        background: Theme.tab-bar-bg;
-        IconButton {
-            glyph: "<"; size: 24px;
-            clicked => { flick.viewport-x = min(0px, flick.viewport-x + 120px); }
+        x: parent.width - root.reserve-right - 76px;
+        y: 0px;
+        width: 76px;
+        height: parent.height;
+        // 渐变 stop 只接受 color(不接受 brush),故按明暗主题各写一条。
+        background: Theme.dark
+            ? @linear-gradient(90deg, #2a2d3500, #2a2d35 72%)
+            : @linear-gradient(90deg, #eaeaef00, #eaeaef 72%);
+        more-btn := Rectangle {
+            x: parent.width - self.width - 6px;
+            y: (parent.height - self.height) / 2;
+            width: 28px;
+            height: 28px;
+            border-radius: Theme.radius-sm;
+            background: more-ta.has-hover ? Theme.bg-active : Theme.bg-hover;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000045;
+            more-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { tab-list-menu.show(); }
+            }
+            for d in [0, 1, 2] : Rectangle {
+                x: 6px + d * 7px;
+                y: (parent.height - 4px) / 2;
+                width: 4px;
+                height: 4px;
+                border-radius: 2px;
+                background: Theme.text-secondary;
+            }
         }
     }
-    if root.tab-overflow : Rectangle {
-        x: root.width - root.reserve-right - 30px;
-        y: (parent.height - self.height) / 2;
-        width: 26px; height: 26px;
-        background: Theme.tab-bar-bg;
-        IconButton {
-            glyph: ">"; size: 24px;
-            clicked => {
-                flick.viewport-x = max(flick.width - flick.viewport-width, flick.viewport-x - 120px);
+    // 全页签列表面板:行首组色竖条(与页签同语言) + 标题,当前页签高亮,
+    // 悬停行右缘出现红色关闭键。行高 32px,列表面板最高 ~9 行,超出滚动。
+    tab-list-menu := PopupWindow {
+        x: parent.width - self.width - 8px;
+        y: 40px;
+        width: 252px;
+        height: min(root.tabs.length * 32px + 40px, 330px);
+        Rectangle {
+            background: Theme.popup-bg;
+            border-radius: Theme.radius-md;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            drop-shadow-blur: 14px;
+            drop-shadow-color: #00000060;
+            VerticalLayout {
+                padding: 5px;
+                Text {
+                    height: 22px;
+                    text: @tr("All tabs");
+                    color: Theme.text-muted;
+                    font-size: Theme.fs-xs;
+                    vertical-alignment: center;
+                    x: 6px;
+                }
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-height: root.tabs.length * 32px;
+                    viewport-width: self.width;
+                    VerticalLayout {
+                        spacing: 1px;
+                        for t in root.tabs : Rectangle {
+                            height: 32px;
+                            border-radius: Theme.radius-sm;
+                            background: t.id == root.active-id || row-ta.has-hover
+                                ? Theme.bg-hover : transparent;
+                            // 行首组色竖条:与页签左缘竖条同一视觉语言。
+                            if t.group_color_hex != "" : Rectangle {
+                                x: 7px;
+                                y: 8px;
+                                width: 3px;
+                                height: parent.height - 16px;
+                                border-radius: 2px;
+                                background: t.group_color;
+                                opacity: t.id == root.active-id ? 1.0 : 0.55;
+                            }
+                            Text {
+                                x: 20px;
+                                width: parent.width - 52px;
+                                text: t.title;
+                                color: t.id == root.active-id
+                                    ? Theme.text-primary : Theme.text-secondary;
+                                font-size: Theme.fs-sm;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                            // 悬停行右缘的红色关闭键(仅非 welcome 页签)。
+                            if t.kind != "welcome" : Rectangle {
+                                x: parent.width - self.width - 6px;
+                                y: (parent.height - self.height) / 2;
+                                width: 20px;
+                                height: 20px;
+                                border-radius: Theme.radius-sm;
+                                background: close-ta.has-hover ? #e81123 : transparent;
+                                opacity: row-ta.has-hover || close-ta.has-hover ? 1.0 : 0.0;
+                                close-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.tab-closed(t.id);
+                                        tab-list-menu.close();
+                                    }
+                                }
+                                Text {
+                                    text: "×";
+                                    color: close-ta.has-hover ? white : Theme.text-secondary;
+                                    font-size: Theme.fs-sm;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            row-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.tab-selected(t.id);
+                                    tab-list-menu.close();
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

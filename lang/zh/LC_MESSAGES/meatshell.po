@@ -758,3 +758,21 @@ msgstr "默认组"
 
 msgid "→ {} · #{}"
 msgstr "→ {} · 第 {} 位"
+
+msgid "New tab"
+msgstr "新页签"
+
+msgid "Other tab"
+msgstr "其它页签"
+
+msgid "No members yet"
+msgstr "暂无成员"
+
+msgid "All tabs"
+msgstr "全部页签"
+
+msgid "{n} 台"
+msgstr "{n} 台"
+
+msgid "{0} 台"
+msgstr "{0} 台"

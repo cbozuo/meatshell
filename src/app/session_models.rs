@@ -164,6 +164,12 @@ pub(super) fn session_groups_model(store: &ConfigStore) -> ModelRc<GroupEntry> {
                 name: name.as_str().into(),
                 hex: hex.into(),
                 color: parse_hex_color(hex).unwrap_or_default(),
+                // (#group-dot-r2 2026-09-15) 成员数:下拉项右缘展示。
+                count: store
+                    .sessions()
+                    .iter()
+                    .filter(|s| s.group == *name)
+                    .count() as i32,
             }
         })
         .collect();

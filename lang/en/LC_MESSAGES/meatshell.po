@@ -761,3 +761,21 @@ msgstr "Default group"
 
 msgid "→ {} · #{}"
 msgstr "→ {} · #{}"
+
+msgid "New tab"
+msgstr "New tab"
+
+msgid "Other tab"
+msgstr "Other tab"
+
+msgid "No members yet"
+msgstr "No members yet"
+
+msgid "All tabs"
+msgstr "All tabs"
+
+msgid "{n} 台"
+msgstr "{n}"
+
+msgid "{0} 台"
+msgstr "{0}"

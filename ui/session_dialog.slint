@@ -28,6 +28,9 @@ export struct GroupEntry {
     name: string,
     hex: string,
     color: color,
+    // (#group-dot-r2 2026-09-15) 该组成员数:下拉项右缘弱化展示,
+    // 选组即知规模(设计稿 v3 · 会话设置)。
+    count: int,
 }
 
 export struct SessionDraft {
@@ -390,12 +393,22 @@ component GroupCombo inherits VerticalLayout {
                         }
                         Text {
                             x: 26px;
-                            width: parent.width - 36px;
+                            width: parent.width - 80px;
                             text: g.name;
                             color: Theme.text-primary;
                             font-size: Theme.fs-md;
                             vertical-alignment: center;
                             overflow: elide;
+                        }
+                        // (#group-dot-r2 2026-09-15) 右缘成员数(muted,弱化)。
+                        Text {
+                            x: parent.width - 44px;
+                            width: 34px;
+                            horizontal-alignment: right;
+                            text: @tr("{0} 台", g.count);
+                            color: Theme.text-muted;
+                            font-size: Theme.fs-xs;
+                            vertical-alignment: center;
                         }
                     }
                 }

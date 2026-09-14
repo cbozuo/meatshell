@@ -2027,13 +2027,12 @@ export component Welcome inherits Rectangle {
                                 Text {
                                     text: session.collapsed ? "\u{E5CC}" : "\u{E5CF}";
                                     font-family: "Material Icons";
-                                    // (#group-color 2026-09-14) **chevron 不跟组色**:
-                                    // 它是"展开 / 折叠"的**功能控件**,不是身份标记 ——
-                                    // 染色会被读成"这是个可点的彩色按钮",而且它和
-                                    // 左侧文件夹并排时,两个彩色元素一起压在组名前,
-                                    // 视觉太重。用户定稿:只有文件夹染组色,颜色只
-                                    // 出现在"表达分组"的地方。
-                                    color: Theme.text-secondary;
+                                    // (#group-color-chevron-r2 2026-09-14) chevron
+                                    // **跟随组色**(用户改稿):折叠箭头与文件夹同属
+                                    // 组头的"身份区",组定了色而箭头仍是灰色,用户
+                                    // 读成"颜色没生效/丢了一半"。与文件夹同口径:
+                                    // 无色时由 group-color() 回落次级前景色。
+                                    color: Theme.group-color(session.group-color-hex != "", session.group-color);
                                     font-size: Theme.fs-xl;
                                     vertical-alignment: center;
                                 }

@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>分组颜色选择器 · 交互设计稿 v1</title>
+<style>
+  :root {
+    --bg-root: #1b1d23;
+    --bg-panel: #23262d;
+    --bg-panel-alt: #2a2d35;
+    --bg-elevated: #30333c;
+    --bg-hover: #373a44;
+    --border-subtle: #3a3d46;
+    --border-strong: #4a4e59;
+    --text-primary: #e6e8ee;
+    --text-secondary: #b4b9c4;
+    --text-muted: #9196a3;
+    --accent: #4a90e2;
+    --danger: #cc3333;
+    /* 演示用组色 */
+    --demo: #fb923c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #14151a;
+    color: var(--text-primary);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    padding: 40px 48px 64px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+  .subtitle { color: var(--text-muted); font-size: 13px; margin-bottom: 32px; }
+  h2 {
+    font-size: 17px; font-weight: 600; margin: 44px 0 6px;
+    padding-left: 10px; border-left: 3px solid var(--accent);
+  }
+  .h2-sub { color: var(--text-muted); font-size: 12.5px; margin: 0 0 18px 13px; }
+
+  /* ---------- 设计要点卡 ---------- */
+  .points { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .point {
+    background: var(--bg-panel); border: 1px solid var(--border-subtle);
+    border-radius: 10px; padding: 14px 16px; display: flex; gap: 12px;
+  }
+  .point .no {
+    flex: none; width: 24px; height: 24px; border-radius: 7px;
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: #7db4ee; font-size: 12.5px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; margin-top: 1px;
+  }
+  .point b { display: block; font-size: 13.5px; margin-bottom: 3px; }
+  .point p { color: var(--text-muted); font-size: 12.5px; line-height: 1.55; }
+
+  /* ---------- 场景画布 ---------- */
+  .canvas {
+    background: var(--bg-root);
+    border: 1px solid var(--border-subtle);
+    border-radius: 14px;
+    padding: 0;
+    overflow: hidden;
+    display: flex;
+  }
+  /* 左侧：模拟会话列表面板 */
+  .mock-sidebar {
+    flex: none; width: 264px; padding: 16px 12px;
+    border-right: 1px solid var(--border-subtle);
+    background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  }
+  .mock-caption {
+    text-align: center; color: var(--text-muted); font-size: 12px;
+    padding: 10px 0 14px; border-bottom: 1px dashed var(--border-subtle);
+  }
+  .group-row {
+    display: flex; align-items: center; gap: 4px;
+    height: 32px; padding: 0 10px; border-radius: 6px;
+    color: var(--text-secondary); font-size: 13px; font-weight: 600;
+    position: relative;
+  }
+  .group-row.active { background: var(--bg-hover); }
+  .group-row .cnt {
+    margin-left: auto; font-size: 11px; font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-elevated); border-radius: 8px; padding: 1px 7px;
+  }
+  .member-row {
+    display: flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 10px 0 30px; border-radius: 6px;
+    color: var(--text-secondary); font-size: 13px; position: relative;
+  }
+  .member-row::before {
+    content: ""; position: absolute; left: 19px; top: -6px; bottom: 50%;
+    width: 2px; background: var(--demo); opacity: .35;
+  }
+  .member-row.first::before { top: 50%; }
+  .member-row .dot { color: var(--text-muted); font-size: 11px; }
+  .spine-demo {
+    position: absolute; left: 10px; top: 44px; bottom: 24px; width: 2px;
+    background: var(--demo); opacity: .30; border-radius: 1px;
+  }
+
+  /* ---------- 右键菜单 ---------- */
+  .ctx-menu {
+    flex: none; width: 208px; margin: 34px 0 34px 40px;
+    background: var(--bg-panel); border: 1px solid var(--border-strong);
+    border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.45);
+    padding: 4px; align-self: flex-start;
+  }
+  .mi {
+    display: flex; align-items: center; gap: 8px;
+    height: 28px; padding: 0 10px; border-radius: 4px;
+    font-size: 13px; color: var(--text-primary); cursor: default;
+  }
+  .mi svg { flex: none; }
+  .mi .sw {
+    width: 14px; height: 14px; border-radius: 3.5px; flex: none;
+    background: var(--demo); border: 1px solid var(--border-strong);
+  }
+  .mi.hot { background: var(--bg-hover); }
+  .mi.danger { color: var(--danger); }
+  .mi .grow { flex: 1; }
+
+  /* ---------- 取色面板（新设计） ---------- */
+  .picker {
+    flex: none; width: 252px; margin: 26px 0 0 -6px;
+    background: var(--bg-panel); border: 1px solid var(--border-strong);
+    border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.5);
+    padding: 12px; align-self: flex-start;
+  }
+  .picker-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  }
+  .picker-head .cur {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--demo);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--demo) 25%, transparent);
+  }
+  .picker-head .t { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+  .picker-head .hex {
+    margin-left: auto; font-family: Consolas, monospace; font-size: 11.5px;
+    color: var(--text-muted);
+  }
+  .grid6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .sw2 {
+    position: relative; width: 100%; aspect-ratio: 1; border-radius: 7px;
+    cursor: pointer;
+  }
+  .sw2:hover { outline: 2px solid rgba(255,255,255,.75); outline-offset: 1px; }
+  .sw2.sel { box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px currentColor; }
+  .sw2.sel::after {
+    content: ""; position: absolute; inset: 0;
+    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>') center / 62% no-repeat;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,.45));
+  }
+  .sec-label {
+    font-size: 11px; color: var(--text-muted); margin: 10px 2px 6px;
+    letter-spacing: .04em;
+  }
+  .picker-div { height: 1px; background: var(--border-subtle); margin: 12px -12px 10px; }
+  .picker-foot { display: flex; gap: 8px; }
+  .btn-none {
+    flex: none; display: flex; align-items: center; gap: 5px;
+    height: 28px; padding: 0 10px; border-radius: 6px;
+    border: 1px solid var(--border-strong); color: var(--text-secondary);
+    font-size: 12px; cursor: pointer; background: transparent;
+  }
+  .btn-none:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .hex-input {
+    flex: 1; display: flex; align-items: center; gap: 4px;
+    height: 28px; padding: 0 9px; border-radius: 6px;
+    background: var(--bg-root); border: 1px solid var(--border-strong);
+  }
+  .hex-input .hash { color: var(--text-muted); font-family: Consolas, monospace; font-size: 12px; }
+  .hex-input .val { color: var(--text-primary); font-family: Consolas, monospace; font-size: 12px; }
+  .hex-input .caret { width: 1px; height: 14px; background: var(--accent); animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* 标注 */
+  .anno {
+    position: relative;
+  }
+  .anno .tag {
+    position: absolute; z-index: 5;
+    background: #14315a; color: #9ec8f5;
+    border: 1px solid #2c5b9e; border-radius: 5px;
+    font-size: 11px; padding: 3px 8px; white-space: nowrap;
+    font-weight: 600;
+  }
+
+  /* ---------- 对话框 ---------- */
+  .dlg-row { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .dialog {
+    width: 340px; background: var(--bg-panel);
+    border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 14px 40px rgba(0,0,0,.5); overflow: hidden;
+  }
+  .dlg-title {
+    padding: 14px 18px 12px; font-size: 14.5px; font-weight: 700;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .dlg-body { padding: 16px 18px; }
+  .fld-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600; }
+  .text-field {
+    height: 32px; border-radius: 6px; background: var(--bg-root);
+    border: 1px solid var(--border-strong);
+    display: flex; align-items: center; padding: 0 10px;
+    color: var(--text-primary); font-size: 13px; margin-bottom: 14px;
+  }
+  .text-field .caret { width: 1px; height: 15px; background: var(--accent); margin-left: 1px; animation: blink 1s steps(1) infinite; }
+  .dlg-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-bottom: 2px; }
+  .dlg-grid .sw2 { border-radius: 6px; }
+  /* 对话框内的预览条 */
+  .preview {
+    margin-top: 14px; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border-subtle);
+  }
+  .preview .cap {
+    font-size: 10.5px; color: var(--text-muted); padding: 5px 10px 4px;
+    background: var(--bg-panel-alt); letter-spacing: .05em;
+  }
+  .preview .row {
+    display: flex; align-items: center; gap: 4px; height: 32px;
+    padding: 0 10px; background: var(--bg-root);
+  }
+  .preview .row .name { color: var(--text-secondary); font-size: 13px; font-weight: 600; }
+  .preview .row .cnt {
+    margin-left: auto; font-size: 11px; color: var(--text-muted);
+    background: var(--bg-elevated); border-radius: 8px; padding: 1px 7px;
+  }
+  .dlg-foot {
+    display: flex; justify-content: flex-end; gap: 10px;
+    padding: 12px 18px 16px;
+  }
+  .btn {
+    height: 30px; padding: 0 18px; border-radius: 6px; font-size: 13px;
+    display: flex; align-items: center; cursor: pointer;
+    border: 1px solid var(--border-strong); color: var(--text-secondary);
+    background: transparent;
+  }
+  .btn:hover { background: var(--bg-hover); }
+  .btn.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+  }
+  .btn.primary:hover { filter: brightness(1.1); }
+
+  /* ---------- 流程步骤 ---------- */
+  .flow { display: flex; align-items: stretch; gap: 0; }
+  .step {
+    flex: 1; background: var(--bg-panel); border: 1px solid var(--border-subtle);
+    border-radius: 10px; padding: 13px 14px; position: relative;
+  }
+  .step + .step { margin-left: 26px; }
+  .step + .step::before {
+    content: ""; position: absolute; left: -17px; top: 50%; margin-top: -6px;
+    border: 6px solid transparent; border-left-color: var(--text-muted);
+  }
+  .step .sn {
+    display: inline-flex; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 11.5px; font-weight: 700;
+    align-items: center; justify-content: center; margin-bottom: 8px;
+  }
+  .step b { display: block; font-size: 13px; margin-bottom: 4px; }
+  .step p { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+
+  /* ---------- 规格标注 ---------- */
+  .spec { display: flex; gap: 12px; flex-wrap: wrap; }
+  .spec-card {
+    flex: 1; min-width: 220px; background: var(--bg-panel);
+    border: 1px solid var(--border-subtle); border-radius: 10px; padding: 13px 16px;
+  }
+  .spec-card b { font-size: 13px; display: block; margin-bottom: 8px; color: var(--text-secondary); }
+  .spec-card li { font-size: 12.5px; color: var(--text-muted); line-height: 1.8; margin-left: 16px; }
+  .spec-card code {
+    font-family: Consolas, monospace; font-size: 11.5px;
+    background: var(--bg-root); border: 1px solid var(--border-subtle);
+    border-radius: 4px; padding: 1px 5px; color: #9ec8f5;
+  }
+  svg.ic { display: block; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>分组颜色选择器 · 交互设计稿 <span style="color:var(--text-muted);font-size:14px;font-weight:500">v1 · 2026-09-14</span></h1>
+  <div class="subtitle">适用于三个入口：① 组头右键菜单「分组颜色」面板（点即生效） ② 新建分组对话框 ③ 编辑分组对话框（随「确定」提交）—— 同一套控件，三种语义。</div>
+
+  <h2>设计要点</h2>
+  <div class="points">
+    <div class="point"><div class="no">1</div><div><b>色格加大 + 圆角 32px 触摸目标</b><p>24×22px → 32×32px 圆角色格，点击容错翻倍；按色环顺序排布，同色系相邻，找色有规律。</p></div></div>
+    <div class="point"><div class="no">2</div><div><b>选中态 = 勾选 ✓ + 同色外环</b><p>替代原先的白色描边：格内白勾 + 格外同色 ring，当前色一眼定位，扫视不费力。</p></div></div>
+    <div class="point"><div class="no">3</div><div><b>「无颜色」升级为图标按钮</b><p>从纯文字描边按钮改为 🚫 图标 + 文案，与 hex 输入框并排一行，主次分明：色板为主、微调为辅。</p></div></div>
+    <div class="point"><div class="no">4</div><div><b>头部当前色胶囊 + hex 只读展示</b><p>面板顶部显示当前色圆点与 hex 原文，改色立即反馈；hex 输入收进底部，普通用户不被打扰。</p></div></div>
+    <div class="point"><div class="no">5</div><div><b>对话框内新增「实时预览条」</b><p>选色时同步渲染组头行（chevron / 文件夹 / 组名 / 计数徽章同色），所见即所得，不确定效果再确定提交。</p></div></div>
+    <div class="point"><div class="no">6</div><div><b>chevron 跟随组色（已修复）</b><p>折叠箭头与文件夹图标统一染组色，无色时回落次级前景色——组头"身份区"颜色完整。</p></div></div>
+  </div>
+
+  <h2>场景一 · 组头右键菜单 → 取色面板（点即生效）</h2>
+  <div class="h2-sub">菜单不消失，面板贴菜单右侧弹出；点色格立即落盘并回写菜单色块与列表。Esc / 点击空白收回。</div>
+  <div class="canvas" style="height: 560px;">
+    <!-- 模拟会话列表 -->
+    <div class="mock-sidebar">
+      <div class="mock-caption">会话列表面板（示意）</div>
+      <div style="position:relative; margin-top:14px;">
+        <div class="spine-demo"></div>
+        <div class="group-row">
+          <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="var(--demo)"><path d="M7 10l5 5 5-5z"/></svg>
+          <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="var(--demo)"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          <span style="color:var(--demo)">测试</span><span class="cnt">4</span>
+        </div>
+        <div class="member-row first"><span class="dot">▪</span>s1</div>
+        <div class="member-row"><span class="dot">▪</span>202 (copy)</div>
+        <div class="group-row" style="margin-top:6px;">
+          <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="var(--text-secondary)"><path d="M7 10l5 5 5-5z"/></svg>
+          <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="var(--text-secondary)"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          默认组<span class="cnt">1</span>
+        </div>
+        <div class="member-row first"><span class="dot">▪</span>s2</div>
+        <div class="group-row" style="margin-top:6px; background:var(--bg-hover);">
+          <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="var(--demo)"><path d="M7 10l5 5 5-5z"/></svg>
+          <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="var(--demo)"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          <span style="color:var(--demo)">3</span><span class="cnt">3</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右键菜单 -->
+    <div class="ctx-menu anno">
+      <div class="tag" style="top:-30px; left:0;">右键组头</div>
+      <div class="mi">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="var(--text-secondary)"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        编辑分组
+      </div>
+      <div class="mi hot">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="var(--text-secondary)"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 16a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/><rect x="4" y="10.8" width="16" height="2.4" transform="rotate(-45 12 12)"/></svg>
+        分组颜色
+        <span class="grow"></span>
+        <span class="sw"></span>
+      </div>
+      <div class="mi">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="var(--text-secondary)"><path d="M14 13v6h-4v-6H6l6-6 6 6h-4zm-8 8h12v2H6v-2z" transform="translate(0,-2)"/></svg>
+        新建分组
+      </div>
+      <div class="mi danger">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="var(--danger)"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        删除分组
+      </div>
+    </div>
+
+    <!-- 取色面板 -->
+    <div class="picker anno">
+      <div class="tag" style="top:-30px; left:0;">点即生效 · 无需确认</div>
+      <div class="picker-head">
+        <span class="cur"></span>
+        <span class="t">分组颜色</span>
+        <span class="hex">#FB923C</span>
+      </div>
+
+      <div class="grid6">
+        <div class="sw2" style="background:#f87171"></div>
+        <div class="sw2" style="background:#fb923c"></div>
+        <div class="sw2" style="background:#fbbf24"></div>
+        <div class="sw2" style="background:#facc15"></div>
+        <div class="sw2" style="background:#a3e635"></div>
+        <div class="sw2" style="background:#4ade80"></div>
+        <div class="sw2" style="background:#34d399"></div>
+        <div class="sw2" style="background:#2dd4bf"></div>
+        <div class="sw2" style="background:#22d3ee"></div>
+        <div class="sw2" style="background:#38bdf8"></div>
+        <div class="sw2" style="background:#60a5fa"></div>
+        <div class="sw2" style="background:#818cf8"></div>
+        <div class="sw2" style="background:#a78bfa"></div>
+        <div class="sw2" style="background:#c084fc"></div>
+        <div class="sw2" style="background:#e879f9"></div>
+        <div class="sw2" style="background:#f472b6"></div>
+        <div class="sw2" style="background:#fb7185"></div>
+        <div class="sw2" style="background:#fda4af"></div>
+      </div>
+
+      <div class="sec-label">中性</div>
+      <div class="grid6">
+        <div class="sw2" style="background:#f1f5f9"></div>
+        <div class="sw2" style="background:#e2e8f0"></div>
+        <div class="sw2" style="background:#cbd5e1"></div>
+        <div class="sw2" style="background:#a8a29e"></div>
+        <div class="sw2" style="background:#94a3b8"></div>
+        <div class="sw2 sel" style="background:#64748b; color:#64748b;"></div>
+      </div>
+
+      <div class="picker-div"></div>
+      <div class="picker-foot">
+        <div class="btn-none">
+          <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9"/><line x1="5.5" y1="18.5" x2="18.5" y2="5.5"/></svg>
+          无颜色
+        </div>
+        <div class="hex-input">
+          <span class="hash">#</span><span class="val">FB923C</span><span class="caret"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 标注 -->
+    <div class="anno" style="flex:1; align-self:stretch; border-left: 1px dashed var(--border-subtle); margin: 34px 0 34px 28px; padding: 20px 0 0 24px;">
+      <div class="tag" style="position:static; display:inline-block; margin-bottom:12px;">状态标注</div>
+      <div style="color:var(--text-muted); font-size:12.5px; line-height:2.1; max-width:300px;">
+        <div>① <b style="color:var(--text-secondary)">头部胶囊</b>：当前色圆点 + hex 原文，改色即刷</div>
+        <div>② <b style="color:var(--text-secondary)">彩色区 18 格</b>：色环序 6×3，32px 大格</div>
+        <div>③ <b style="color:var(--text-secondary)">中性区 6 格</b>：低饱和灰阶，选中格示例 ✓ + 外环</div>
+        <div>④ <b style="color:var(--text-secondary)">无颜色</b>：清除组色，恢复默认灰</div>
+        <div>⑤ <b style="color:var(--text-secondary)">hex 快捷输入</b>：粘贴/手输，回车提交（非法值红框提示）</div>
+        <div>⑥ <b style="color:var(--text-secondary)">hover</b>：白色 2px 描边 + 8% 提亮，扫过即有反馈</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>场景二 · 新建 / 编辑分组对话框（随「确定」提交）</h2>
+  <div class="h2-sub">同一色板控件嵌入对话框；底部新增实时预览条，未点确定不落盘，取消即回退。</div>
+  <div class="dlg-row">
+    <div class="dialog">
+      <div class="dlg-title">新建分组</div>
+      <div class="dlg-body">
+        <div class="fld-label">分组名称</div>
+        <div class="text-field">生产环境<span class="caret"></span></div>
+        <div class="fld-label">分组颜色</div>
+        <div class="dlg-grid">
+          <div class="sw2" style="background:#f87171"></div>
+          <div class="sw2" style="background:#fb923c"></div>
+          <div class="sw2 sel" style="background:#fbbf24; color:#fbbf24;"></div>
+          <div class="sw2" style="background:#facc15"></div>
+          <div class="sw2" style="background:#a3e635"></div>
+          <div class="sw2" style="background:#4ade80"></div>
+          <div class="sw2" style="background:#34d399"></div>
+          <div class="sw2" style="background:#2dd4bf"></div>
+          <div class="sw2" style="background:#22d3ee"></div>
+          <div class="sw2" style="background:#38bdf8"></div>
+          <div class="sw2" style="background:#60a5fa"></div>
+          <div class="sw2" style="background:#818cf8"></div>
+          <div class="sw2" style="background:#a78bfa"></div>
+          <div class="sw2" style="background:#c084fc"></div>
+          <div class="sw2" style="background:#e879f9"></div>
+          <div class="sw2" style="background:#f472b6"></div>
+          <div class="sw2" style="background:#fb7185"></div>
+          <div class="sw2" style="background:#fda4af"></div>
+          <div class="sw2" style="background:#f1f5f9"></div>
+          <div class="sw2" style="background:#e2e8f0"></div>
+          <div class="sw2" style="background:#cbd5e1"></div>
+          <div class="sw2" style="background:#a8a29e"></div>
+          <div class="sw2" style="background:#94a3b8"></div>
+          <div class="sw2" style="background:#64748b"></div>
+        </div>
+        <div class="preview">
+          <div class="cap">预览</div>
+          <div class="row">
+            <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="#fbbf24"><path d="M7 10l5 5 5-5z"/></svg>
+            <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="#fbbf24"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+            <span class="name" style="color:#fbbf24">生产环境</span>
+            <span class="cnt">0</span>
+          </div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <div class="btn">取消</div>
+        <div class="btn primary">创建</div>
+      </div>
+    </div>
+
+    <div class="dialog">
+      <div class="dlg-title">编辑分组</div>
+      <div class="dlg-body">
+        <div class="fld-label">分组名称</div>
+        <div class="text-field">测试</div>
+        <div class="fld-label">分组颜色</div>
+        <div class="dlg-grid">
+          <div class="sw2" style="background:#f87171"></div>
+          <div class="sw2 sel" style="background:#fb923c; color:#fb923c;"></div>
+          <div class="sw2" style="background:#fbbf24"></div>
+          <div class="sw2" style="background:#facc15"></div>
+          <div class="sw2" style="background:#a3e635"></div>
+          <div class="sw2" style="background:#4ade80"></div>
+          <div class="sw2" style="background:#34d399"></div>
+          <div class="sw2" style="background:#2dd4bf"></div>
+          <div class="sw2" style="background:#22d3ee"></div>
+          <div class="sw2" style="background:#38bdf8"></div>
+          <div class="sw2" style="background:#60a5fa"></div>
+          <div class="sw2" style="background:#818cf8"></div>
+          <div class="sw2" style="background:#a78bfa"></div>
+          <div class="sw2" style="background:#c084fc"></div>
+          <div class="sw2" style="background:#e879f9"></div>
+          <div class="sw2" style="background:#f472b6"></div>
+          <div class="sw2" style="background:#fb7185"></div>
+          <div class="sw2" style="background:#fda4af"></div>
+          <div class="sw2" style="background:#f1f5f9"></div>
+          <div class="sw2" style="background:#e2e8f0"></div>
+          <div class="sw2" style="background:#cbd5e1"></div>
+          <div class="sw2" style="background:#a8a29e"></div>
+          <div class="sw2" style="background:#94a3b8"></div>
+          <div class="sw2" style="background:#64748b"></div>
+        </div>
+        <div class="preview">
+          <div class="cap">预览 · 列表中的效果</div>
+          <div class="row">
+            <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="#fb923c"><path d="M7 10l5 5 5-5z"/></svg>
+            <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="#fb923c"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+            <span class="name" style="color:#fb923c">测试</span>
+            <span class="cnt">4</span>
+          </div>
+          <div class="row" style="border-top:1px solid var(--border-subtle);">
+            <span style="width:2px; align-self:stretch; background:#fb923c; opacity:.35; margin:4px 0 4px 9px; border-radius:1px;"></span>
+            <span style="color:var(--text-muted); font-size:11.5px; margin-left:8px;">成员脊线同步染色</span>
+          </div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <div class="btn">取消</div>
+        <div class="btn primary">保存</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>交互流程</h2>
+  <div class="flow">
+    <div class="step"><span class="sn">1</span><b>右键组头</b><p>弹出组头菜单；「分组颜色」项带当前色块，一眼看到现在的颜色。</p></div>
+    <div class="step"><span class="sn">2</span><b>点「分组颜色」</b><p>菜单保持打开，取色面板贴菜单右缘弹出（放不下自动翻左侧）。</p></div>
+    <div class="step"><span class="sn">3</span><b>点色格 / 手输 hex</b><p>面板语义：点即生效写盘并广播；头部胶囊与菜单色块同步刷新。</p></div>
+    <div class="step"><span class="sn">4</span><b>列表实时联动</b><p>chevron、文件夹、组名、成员脊线同帧换色；「无颜色」一键回默认。</p></div>
+  </div>
+
+  <h2>规格标注</h2>
+  <div class="spec">
+    <div class="spec-card">
+      <b>尺寸 · 间距</b>
+      <li>面板宽 <code>240px</code>（原 200px），内边距 <code>12px</code></li>
+      <li>色格 <code>32×32px</code> · 圆角 <code>7px</code> · 间距 <code>6px</code></li>
+      <li>底部行高 <code>28px</code>：无颜色按钮 + hex 输入</li>
+      <li>对话框内色格 <code>30×30px</code>，面板同构</li>
+    </div>
+    <div class="spec-card">
+      <b>颜色 · 主题</b>
+      <li>面板底 <code>popup-bg #23262d</code> · 描边 <code>#4a4e59</code></li>
+      <li>色板沿用 24 色（18 彩 + 6 中性），明暗主题各一套</li>
+      <li>选中外环 = 当前色 <code>2px</code>，勾选白色带投影</li>
+      <li>hover = 白 <code>75%</code> 描边 <code>1px</code> offset</li>
+    </div>
+    <div class="spec-card">
+      <b>行为 · 语义</b>
+      <li>面板：点即生效（保持现状，无确认步骤）</li>
+      <li>对话框：暂存草稿，随「创建/保存」提交，可取消</li>
+      <li>hex 输入非法 → 输入框红色描边，不提交</li>
+      <li>Esc / 点空白 = 收面板；再收菜单需再点空白</li>
+    </div>
+  </div>
+</div>
+</body>
+</html>

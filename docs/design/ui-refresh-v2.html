@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>UI 整体美化 · 高保真设计稿 v2</title>
+<style>
+  :root {
+    --bg-root: #1b1d23;        /* 窗口底 = 终端区 */
+    --bg-panel: #23262d;
+    --bg-panel-alt: #2a2d35;
+    --bg-elevated: #30333c;
+    --bg-hover: #373a44;
+    --bg-active: #3f4350;
+    --tab-bar-bg: #202329;
+    --border-subtle: #3a3d46;
+    --border-strong: #4a4e59;
+    --text-primary: #e6e8ee;
+    --text-secondary: #b4b9c4;
+    --text-muted: #9196a3;
+    --accent: #4a90e2;
+    --danger: #cc3333;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --demo: #fb923c;           /* 演示组色（橙） */
+    --demo2: #60a5fa;          /* 演示组色（蓝） */
+    --demo3: #34d399;          /* 演示组色（绿） */
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #14151a; color: var(--text-primary);
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; padding: 40px 48px 64px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+  .subtitle { color: var(--text-muted); font-size: 13px; margin-bottom: 30px; line-height: 1.6; }
+  h2 {
+    font-size: 17px; font-weight: 600; margin: 46px 0 6px;
+    padding-left: 10px; border-left: 3px solid var(--accent);
+  }
+  .h2-sub { color: var(--text-muted); font-size: 12.5px; margin: 0 0 16px 13px; line-height: 1.6; }
+  h3 { font-size: 13.5px; font-weight: 600; color: var(--text-secondary); margin: 20px 0 10px; }
+
+  .card {
+    background: var(--bg-panel); border: 1px solid var(--border-subtle);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .tag-blue {
+    display: inline-block; background: #14315a; color: #9ec8f5;
+    border: 1px solid #2c5b9e; border-radius: 5px;
+    font-size: 11px; padding: 2px 8px; font-weight: 600;
+  }
+  .tag-green {
+    display: inline-block; background: #12361f; color: #86e3a8;
+    border: 1px solid #1f5c36; border-radius: 5px;
+    font-size: 11px; padding: 2px 8px; font-weight: 600;
+  }
+  .tag-orange {
+    display: inline-block; background: #3a2a14; color: #f0b078;
+    border: 1px solid #6e4a1e; border-radius: 5px;
+    font-size: 11px; padding: 2px 8px; font-weight: 600;
+  }
+
+  /* ============ Tab 页签 ============ */
+  .strip {
+    background: var(--tab-bar-bg);
+    border-radius: 8px 8px 0 0; padding: 4px 4px 0; height: 44px;
+    display: flex; gap: 3px; align-items: flex-end; overflow: hidden;
+  }
+  .strip-wrap { border: 1px solid var(--border-subtle); border-radius: 10px; overflow: hidden; }
+  .term-under {
+    height: 56px; background: #14151a;
+    border-top: 1px solid #2e313a;
+    display: flex; align-items: center; padding-left: 18px;
+    color: #5a5f6d; font-family: Consolas, monospace; font-size: 12px;
+  }
+  .tab {
+    position: relative; height: 36px; min-width: 120px; max-width: 220px;
+    border-radius: 7px 7px 0 0;
+    display: flex; align-items: center; gap: 8px; padding: 0 12px;
+    font-size: 12.5px; flex: none;
+  }
+  .tab.active {
+    background: #16171c; color: var(--text-primary);
+    box-shadow: 0 1px 7px rgba(0,0,0,.34);
+  }
+  .tab.active::before {  /* 顶部内高光 */
+    content: ""; position: absolute; top: 0; left: 1px; right: 1px; height: 1px;
+    background: rgba(255,255,255,.08);
+  }
+  .tab.inactive { color: var(--text-secondary); }
+  .tab.inactive:hover { background: var(--bg-hover); }
+  .tab .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .tab .close {
+    width: 18px; height: 18px; border-radius: 4px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted); font-size: 14px;
+  }
+  .tab:hover .close, .tab.active .close { background: transparent; color: var(--text-secondary); }
+  .tab:hover .close:hover { background: #e81123; color: #fff; }
+  /* 方案 A：左缘竖条 */
+  .vbar {
+    position: absolute; left: 4px; top: 7px; bottom: 7px; width: 3px;
+    border-radius: 2px;
+  }
+  .tab.active .vbar { opacity: 1; }
+  .tab.inactive .vbar { opacity: .55; }
+  .tab.inactive:hover .vbar { opacity: .9; }
+  /* 方案 B：顶部圆头条 */
+  .tbar {
+    position: absolute; top: 3px; left: 10px; right: 10px; height: 2.5px;
+    border-radius: 2px;
+  }
+  /* 方案 C：现状底部条 */
+  .bbar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
+  }
+  .scheme-label {
+    display: flex; align-items: baseline; gap: 10px; margin: 22px 0 8px;
+  }
+  .scheme-label b { font-size: 14px; }
+  .scheme-label span { font-size: 12px; color: var(--text-muted); }
+  .pros { font-size: 12px; color: var(--text-muted); line-height: 1.7; margin-top: 8px; }
+  .pros b { color: var(--text-secondary); }
+
+  .strip-note {
+    display: flex; gap: 14px; margin-top: 10px; font-size: 11.5px; color: var(--text-muted);
+    flex-wrap: wrap;
+  }
+  .strip-note .dotl { display: inline-flex; align-items: center; gap: 5px; }
+  .dotl i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  /* ============ 对话框 ============ */
+  .dlg-row { display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap; }
+  .dialog {
+    width: 360px; background: var(--bg-panel);
+    border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 14px 40px rgba(0,0,0,.5); overflow: hidden;
+  }
+  .dlg-title {
+    padding: 14px 18px 12px; font-size: 14.5px; font-weight: 700;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dlg-body { padding: 16px 18px 14px; }
+  .fld-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 600; display:flex; align-items:center; gap:6px;}
+  .text-field {
+    height: 32px; border-radius: 6px; background: var(--bg-root);
+    border: 1px solid var(--border-strong);
+    display: flex; align-items: center; padding: 0 10px;
+    color: var(--text-primary); font-size: 13px; margin-bottom: 14px;
+  }
+  .text-field .caret { width: 1px; height: 15px; background: var(--accent); margin-left: 1px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .grid6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .sw2 { position: relative; width: 100%; aspect-ratio: 1; border-radius: 7px; cursor: pointer; }
+  .sw2:hover { outline: 2px solid rgba(255,255,255,.75); outline-offset: 1px; }
+  .sw2.sel { box-shadow: 0 0 0 2px var(--bg-panel), 0 0 0 4px currentColor; }
+  .sw2.sel::after {
+    content: ""; position: absolute; inset: 0;
+    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>') center / 62% no-repeat;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,.45));
+  }
+  .sec-label { font-size: 11px; color: var(--text-muted); margin: 10px 2px 6px; letter-spacing: .04em; }
+  .picker-foot { display: flex; gap: 8px; margin-top: 12px; }
+  .btn-none {
+    flex: none; display: flex; align-items: center; gap: 5px;
+    height: 28px; padding: 0 10px; border-radius: 6px;
+    border: 1px solid var(--border-strong); color: var(--text-secondary);
+    font-size: 12px; cursor: pointer; background: transparent;
+  }
+  .btn-none:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .hex-input {
+    flex: 1; display: flex; align-items: center; gap: 4px;
+    height: 28px; padding: 0 9px; border-radius: 6px;
+    background: var(--bg-root); border: 1px solid var(--border-strong);
+  }
+  .hex-input .hash { color: var(--text-muted); font-family: Consolas, monospace; font-size: 12px; }
+  .hex-input .val { color: var(--text-primary); font-family: Consolas, monospace; font-size: 12px; }
+  .hex-input .caret { width: 1px; height: 14px; background: var(--accent); animation: blink 1s steps(1) infinite; }
+  .dlg-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 18px 16px; }
+  .btn {
+    height: 30px; padding: 0 18px; border-radius: 6px; font-size: 13px;
+    display: flex; align-items: center; cursor: pointer;
+    border: 1px solid var(--border-strong); color: var(--text-secondary);
+    background: transparent;
+  }
+  .btn:hover { background: var(--bg-hover); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  /* 预览条 */
+  .preview { margin-top: 14px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-subtle); }
+  .preview .cap {
+    font-size: 10.5px; color: var(--text-muted); padding: 5px 10px 4px;
+    background: var(--bg-panel-alt); letter-spacing: .05em;
+  }
+  .preview .strip-mock {
+    background: var(--tab-bar-bg); padding: 4px 8px 0; display: flex;
+  }
+  .preview .term-mock { background: var(--bg-root); height: 30px; }
+  /* 分组下拉 */
+  .combo {
+    height: 32px; border-radius: 6px; background: var(--bg-root);
+    border: 1px solid var(--accent);
+    display: flex; align-items: center; padding: 0 8px 0 10px;
+    margin-bottom: 4px; gap: 8px; font-size: 13px;
+  }
+  .combo .cdot { width: 10px; height: 10px; border-radius: 50%; background: var(--demo); }
+  .combo .val { flex: 1; color: var(--text-primary); }
+  .combo .car { color: var(--text-muted); font-size: 11px; }
+  .combo-pop {
+    border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden;
+    background: var(--bg-panel); box-shadow: 0 10px 26px rgba(0,0,0,.45);
+    margin-bottom: 14px;
+  }
+  .combo-item {
+    display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 12px;
+    font-size: 12.5px; color: var(--text-primary);
+  }
+  .combo-item .cdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .combo-item .cnt { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+  .combo-item.hot { background: var(--bg-hover); }
+  .combo-item.none .cdot { background: transparent; border: 1px dashed var(--text-muted); }
+
+  /* ============ 清单 ============ */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th {
+    text-align: left; color: var(--text-secondary); font-weight: 600;
+    background: var(--bg-panel-alt); padding: 9px 12px;
+    border: 1px solid var(--border-subtle); font-size: 12px;
+  }
+  td { padding: 9px 12px; border: 1px solid var(--border-subtle); color: var(--text-primary); vertical-align: top; line-height: 1.55; }
+  td.mut { color: var(--text-muted); }
+  td code { font-family: Consolas, monospace; font-size: 11.5px; background: var(--bg-root); border: 1px solid var(--border-subtle); border-radius: 4px; padding: 1px 5px; color: #9ec8f5; }
+  tr.done td { background: color-mix(in srgb, var(--green) 6%, transparent); }
+  .pill {
+    display: inline-block; border-radius: 9px; font-size: 10.5px; padding: 1px 8px; font-weight: 600;
+  }
+  .pill.must { background: #14315a; color: #9ec8f5; }
+  .pill.opt { background: #3a2a14; color: #f0b078; }
+  .pill.done { background: #12361f; color: #86e3a8; }
+
+  /* 会话列表 mock */
+  .side-mock { width: 250px; flex: none; }
+  .g-row { display:flex; align-items:center; gap:4px; height:32px; padding:0 10px; border-radius:6px; color:var(--text-secondary); font-size:13px; font-weight:600; position:relative;}
+  .m-row { display:flex; align-items:center; gap:7px; height:30px; padding:0 10px 0 30px; border-radius:6px; color:var(--text-secondary); font-size:13px; position:relative;}
+  .m-row .sdot { width:6px; height:6px; border-radius:50%; flex:none; }
+  .m-row .cnt { margin-left:auto; }
+  svg.ic { display:block; flex:none; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>UI 整体美化 · 高保真设计稿 <span style="color:var(--text-muted);font-size:14px;font-weight:500">v2 · 2026-09-14 · 仅讨论，不动代码</span></h1>
+  <div class="subtitle">
+    本稿覆盖四个变动区域：<b style="color:var(--text-secondary)">A. Tab 页签重设计</b>（三方案对比） ·
+    <b style="color:var(--text-secondary)">B. 新建/编辑分组对话框</b>（颜色自定义显眼化） ·
+    <b style="color:var(--text-secondary)">C. 新建/编辑会话对话框</b>（分组色联动 + 页签预览） ·
+    <b style="color:var(--text-secondary)">D. 其它整体美化提案</b>。文末为修改清单，确认后按清单逐项实施。
+  </div>
+
+  <!-- ================= A. TAB 页签 ================= -->
+  <h2>A · Tab 页签重设计 —— 组色表达三方案</h2>
+  <div class="h2-sub">
+    现状：组色只画在页签<b>底部 3px 色条</b>，而页签下沿是方角、与终端区连通（"从终端长出来"）——
+    色条压在连通缝上，身份感弱且两个设计意图互相打架。以下三个方案替换/优化这一表达。
+  </div>
+
+  <!-- 方案 A -->
+  <div class="scheme-label">
+    <span class="tag-green">方案 A · 推荐</span>
+    <b>左缘组色竖条</b>
+    <span>竖条贴页签左缘、上下内缩 7px 圆头；活动页签全亮，非活动 55%、悬停 90%</span>
+  </div>
+  <div class="strip-wrap">
+    <div class="strip">
+      <div class="tab active" style="min-width:150px;">
+        <span class="vbar" style="background:var(--demo)"></span>
+        <span class="title">s2</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;">
+        <span class="vbar" style="background:var(--demo)"></span>
+        <span class="title">202</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;">
+        <span class="vbar" style="background:var(--demo2)"></span>
+        <span class="title">s1</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:150px;">
+        <span class="vbar" style="background:transparent;border:1.5px dashed var(--border-strong);opacity:.8;top:9px;bottom:9px;"></span>
+        <span class="title">本地终端</span><span class="close">×</span>
+      </div>
+    </div>
+    <div class="term-under">root@s2:~# ▌</div>
+  </div>
+  <div class="pros">
+    <b>优点：</b>竖条与左侧会话列表的"组头文件夹 + 成员脊线"同方位（左缘），左右视觉语言统一；
+    不压页签-终端连通缝；无组色时画虚线空心条示意占位（或完全不画，可讨论）。
+    <b>缺点：</b>页签很窄时竖条与标题贴得近。
+  </div>
+
+  <!-- 方案 B -->
+  <div class="scheme-label">
+    <span class="tag-blue">方案 B</span>
+    <b>顶部圆头色条（Chrome 风）</b>
+    <span>画在页签顶部 3px 留白内，左右内缩 10px；仅活动页签显示 + 非活动悬停微显</span>
+  </div>
+  <div class="strip-wrap">
+    <div class="strip">
+      <div class="tab active" style="min-width:150px;">
+        <span class="tbar" style="background:var(--demo)"></span>
+        <span class="title">s2</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;">
+        <span class="title" style="padding-left:0">202</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;">
+        <span class="title">s1</span><span class="close">×</span>
+      </div>
+    </div>
+    <div class="term-under">root@s2:~# ▌</div>
+  </div>
+  <div class="pros">
+    <b>优点：</b>最接近主流浏览器心智："当前页签是谁"一眼可见，色彩克制（只活动页签有色）。
+    <b>缺点：</b>非活动页签完全无组色，多组混排时扫视分组不如 A 直观。
+  </div>
+
+  <!-- 方案 C -->
+  <div class="scheme-label">
+    <span class="tag-blue">方案 C</span>
+    <b>现状优化：底部色条保留但退位</b>
+    <span>底部条改细（2.5px）+ 只在活动/悬停时出现，把连通缝还给页签</span>
+  </div>
+  <div class="strip-wrap">
+    <div class="strip">
+      <div class="tab active" style="min-width:150px;">
+        <span class="bbar" style="height:2.5px;background:var(--demo);box-shadow:0 -3px 8px -2px var(--demo) inset;"></span>
+        <span class="title">s2</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;">
+        <span class="title">202</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;">
+        <span class="title">s1</span><span class="close">×</span>
+      </div>
+    </div>
+    <div class="term-under">root@s2:~# ▌</div>
+  </div>
+  <div class="pros">
+    <b>优点：</b>改动最小。 <b>缺点：</b>非活动页签丢失组色，页签与色条仍在同一缝上。
+  </div>
+
+  <h3>推荐方案 A 的完整状态规格</h3>
+  <div class="strip-wrap">
+    <div class="strip" style="height:44px;">
+      <div class="tab active" style="min-width:150px;">
+        <span class="vbar" style="background:var(--demo)"></span>
+        <span class="title">s2</span><span class="close">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:130px;background:var(--bg-hover);">
+        <span class="vbar" style="background:var(--demo);opacity:.9"></span>
+        <span class="title">202 — 悬停</span><span class="close" style="background:#e81123;color:#fff">×</span>
+      </div>
+      <div class="tab inactive" style="min-width:110px;">
+        <span class="vbar" style="background:var(--demo2);opacity:.55"></span>
+        <span class="title">s1</span>
+      </div>
+      <div class="tab inactive" style="min-width:110px;">
+        <span class="vbar" style="background:var(--demo3);opacity:.55"></span>
+        <span class="title">db-01</span>
+      </div>
+    </div>
+    <div class="term-under">root@s2:~# ▌</div>
+  </div>
+  <div class="strip-note">
+    <span class="dotl"><i style="background:var(--demo)"></i>活动：竖条 100%</span>
+    <span class="dotl"><i style="background:var(--demo);opacity:.9"></i>悬停：90%</span>
+    <span class="dotl"><i style="background:var(--demo);opacity:.55"></i>非活动：55%</span>
+    <span class="dotl"><i style="background:transparent;border:1px dashed var(--text-muted)"></i>无组色：不画（留白）</span>
+    <span class="dotl">关闭键：悬停本页签才淡入 · 红 #e81123（保持现状）</span>
+  </div>
+
+  <!-- ================= B. 分组对话框 ================= -->
+  <h2>B · 新建 / 编辑分组对话框 —— 颜色自定义显眼化</h2>
+  <div class="h2-sub">
+    现状问题：颜色字段藏在对话框<b>最底部</b>，用的还是旧版 24 小格（25×22px），存在感极低 ——
+    观感上"没有地方自定义颜色"。新设计：<b>色板上移为第二区块</b>、大格 30px、选中勾选 ✓、底部实时预览页签效果。
+  </div>
+  <div class="dlg-row">
+    <div class="dialog">
+      <div class="dlg-title"><span class="tag-green">新设计</span> 新建分组</div>
+      <div class="dlg-body">
+        <div class="fld-label">分组名称</div>
+        <div class="text-field">生产环境<span class="caret"></span></div>
+        <div class="fld-label">分组颜色 <span style="font-weight:400;color:var(--text-muted);font-size:11px;">点色格即选，「无颜色」恢复默认灰</span></div>
+        <div class="grid6">
+          <div class="sw2" style="background:#f87171"></div>
+          <div class="sw2" style="background:#fb923c"></div>
+          <div class="sw2 sel" style="background:#fbbf24; color:#fbbf24;"></div>
+          <div class="sw2" style="background:#facc15"></div>
+          <div class="sw2" style="background:#a3e635"></div>
+          <div class="sw2" style="background:#4ade80"></div>
+          <div class="sw2" style="background:#34d399"></div>
+          <div class="sw2" style="background:#2dd4bf"></div>
+          <div class="sw2" style="background:#22d3ee"></div>
+          <div class="sw2" style="background:#38bdf8"></div>
+          <div class="sw2" style="background:#60a5fa"></div>
+          <div class="sw2" style="background:#818cf8"></div>
+          <div class="sw2" style="background:#a78bfa"></div>
+          <div class="sw2" style="background:#c084fc"></div>
+          <div class="sw2" style="background:#e879f9"></div>
+          <div class="sw2" style="background:#f472b6"></div>
+          <div class="sw2" style="background:#fb7185"></div>
+          <div class="sw2" style="background:#fda4af"></div>
+        </div>
+        <div class="sec-label">中性</div>
+        <div class="grid6">
+          <div class="sw2" style="background:#f1f5f9"></div>
+          <div class="sw2" style="background:#e2e8f0"></div>
+          <div class="sw2" style="background:#cbd5e1"></div>
+          <div class="sw2" style="background:#a8a29e"></div>
+          <div class="sw2" style="background:#94a3b8"></div>
+          <div class="sw2" style="background:#64748b"></div>
+        </div>
+        <div class="picker-foot">
+          <div class="btn-none">
+            <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9"/><line x1="5.5" y1="18.5" x2="18.5" y2="5.5"/></svg>
+            无颜色
+          </div>
+          <div class="hex-input"><span class="hash">#</span><span class="val">FBBF24</span><span class="caret"></span></div>
+        </div>
+        <!-- 页签预览 -->
+        <div class="preview">
+          <div class="cap">预览 · 页签与列表中的效果</div>
+          <div class="strip-mock">
+            <div class="tab active" style="min-width:96px;height:30px;font-size:12px;">
+              <span class="vbar" style="background:#fbbf24;top:5px;bottom:5px;"></span>
+              <span class="title">新页签</span>
+            </div>
+            <div class="tab inactive" style="min-width:70px;height:30px;font-size:12px;">
+              <span class="title">其它页签</span>
+            </div>
+          </div>
+          <div class="term-mock"></div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <div class="btn">取消</div>
+        <div class="btn primary">创建</div>
+      </div>
+    </div>
+
+    <div class="dialog" style="opacity:.62;">
+      <div class="dlg-title"><span class="tag-orange">现状</span> 新建分组（对照）</div>
+      <div class="dlg-body">
+        <div class="fld-label">分组名称</div>
+        <div class="text-field" style="margin-bottom:20px;">生产环境</div>
+        <div class="fld-label">分组颜色（藏在最底部 · 旧 24 小格）</div>
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;max-width:216px;">
+          <div style="width:26px;height:22px;border-radius:3px;background:#f87171"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#fb923c"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#fbbf24;outline:1.5px solid var(--text-primary);outline-offset:-1.5px;"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#facc15"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#a3e635"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#4ade80"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#34d399"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#2dd4bf"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#22d3ee"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#38bdf8"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#60a5fa"></div>
+          <div style="width:26px;height:22px;border-radius:3px;background:#818cf8"></div>
+        </div>
+        <div style="margin-top:12px;display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border:1px solid var(--border-strong);border-radius:4px;font-size:11px;color:var(--text-primary);">无颜色</div>
+        <div style="margin-top:26px;display:flex;justify-content:flex-end;gap:8px;">
+          <div class="btn" style="height:26px;">取消</div><div class="btn primary" style="height:26px;">确定</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= C. 会话对话框 ================= -->
+  <h2>C · 新建 / 编辑会话对话框 —— 分组色联动 + 页签预览</h2>
+  <div class="h2-sub">
+    会话的页签颜色来自<b>所属分组的颜色</b>。新设计：分组下拉每项带组色圆点（现有数据，补足视觉），
+    选中组后底部实时预览"这个会话的页签长什么样"—— 选组即见色，不需要保存后才发现。
+  </div>
+  <div class="dlg-row">
+    <div class="dialog">
+      <div class="dlg-title"><span class="tag-green">新设计</span> 会话设置</div>
+      <div class="dlg-body">
+        <div class="fld-label">会话名称</div>
+        <div class="text-field">s2<span class="caret"></span></div>
+        <div class="fld-label">主机 / 端口</div>
+        <div class="text-field" style="color:var(--text-muted);">192.168.1.202 : 22</div>
+        <div class="fld-label">所属分组 <span style="font-weight:400;color:var(--text-muted);font-size:11px;">页签颜色跟随分组</span></div>
+        <div class="combo">
+          <span class="cdot"></span><span class="val">测试</span><span class="car">▾</span>
+        </div>
+        <div class="combo-pop">
+          <div class="combo-item hot"><span class="cdot" style="background:var(--demo)"></span>测试<span class="cnt">4 台</span></div>
+          <div class="combo-item"><span class="cdot" style="background:var(--demo2)"></span>默认组<span class="cnt">1 台</span></div>
+          <div class="combo-item"><span class="cdot" style="background:var(--demo3)"></span>db<span class="cnt">3 台</span></div>
+          <div class="combo-item none"><span class="cdot"></span>未分组<span class="cnt">2 台</span></div>
+        </div>
+        <!-- 页签预览 -->
+        <div class="preview">
+          <div class="cap">预览 · 保存后页签效果</div>
+          <div class="strip-mock">
+            <div class="tab active" style="min-width:96px;height:30px;font-size:12px;">
+              <span class="vbar" style="background:var(--demo);top:5px;bottom:5px;"></span>
+              <span class="title">s2</span>
+            </div>
+            <div class="tab inactive" style="min-width:70px;height:30px;font-size:12px;">
+              <span class="title">…</span>
+            </div>
+          </div>
+          <div class="term-mock"></div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <div class="btn">取消</div>
+        <div class="btn primary">保存</div>
+      </div>
+    </div>
+
+    <div style="flex:1;min-width:280px;">
+      <div class="card">
+        <b style="font-size:13.5px;display:block;margin-bottom:10px;">C 区交互规则</b>
+        <div style="font-size:12.5px;color:var(--text-muted);line-height:2.0;">
+          ① 分组下拉每项：<b style="color:var(--text-secondary)">组色圆点 + 组名 + 成员数</b>（圆点数据已有，只补渲染）<br>
+          ② 输入框左缘的组色回显点保持现状（已有）<br>
+          ③ 选组后预览条实时刷新页签竖条颜色<br>
+          ④ 「未分组」虚线空点，页签无竖条<br>
+          ⑤ 会话级自定义色<b style="color:var(--text-secondary)">不做</b>：颜色跟随分组，
+          避免一个会话两个色源的歧义（如需再议）
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= D. 其它提案 ================= -->
+  <h2>D · 其它整体美化提案（可选，逐项勾选）</h2>
+  <div class="dlg-row">
+    <div class="card" style="flex:1;min-width:300px;">
+      <b style="font-size:13.5px;display:block;margin-bottom:8px;">D1 · 会话列表成员行色点</b>
+      <div class="side-mock" style="border:1px solid var(--border-subtle);border-radius:8px;padding:10px 8px;background:var(--bg-panel);">
+        <div class="g-row">
+          <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="var(--demo)"><path d="M7 10l5 5 5-5z"/></svg>
+          <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="var(--demo)"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          <span style="color:var(--demo)">测试</span>
+          <span class="cnt" style="margin-left:auto;font-size:11px;color:var(--text-muted);">4</span>
+        </div>
+        <div class="m-row">
+          <span style="width:2px;align-self:stretch;background:var(--demo);opacity:.35;margin:5px 0 5px 12px;border-radius:1px;"></span>
+          <span class="sdot" style="background:var(--green)"></span>s1
+        </div>
+        <div class="m-row">
+          <span style="width:2px;align-self:stretch;background:var(--demo);opacity:.35;margin:5px 0 5px 12px;border-radius:1px;"></span>
+          <span class="sdot" style="background:transparent;border:1.5px solid var(--text-muted)"></span>202
+        </div>
+      </div>
+      <div class="pros" style="margin-top:10px;">成员行名称前加<b> 6px 连接状态点</b>（绿=已连 / 空心=未连），
+      与组色脊线并存。空间开销 0，一眼分辨哪些机器在线。</div>
+    </div>
+
+    <div class="card" style="flex:1;min-width:300px;">
+      <b style="font-size:13.5px;display:block;margin-bottom:8px;">D2 · 页签溢出渐隐遮罩</b>
+      <div class="strip-wrap">
+        <div class="strip" style="position:relative;">
+          <div class="tab inactive" style="min-width:96px;"><span class="title">web-01</span></div>
+          <div class="tab inactive" style="min-width:96px;"><span class="title">db-01</span></div>
+          <div class="tab inactive" style="min-width:96px;"><span class="title">cache</span></div>
+          <div class="tab inactive" style="min-width:96px;opacity:.45;"><span class="title">monit…</span></div>
+          <div style="position:absolute;right:0;top:0;bottom:0;width:64px;background:linear-gradient(90deg,transparent,var(--tab-bar-bg));pointer-events:none;"></div>
+        </div>
+        <div class="term-under">…</div>
+      </div>
+      <div class="pros" style="margin-top:10px;">页签过多时右缘渐隐 + 现有滚动箭头配合，
+      替代"生硬截断"的观感（纯视觉，不动滚动逻辑）。</div>
+    </div>
+
+    <div class="card" style="flex:1;min-width:300px;">
+      <b style="font-size:13.5px;display:block;margin-bottom:8px;">D3 · 右键菜单视觉统一</b>
+      <div style="width:190px;background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:8px;padding:4px;box-shadow:0 10px 28px rgba(0,0,0,.45);">
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:4px;font-size:12.5px;background:var(--bg-hover);">
+          <span style="color:var(--text-secondary);font-size:11px;">└</span> 编辑分组
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:4px;font-size:12.5px;">
+          <span style="width:13px;height:13px;border-radius:3.5px;background:var(--demo);border:1px solid var(--border-strong);"></span>
+          分组颜色
+          <span style="margin-left:auto;font-size:10.5px;color:var(--text-muted);">▶</span>
+        </div>
+      </div>
+      <div class="pros" style="margin-top:10px;">「分组颜色」项右侧加 <b>▶ 展开箭头</b>，暗示有子面板；
+      与页签右键菜单、会话行菜单统一：同一圆角/行高/图标档位。</div>
+    </div>
+  </div>
+
+  <!-- ================= 清单 ================= -->
+  <h2>修改清单（确认后按此逐项实施）</h2>
+  <table>
+    <tr><th style="width:46px;">编号</th><th style="width:210px;">变动点</th><th>说明</th><th style="width:150px;">主要涉及</th><th style="width:70px;">优先级</th></tr>
+    <tr class="done">
+      <td>0</td><td>chevron 跟随组色</td>
+      <td class="mut">折叠箭头染组色（无色回落次级前景）—— 上轮已完成并通过编译，随本清单一起提交</td>
+      <td><code>welcome.slint</code></td>
+      <td><span class="pill done">已完成</span></td>
+    </tr>
+    <tr>
+      <td>1</td><td>页签组色改左缘竖条（方案 A）</td>
+      <td class="mut">移除底部 3px 色条，改为左缘 3px 圆头竖条（上下内缩 7px）；活动 100% / 悬停 90% / 非活动 55% 透明度分级；无组色不画</td>
+      <td><code>tabs.slint</code></td>
+      <td><span class="pill must">必做</span></td>
+    </tr>
+    <tr>
+      <td>2</td><td>取色控件统一升级</td>
+      <td class="mut"><code>GroupColorField</code> 重做：色格 30px 圆角、选中 ✓ + 同色外环、hover 白描边；头部当前色胶囊 + hex 展示；「无颜色」图标按钮；hex 手输收进底部行</td>
+      <td><code>app.slint</code></td>
+      <td><span class="pill must">必做</span></td>
+    </tr>
+    <tr>
+      <td>3</td><td>分组对话框颜色区显眼化</td>
+      <td class="mut">「分组颜色」从对话框底部上移至名称之后（第二区块）；套用 2 号新控件；新增页签预览条（竖条 + 活动底色实时刷新）</td>
+      <td><code>app.slint</code></td>
+      <td><span class="pill must">必做</span></td>
+    </tr>
+    <tr>
+      <td>4</td><td>会话对话框分组色联动</td>
+      <td class="mut">分组下拉每项补组色圆点 + 成员数（GroupEntry.color 已有数据）；选组后底部页签预览条实时反映页签竖条颜色</td>
+      <td><code>session_dialog.slint</code></td>
+      <td><span class="pill must">必做</span></td>
+    </tr>
+    <tr>
+      <td>5</td><td>右键菜单「分组颜色」项加 ▶ 箭头</td>
+      <td class="mut">暗示侧挂取色面板；同时把组头/成员行/页签三处右键菜单的行高、圆角、图标档位统一到同一规格</td>
+      <td><code>app.slint</code></td>
+      <td><span class="pill opt">可选</span></td>
+    </tr>
+    <tr>
+      <td>6</td><td>成员行连接状态点</td>
+      <td class="mut">成员行名称前 6px 状态点：绿实心=已连接 / 黄=连接中 / 空心=断开；与组色脊线并存（D1）</td>
+      <td><code>welcome.slint</code></td>
+      <td><span class="pill opt">可选</span></td>
+    </tr>
+    <tr>
+      <td>7</td><td>页签溢出渐隐遮罩</td>
+      <td class="mut">页签超出条带宽度时左右缘 64px 渐隐（纯视觉层，滚动逻辑不动）（D2）</td>
+      <td><code>tabs.slint</code></td>
+      <td><span class="pill opt">可选</span></td>
+    </tr>
+  </table>
+
+  <div style="margin-top:18px;font-size:12.5px;color:var(--text-muted);line-height:1.8;">
+    待你确认的事项：
+    <b style="color:var(--text-secondary)">① 页签方案选 A / B / C 哪个？</b>
+    <b style="color:var(--text-secondary)">② 可选项 5/6/7 做不做？</b>
+    <b style="color:var(--text-secondary)">③ 无组色的页签：完全不画（推荐）还是画虚线占位？</b>
+    确认后按清单实施，每项独立提交便于回退。
+  </div>
+</div>
+</body>
+</html>
