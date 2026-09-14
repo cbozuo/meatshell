@@ -1011,6 +1011,13 @@ export component AppWindow inherits Window {
     // Welcome watches this to clear its shared drag state instead of
     // leaving a card lifted forever.
     in property <int> sessions-revision: 0;
+    // (#move-to-groups 2026-09-14) 成员右键菜单「移动到」的组清单,由 Rust
+    // 在会话列表每次刷新时一并填好(session_models::move_target_groups_model):
+    // **默认组恒居首位**,其后是具名组(存储顺序 = 组头拖动维护的顺序)。
+    // 取代"遍历 sessions 再过滤"——那版里不可见的行仍各占一个布局 spacing,
+    // 菜单中组与组之间被撑出一串空档(用户实测);且默认组在未分组成员被移空
+    // 后整行消失,而"第一位永远是默认组"是定稿要求。
+    in property <[string]> move-target-groups;
     in-out property <string> host-search-query;
     callback host-search-changed(string);
 
@@ -1088,15 +1095,7 @@ export component AppWindow inherits Window {
     callback duplicate-session(string /* session-id */);
     callback move-session(string /* session-id */, string /* group */);
     callback reorder-session(string /* session-id */, int /* dir: -1 up, 1 down */) -> bool;
-    callback move-session-to(string /* session-id */, string /* target-id */, bool /* after */);   // (#drag-ghost-pointer) 几何落位:移到目标行前/后并继承其组
-    // (#drag-tail-drop-r2 2026-09-07) 指针越出列表顶时的落位:精确目标由
-    // Rust 按存储顺序计算(旧的 head id 行广播依赖 changed 触发顺序,反序跑组)。
-    callback move-session-to-start(string /* session-id */);
-    // (#group-head-directional 2026-09-08) 组头接触/越过 = 进该组(展开组第
-    // 1 位 / 折叠组末尾,折叠态由 config 侧实时判定)。
-    callback move-session-to-group-top(string /* session-id */, string /* group */);
-    // (#drag-ungroup-pop 2026-09-07) 底部越界:移出分组(group 清空,平铺)。
-    callback move-session-ungroup(string /* session-id */);
+    callback move-session-to(string /* session-id */, string /* target-id */, bool /* after */);   // (#drag-ghost-pointer) 几何落位:移到目标行前/后并继承其组(#in-group-only 唯一拖拽提交)
     callback reorder-group(string /* group */, string /* before-group */);   // (#group-sort-line-r2) 组排序:移到目标组之前(与插入线同源)
     callback reorder-session-end();
     callback toggle-group(string /* group */);
@@ -1685,9 +1684,6 @@ export component AppWindow inherits Window {
                     reg-ctx-row(info) => { root.reg-ctx-row(info); }
                     drag-cancel-seq: root.session-drag-cancel-seq;
                     move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
-                    move-session-to-start(id) => { root.move-session-to-start(id); }
-                    move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
-                    move-session-ungroup(id) => { root.move-session-ungroup(id); }
                     reorder-group(g, before) => { root.reorder-group(g, before); }
                     width: parent.width;
                     height: parent.height;
@@ -2191,9 +2187,6 @@ export component AppWindow inherits Window {
                         reg-ctx-row(info) => { root.reg-ctx-row(info); }
                         drag-cancel-seq: root.session-drag-cancel-seq;
                         move-session-to(id, target, after) => { root.move-session-to(id, target, after); }
-                    move-session-to-start(id) => { root.move-session-to-start(id); }
-                    move-session-to-group-top(id, group) => { root.move-session-to-group-top(id, group); }
-                    move-session-ungroup(id) => { root.move-session-ungroup(id); }
                         reorder-group(g, before) => { root.reorder-group(g, before); }
                         search-changed(query) => { root.host-search-changed(query); }
                         new-session => { root.new-session-clicked(); }
@@ -2838,7 +2831,8 @@ export component AppWindow inherits Window {
         menu-pad := TouchArea { width: 100%; height: 100%; }
         row-menu-vl := VerticalLayout {
             padding: 4px;
-            spacing: 2px;
+            // (#move-to-compact) spacing 收到 1:标题/条目/分组项之间不再有多余空档。
+            spacing: 1px;
             Rectangle {
                 height: 28px;
                 border-radius: Theme.radius-sm;
@@ -2886,40 +2880,64 @@ export component AppWindow inherits Window {
                 }
             }
             Rectangle { height: 1px; background: Theme.border-subtle; }
-            // (#move-to-hierarchy 2026-09-13) "移动到"改成**纯标签行**:小字、
-            // 次要色、不带图标,只在分组上方起一个标题作用;下面的组名项再整体
-            // 缩进一档 —— 标题 12px、条目 22px,两级靠**缩进差**立住层级,不靠
-            // 字号硬拉。原来标题和条目共用同一个图标、同一档缩进,看不出谁统辖
-            // 谁(用户截图:"移动到"和下面的组名展示没有层级)。
+            // (#move-to-compact 2026-09-14) "移动到"分区紧凑化(第三轮):
+            //  · 标题行 22 → 18px:标题只是分区标签,过高会在它与第一个组名
+            //    之间堆出一段空白(用户实测"移动到和下面组别之间间距太多");
+            //  · 外层 spacing 由 2 收到 1(见 row-menu-vl),条目之间的空档
+            //    再收一半;
+            //  · 末尾不再留 2px 呼吸位(它叠加在 spacing 上也是多余留白)。
+            // 层级仍靠缩进差(标题 10 / 条目 20)+ 颜色(次要色 / 主色)表达。
             Rectangle {
-                height: 22px;
+                height: 18px;
                 HorizontalLayout {
-                    padding-left: 12px;
+                    padding-left: 10px;
                     Text {
                         text: @tr("Move to");
                         color: Theme.text-muted;
-                        font-size: Theme.fs-xs;
-                        letter-spacing: 0.5px;
+                        font-size: Theme.fs-sm;
                         vertical-alignment: center;
                     }
                 }
             }
-            for s in root.sessions : Rectangle {
-                visible: s.group-header != ""
-                    && s.group-header != "system"
-                    && s.group-header != root.ctx-menu-group;
+            // (#move-to-groups 2026-09-14) 组清单改由 Rust 提供
+            // (move-target-groups):**默认组恒居首位**,其后是具名组。
+            // 旧实现遍历 root.sessions 再 `visible:` 过滤,有两个毛病(用户实测):
+            //  ① `visible:false` 的行**仍各占一个 spacing** —— 几十个隐形行把
+            //     菜单撑出一串空档,"组与组之间留有空隙、间距很大";
+            //  ② 默认组只有在**存在未分组成员**时才有对应行,未分组会话移空后
+            //     "默认组"整个从菜单里消失,而"第一位永远是默认组"是用户定稿。
+            // 现在渲染的是"组"本身(不再是"恰好带组的行"),`visible` 换 `if`
+            // ——条件为假时元素不进布局,也就不占 spacing,组与组严丝合缝。
+            for g in root.move-target-groups : Rectangle {
+                // (#move-to-hide-current 2026-09-14) 排除成员**当前所在的显示组**:
+                // 具名组成员不列本组名;默认组成员(session.group 为空串,历史遗留
+                // 也可能是 "default")不列「默认组」——点它本就是无操作,列着反而
+                // 让人以为默认组有什么特殊地位(用户定稿撤销 #move-to-default-always)。
+                // 默认组仍居清单首位,只是"人已在其中"时和其他组一样隐藏。
+                visible: g != (root.ctx-menu-group == ""
+                    || root.ctx-menu-group == "default" ? "default" : root.ctx-menu-group);
                 height: self.visible ? 28px : 0px;
                 border-radius: Theme.radius-sm;
                 background: m-mv-ta.has-hover ? Theme.bg-hover : transparent;
                 m-mv-ta := TouchArea {
                     mouse-cursor: pointer;
-                    clicked => { root.move-session(root.ctx-open-key, s.group-header); root.ctx-open-key = ""; }
+                    clicked => { root.move-session(root.ctx-open-key, g); root.ctx-open-key = ""; }
                 }
                 HorizontalLayout {
-                    // 比标题多缩进 10px:层级由这一档缩进表达。
-                    padding-left: 22px; spacing: 8px;
+                    // 比标题多缩进一档:层级由这一档缩进表达。
+                    padding-left: 20px; spacing: 8px;
                     Text { text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
-                    Text { text: s.group-header; color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    Text {
+                        // (#move-to-default-label) 默认组存储名是 "default",菜单里
+                        // 与组头/落点标签同一口径显示「默认组」,避免中文界面下
+                        // 冒出英文 "default"(用户实测)。
+                        text: g == "default" ? @tr("Default group") : g;
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
                 }
             }
         }

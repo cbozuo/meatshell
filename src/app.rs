@@ -152,7 +152,7 @@ use tokio::runtime::Runtime;
 
 use crate::app::core::{AppCore, TabRoute, TabRoutes, WindowRegistry, WindowState};
 use crate::config::{
-    is_reserved_session_group, named_display_groups, AuthMethod, ConfigStore, OutputHighlightRule,
+    is_reserved_session_group, AuthMethod, ConfigStore, OutputHighlightRule,
     Secret, Session, SessionKind,
 };
 use crate::i18n::t;
@@ -1655,6 +1655,10 @@ fn open_window(
     let sessions_model: Rc<VecModel<SessionInfo>> = Rc::new(VecModel::default());
     window.set_sessions(ModelRc::from(sessions_model.clone()));
     sync_sessions_to_model(&store.borrow(), &sessions_model);
+    // (#move-to-groups 2026-09-14) 「移动到」组清单的**首次填充**:启动路径
+    // 直接调 sync_sessions_to_model,不经过 sync_sessions_for_window(那里面
+    // 才带这条刷新),这里补一次,否则首轮右键菜单的组清单是空的。
+    window.set_move_target_groups(session_models::move_target_groups_model(&store.borrow()));
     refresh_session_markers_win(&window);
     window.set_wsl_profiles(wsl_profile_model(&store.borrow()));
     // Cross-window propagation: when another window persists sessions / theme /
@@ -3828,6 +3832,11 @@ fn sync_sessions_for_window(
     if !refresh_session_rows_in_place(store, model, &query) {
         window.set_sessions_revision(window.get_sessions_revision() + 1);
     }
+    // (#move-to-groups 2026-09-14) 「移动到」组清单随会话列表一起刷新:组的
+    // 增删/改名/排序都可能由本次变更引起,而菜单的组序必须与列表显示序一致
+    // (否则"移动到 X"与用户看到的组位置对不上)。放在这里 = 所有会话列表
+    // 变更点自动覆盖,不必在每个回调里重复填。
+    window.set_move_target_groups(session_models::move_target_groups_model(store));
     // (#session-status-dot) 重建把 connected 重置了,补回在线状态点。
     refresh_session_markers_win(&window);
 }
@@ -4371,75 +4380,10 @@ fn wire_session_callbacks(
             }
         });
     }
-    {
-        // (#drag-tail-drop-r2 2026-09-07) 拖到列表最顶:精确目标由 store
-        // 按存储顺序计算,UI 只上报"指针越界"状态(旧的 head id 行广播
-        // 依赖 Slint changed 触发顺序,反序时落点跑组)。
-        // 底部两档(to-end/ungroup)注册已随 #drag-tail-drop-r4 退役移除。
-        let weak = window.as_weak();
-        let store = store.clone();
-        let sessions_model = sessions_model.clone();
-        let registry = registry.clone();
-        window.on_move_session_to_start(move |id: SharedString| {
-            let moved = store.borrow_mut().move_session_to_start(id.as_str());
-            if moved {
-                if let Err(err) = store.borrow_mut().save() {
-                    tracing::warn!("failed to save config after session drag: {err:#?}");
-                }
-                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
-                registry.broadcast_config_changed();
-                if let Some(w) = weak.upgrade() {
-                    refresh_session_markers_win(&w);
-                }
-            }
-        });
-    }
-    {
-        // (#group-head-directional 2026-09-08) ghost 与组头行接触或越过 =
-        // 进该组:展开组 = 第 1 位,折叠组 = 末尾(空组直接改组,首/末等价;
-        // 折叠态由 config::move_session_to_group_top 实时判定)。
-        let weak = window.as_weak();
-        let store = store.clone();
-        let sessions_model = sessions_model.clone();
-        let registry = registry.clone();
-        window.on_move_session_to_group_top(move |id: SharedString, group: SharedString| {
-            let moved = store
-                .borrow_mut()
-                .move_session_to_group_top(id.as_str(), group.as_str());
-            if moved {
-                if let Err(err) = store.borrow_mut().save() {
-                    tracing::warn!("failed to save config after session drag: {err:#?}");
-                }
-                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
-                registry.broadcast_config_changed();
-                if let Some(w) = weak.upgrade() {
-                    refresh_session_markers_win(&w);
-                }
-            }
-        });
-    }
-    {
-        // (#drag-ungroup-pop 2026-09-07) 拖过列表内容底 = 移出分组:
-        // group 清空,平铺到未分组区(ghost 卡去缩进 + accent 描边提示)。
-        let weak = window.as_weak();
-        let store = store.clone();
-        let sessions_model = sessions_model.clone();
-        let registry = registry.clone();
-        window.on_move_session_ungroup(move |id: SharedString| {
-            tracing::info!("[DRAG-DBG] ungroup id={id}");
-            let moved = store.borrow_mut().move_session_ungroup(id.as_str());
-            if moved {
-                if let Err(err) = store.borrow_mut().save() {
-                    tracing::warn!("failed to save config after session drag: {err:#?}");
-                }
-                sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
-                registry.broadcast_config_changed();
-                if let Some(w) = weak.upgrade() {
-                    refresh_session_markers_win(&w);
-                }
-            }
-        });
-    }
+    // (#in-group-only 2026-09-14) 跨组拖拽提交(to-start / to-end /
+    // to-group-top / ungroup)随跨组排序一并移除:成员拖动只允许组内
+    // 排序,唯一提交是 move-session-to(继承目标行所在组)。跨组移动
+    // 仍可经成员右键菜单"移动到"完成(走 move-session)。
     // (#ctx-menu-autoclose 2026-09-09) 右键菜单"一步换目标"的行命中注册表:
     // 菜单打开时 welcome 逐可见行/组头注册窗口矩形与身份(reg_ctx_row);
     // backdrop 右击时按坐标命中(open_ctx_menu_at)——命中则直接切换菜单

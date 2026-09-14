@@ -93,6 +93,30 @@ pub(super) fn session_groups_model(store: &ConfigStore) -> ModelRc<SharedString>
     )))
 }
 
+/// (#move-to-groups 2026-09-14) 成员右键菜单「移动到」的组清单,顺序 =
+/// **默认组恒居首位**,其后是具名组(存储顺序 = 组头拖动维护的顺序)。
+///
+/// 为什么不再让 Slint 侧遍历 root.sessions 过滤:
+///  · `visible: false` 的行**仍然各占一个 VerticalLayout 的 spacing** —— 列表
+///    几十行里绝大多数不可见,菜单里就堆出用户看到的"组与组之间留有空隙"
+///    (实测:一两行可见却隔着好几个身位);
+///  · 默认组在 sessions 里只有当**存在未分组成员**时才有对应行,未分组会话全
+///    被移走时菜单里"默认组"整个消失 —— 而它恰恰是最常用的归位目标(用户
+///    要求"第一位永远是默认组")。这里直接由存储侧列出全部可用组,与
+///    display_groups 同源,不再依赖"恰好有成员"。
+/// 排除:builtin 的 system 组(存不了普通会话)。当前会话所在的组不在这里
+/// 排除——排除条件依赖"右键的是哪一行",而本模型在会话列表刷新时一次性填好,
+/// 由 Slint 侧按 ctx-menu-group 过滤(那里的 `if` 同样不占布局)。
+pub(super) fn move_target_groups_model(store: &ConfigStore) -> ModelRc<SharedString> {
+    let mut groups: Vec<SharedString> = vec![SharedString::from("default")];
+    groups.extend(
+        named_display_groups(store.groups(), store.sessions())
+            .into_iter()
+            .map(SharedString::from),
+    );
+    ModelRc::from(Rc::new(VecModel::from(groups)))
+}
+
 /// Build the jump-host picker's parallel label/id lists for the session dialog
 /// (#211). Index 0 is always the "no jump host" entry (empty id); the rest are
 /// the saved SSH sessions except `exclude_id` (a session can't jump through
@@ -244,18 +268,6 @@ fn build_session_rows(
     }
     display_groups.extend(named);
 
-    // (#first-group-no-pending 2026-09-10) 列表最顶的【可进入组】:其上方没有
-    // 任何可进入的组,拖拽上移时应跳过"待出组(pending)"直接进"出组"态。
-    //
-    // (#default-group-drop 2026-09-10) 判定基准由"第一个具名组"改为
-    // display_groups.first()。默认组成为正式组后(有组头、可折叠、可作落点),
-    // 当它存在时它就是最顶可进入组——其上方只有不可进入的 builtin(本地终端)。
-    // 旧实现 find(|g| g != "default") 跳过 default 取第一个具名组,在两个场景
-    // 同时错位:① default 组上移仍走 pending(上方无组可进却提示"松手回原位");
-    // ② 具名组上移被误判为最顶组而跳过 pending,但它上方明明有 default 可进入
-    // ——组名不亮蓝框、也拿不到"回原位"提示,落点反馈缺失。
-    let first_group: Option<String> = display_groups.first().cloned();
-
     // (#group-hue 2026-09-10) 组色相索引:按【组名】做 FNV-1a 32 位 hash 取模。
     // 为什么放 Rust:Slint 1.8 的字符串 API 只有 length / is-empty,拿不到字符,
     // 纯 .slint 侧只能按"组名长度"取色,而 "3"/"1"/"2" 这类单字组名会全部
@@ -266,11 +278,13 @@ fn build_session_rows(
     // 回落中性描边色。调色板长度变更时只需同步此处的 HUE_COUNT。
     const HUE_COUNT: u32 = 8;
     let group_hue = |group: &str| -> i32 {
-        // 无组 / 默认组(「默认组」)一律回落中性描边色(Slint 侧 -1 →
-        // #3a3d46)。(#default-group-hue 2026-09-10) 默认组不是"身份分组",
-        // 而是未填写分组会话的收容处:给它 hash 随机色会让它看起来像一个
-        // 具名组,用户会误以为它跟 3/1/2 那些组是同一类东西(用户定稿:
-        // 默认组头保持中性色)。
+        // (#system-group-plain 2026-09-14) **本地终端(system)完全无组色**:
+        // 它是固定保留区、不参与组排序,给它任何颜色(包括主题色)都会被读成
+        // "它也是一个身份分组"(用户定稿"不需要任何颜色,主题也要去掉")。
+        // 回落 -2 → theme 的中性描边灰;树线、组头 caret/文件夹图标一并中性。
+        if group.eq_ignore_ascii_case("system") {
+            return -2;
+        }
         if group.is_empty() || group.eq_ignore_ascii_case("default") {
             return -1;
         }
@@ -310,8 +324,6 @@ fn build_session_rows(
         note: "".into(),
         group_index: 0,
         group_size: 0,
-        // (#first-group-no-pending) 空组占位行同样按组归属标记。
-        first_group: first_group.as_deref() == Some(group),
         group_hue: group_hue(group),
     };
 
@@ -345,8 +357,6 @@ fn build_session_rows(
             // dn∈[-gi, size-1-gi] 塌缩为空,组内排序被误判成跨组移动。
             // 计数徽章只在组头行渲染,非首行带值无副作用。
             group_size: builtin_matched.len() as i32,
-            // (#first-group-no-pending) builtin(本地终端)不参与。
-            first_group: false,
         });
     }
     for group in &display_groups {
@@ -411,10 +421,6 @@ fn build_session_rows(
                     // (#drag-cross-group-fix 2026-09-06) 同上:非首行也带
                     // 真实组大小,否则非首行拖拽的组内/跨组判定全部失真。
                     group_size: gs.len() as i32,
-                    // (#first-group-no-pending 2026-09-10) 该组是否为列表最顶
-                    // 的【可进入组】(拖拽跳过 pending 的依据;默认组存在时即
-                    // 默认组)。
-                    first_group: first_group.as_deref() == Some(group.as_str()),
                 });
             }
         }

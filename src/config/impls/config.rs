@@ -331,8 +331,8 @@ pub(crate) fn is_reserved_session_group(name: &str) -> bool {
 /// (#default-group-drag 2026-09-10) 会话的【显示组】:未分组(group 为空)与
 /// 保留名一律归于 "default",其余即自身组名。默认组成为正式组(有组头、可
 /// 折叠、可作拖放落点)后,拖拽的每个判定点都必须用同一套显示组语义——
-/// reorder_session 的邻组查找、move_session_to_group_top 的目标成员查找、
-/// build_session_rows 的渲染分组三处同源,否则落点与实际行对不上。
+/// reorder_session 的邻组查找、build_session_rows 的渲染分组同源,
+/// 否则落点与实际行对不上。
 fn display_group_of(session: &Session) -> String {
     if session.group.is_empty() || is_reserved_session_group(session.group.trim()) {
         "default".to_string()
@@ -720,149 +720,6 @@ impl ConfigStore {
         // A named source group that just lost its last member would vanish
         // from the list; keep it as an empty explicit folder (mirrors
         // reorder_session).
-        let display_source = if source_group.is_empty()
-            || is_reserved_session_group(source_group.trim())
-        {
-            "default".to_string()
-        } else {
-            source_group.clone()
-        };
-        if display_source != "default"
-            && !self.cache.sessions.iter().any(|s| s.group == source_group)
-            && !self.cache.groups.iter().any(|g| g == &source_group)
-        {
-            self.cache.groups.push(source_group);
-        }
-        true
-    }
-
-    /// (#drag-tail-drop-r2 2026-09-07) 拖到列表最底:移到最后一个【其他】会话
-    /// 之后。旧 UI 方案(head/tail id 由行 changed 钩子广播)依赖 Slint changed
-    /// 触发顺序 = 模型顺序,反序时 tail 落到前面组的行,拖到底松手就跑组。
-    /// 现在哨兵只上报"越界状态",精确目标由这里按存储顺序计算——builtin 会话
-    /// 不在 store(运行时生成、固定在最前),sessions 末尾即最后一个可移动行。
-    pub fn move_session_to_end(&mut self, id: &str) -> bool {
-        let Some(target) = self
-            .cache
-            .sessions
-            .iter()
-            .filter(|s| s.id != id)
-            .last()
-            .map(|s| s.id.clone())
-        else {
-            return false;
-        };
-        self.move_session_relative(id, &target, true)
-    }
-
-    /// 拖到列表最顶:移到第一个【其他】会话之前(对称于 move_session_to_end)。
-    pub fn move_session_to_start(&mut self, id: &str) -> bool {
-        let Some(target) = self
-            .cache
-            .sessions
-            .iter()
-            .filter(|s| s.id != id)
-            .next()
-            .map(|s| s.id.clone())
-        else {
-            return false;
-        };
-        self.move_session_relative(id, &target, false)
-    }
-
-    /// (#folded-head-into-end 2026-09-11) 该【显示组】当前是否折叠。
-    /// 语义与 `build_session_rows` 的 `group_is_collapsed` 保持同源,否则
-    /// "落点算出来的组"与"用户看到的组"会不一致:
-    /// `None`(遗留 / 新配置)= 全部折叠;`Some(list)` = 列表内的折叠。
-    /// 拖拽在搜索态被禁用(`reorder-enabled = 查询为空`),故不叠 searching 判断。
-    fn is_group_collapsed(&self, group: &str) -> bool {
-        self.cache
-            .collapsed_session_groups
-            .as_ref()
-            .map(|groups| groups.iter().any(|collapsed| collapsed == group))
-            .unwrap_or(true)
-    }
-
-    /// (#group-head-directional 2026-09-08) 压组头松手的落点。
-    /// (#folded-head-into-end 2026-09-11) 落点由【该组当前折叠态】决定
-    /// (核查稿 §3.1 区带表,与交互原型 resolveSession 同源):
-    ///  · 展开组 → 插入该组**第 1 位**(委托 move_session_relative,插到首成员
-    ///    之前,组继承目标成员);
-    ///  · 折叠组 → 追加到该组**末尾**(组头是闭合的文件夹,丢进去 = 放最后)。
-    ///
-    /// 折叠态必须在这里**实时**判定,不能让 Slint 侧做快照:dwell 展开会
-    /// `set_vec` 重建行模型,重建后的行实例不再触发 `changed`,快照会残留
-    /// "折叠"旧值,松手就落错位。Rust 侧读的是同一份 config,天然同步。
-    ///
-    /// 空组(无成员,仅存在于 groups 列表)直接改组字段——显示按组聚合,
-    /// 存储位置不影响"落入空组"的语义(此时首/末位等价)。
-    /// (#default-group-drop 2026-09-10) `group` 允许传 "default" / 空串,
-    /// 二者都表示未分组会话的归属组(默认组),落点合法。
-    pub fn move_session_to_group_top(&mut self, id: &str, group: &str) -> bool {
-        if id.is_empty() {
-            return false;
-        }
-        // (#default-group-drop 2026-09-10) "default" 是未分组会话的显示组名,
-        // 存储层以空字符串表示。默认组有组头后它是用户可命中的正常落点:
-        // 若不映射,is_reserved_session_group("default") 为 true 会把这个
-        // 落点静默拒绝(拖到"默认组"组头松手 = 什么也没发生)。
-        let group = if group.is_empty() {
-            "default"
-        } else {
-            group
-        };
-        // (#system-group-frozen 2026-09-08) 具名保留组(本地终端/system)不收
-        // 成员:builtin 会话运行时生成,保存的会话永远不该进保留组。
-        // default 例外——它正是未分组会话的归属组。
-        if group != "default" && is_reserved_session_group(group.trim()) {
-            return false;
-        }
-        let at_end = self.is_group_collapsed(group);
-        // 目标组的【另一个】成员,按显示组匹配(默认组因此同时兼容空串与历史
-        // 遗留的 reserved 存储值;具名组按其组名)。展开 → 取首个(插其前);
-        // 折叠 → 取末个(插其后)。空组无成员 → 落到下面的"直接改组字段"分支。
-        let target = if at_end {
-            self.cache
-                .sessions
-                .iter()
-                .rev()
-                .find(|s| display_group_of(s) == group && s.id != id)
-                .map(|s| s.id.clone())
-        } else {
-            self.cache
-                .sessions
-                .iter()
-                .find(|s| display_group_of(s) == group && s.id != id)
-                .map(|s| s.id.clone())
-        };
-        match target {
-            Some(t) => self.move_session_relative(id, &t, at_end),
-            None => {
-                let Some(s) = self.cache.sessions.iter_mut().find(|s| s.id == id) else {
-                    return false;
-                };
-                // 存储层:默认组写空串,与 upsert / move_session_ungroup 同约定。
-                s.group = if group == "default" {
-                    String::new()
-                } else {
-                    group.to_string()
-                };
-                true
-            }
-        }
-    }
-
-    /// (#drag-tail-drop-r3 2026-09-07) 拖出列表底部 = 移出分组:group 清空,
-    /// 挪到存储末尾(未分组会话平铺在列表尾部区域)。源组腾空时同样保留
-    /// 为显式空文件夹(与 move_session_relative 尾部逻辑一致)。
-    pub fn move_session_ungroup(&mut self, id: &str) -> bool {
-        let Some(idx) = self.cache.sessions.iter().position(|s| s.id == id) else {
-            return false;
-        };
-        let source_group = self.cache.sessions[idx].group.clone();
-        let mut moved = self.cache.sessions.remove(idx);
-        moved.group.clear();
-        self.cache.sessions.push(moved);
         let display_source = if source_group.is_empty()
             || is_reserved_session_group(source_group.trim())
         {
@@ -2426,44 +2283,6 @@ mod tests {
         // Self-target and unknown ids are no-ops.
         assert!(!store.move_session_relative(&id_of(&store, "b1"), &id_of(&store, "b1"), true));
         assert!(!store.move_session_relative("nope", &id_of(&store, "b1"), true));
-    }
-
-    // (#folded-head-into-end 2026-09-11) 组头落点按【实时折叠态】分流
-    // (核查稿 §3.1 区带表 / 交互原型 resolveSession):展开组 = 第 1 位,
-    // 折叠组 = 末尾。两条用例共用 reorder_store 的 beta 组(b1, b2)。
-    #[test]
-    fn move_session_to_group_top_prepends_when_group_expanded() {
-        let mut store = reorder_store();
-        let d1 = id_of(&store, "d1");
-
-        // beta 展开 → d1 插到首成员 b1 之前。
-        assert!(store.move_session_to_group_top(&d1, "beta"));
-        assert_eq!(
-            order_of(&store)[2..5],
-            [
-                ("d1".to_string(), "beta".to_string()),
-                ("b1".to_string(), "beta".to_string()),
-                ("b2".to_string(), "beta".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn move_session_to_group_top_appends_when_group_folded() {
-        let mut store = reorder_store();
-        let d1 = id_of(&store, "d1");
-        // beta 折叠 → d1 追加到末成员 b2 之后。
-        store.cache.collapsed_session_groups = Some(vec!["beta".into()]);
-
-        assert!(store.move_session_to_group_top(&d1, "beta"));
-        assert_eq!(
-            order_of(&store)[2..5],
-            [
-                ("b1".to_string(), "beta".to_string()),
-                ("b2".to_string(), "beta".to_string()),
-                ("d1".to_string(), "beta".to_string()),
-            ]
-        );
     }
 
     #[test]

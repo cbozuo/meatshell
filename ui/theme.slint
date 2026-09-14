@@ -175,6 +175,13 @@ export global Theme {
     // 调用,Slint 1.8 起跨组件调用私有函数会报 warning(下一版直接升为 error),
     // 提前标注豁免。
     public pure function group-hue-color(hue: int) -> color {
+        // (#system-group-plain 2026-09-14) hue == -2 = **完全无组色**:本地终端
+        // (system)是固定保留区、不属于任何"身份分组"—— 用户定稿"不需要任何
+        // 颜色,主题也要去掉"。"无色" = 普通前景色 text-secondary(与组头文字
+        // 同一档),不是更暗的置灰:此前回落 border-subtle(#3a3d46),暗底上
+        // caret/文件夹图标几乎隐形(用户实测"不要置灰,无色就好")。
+        // 与 -1(默认组 → 主题强调色)区分开,两条语义各自独立。
+        if (hue == -2) { return root.dark ? #b4b9c4 : #45454a; }
         if (hue < 0 || hue >= root.group-hue-dark.length) { return root.accent-solid; }
         return root.dark ? root.group-hue-dark[hue] : root.group-hue-light[hue];
     }
