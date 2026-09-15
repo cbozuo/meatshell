@@ -4624,11 +4624,52 @@ fn wire_session_callbacks(
     // (#group-color 2026-09-14) 提交分组颜色:name = 组名,hex = "#RRGGBB"
     // (空串 = 清除回到无色)。保留组(system / 本地终端、default / 默认组)一并
     // 支持 —— 用户定稿"系统组、默认组都支持修改分组颜色"。
+    //
+    // (#group-color-live-tab 2026-09-15) 已打开页签的组色条刷新。TabInfo 的
+    // 颜色是页签创建那一刻的快照(见 connect 处 push 时的 tab_group_color),
+    // 改色不同步会出现"同一组两种颜色"——左侧列表新色、页签竖条旧色,用户
+    // 读作"改色没生效"(高保真 v3 ⑤ 定稿:改色后 列表/页签/菜单 同帧刷新)。
+    // 取色面板(on_set_group_color)与对话框提交(on_submit_group)两条路径
+    // 都要跑;会话已不存在的页签保持原样。
+    fn refresh_tab_group_colors(store: &ConfigStore, tabs_model: &Rc<VecModel<TabInfo>>) {
+        // 本地终端(PowerShell/CMD)是运行时生成的 builtin,不在 store.sessions()
+        // 里 —— 页签颜色按"内建身份 = system 组"查色,同样要被刷新覆盖。
+        let builtins = session_models::builtin_local_sessions(store.wsl_profiles());
+        for i in 0..tabs_model.row_count() {
+            let Some(tab) = tabs_model.row_data(i) else { continue };
+            if tab.session_id.is_empty() {
+                continue;
+            }
+            let session = store
+                .sessions()
+                .iter()
+                .find(|sess| sess.id == tab.session_id.as_str())
+                .cloned()
+                .or_else(|| {
+                    builtins
+                        .iter()
+                        .find(|b| b.id == tab.session_id.as_str())
+                        .cloned()
+                });
+            let (gc, gc_hex) = match session.as_ref() {
+                Some(session) => tab_group_color(store, session),
+                // 会话已不存在:清掉色条,避免残留旧组色。
+                None => (slint::Color::default(), String::new()),
+            };
+            if tab.group_color_hex.as_str() != gc_hex.as_str() {
+                let mut updated = tab.clone();
+                updated.group_color_hex = gc_hex.as_str().into();
+                updated.group_color = gc;
+                tabs_model.set_row_data(i, updated);
+            }
+        }
+    }
     {
         let weak = window.as_weak();
         let store = store.clone();
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
+        let tabs_model = tabs_model.clone();
         window.on_set_group_color(move |name: SharedString, hex: SharedString| {
             let raw = hex.trim();
             // 非法输入直接忽略(输入框是自由文本,允许用户打到一半)。
@@ -4650,6 +4691,8 @@ fn wire_session_callbacks(
             }
             sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
             registry.broadcast_config_changed();
+            // (#group-color-live-tab) 页签竖条同步换色(见上方函数注释)。
+            refresh_tab_group_colors(&store.borrow(), &tabs_model);
             if let Some(w) = weak.upgrade() {
                 let _ = w.get_sessions();
                 // 菜单项右侧小色块 + 面板顶栏都读这两个:提交后立即同步,
@@ -4666,6 +4709,7 @@ fn wire_session_callbacks(
         let store = store.clone();
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
+        let tabs_model = tabs_model.clone();
         window.on_resolve_color(move |hex: SharedString| -> slint::Color {
             parse_hex_color(hex.trim()).unwrap_or_default()
         });
@@ -4720,6 +4764,9 @@ fn wire_session_callbacks(
                 .unwrap_or_default();
             sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
             registry.broadcast_config_changed();
+            // (#group-color-live-tab) 对话框提交(新建设色/改名覆盖/清除)同样
+            // 要让已打开页签的竖条同步换色。
+            refresh_tab_group_colors(&store.borrow(), &tabs_model);
             if let Some(w) = weak.upgrade() {
                 let _ = w.get_sessions();
                 w.set_ctx_menu_group_color(parse_hex_color(&final_hex).unwrap_or_default());

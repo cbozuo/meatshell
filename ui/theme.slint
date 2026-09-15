@@ -65,12 +65,11 @@ export global Theme {
     out property <brush> popup-bg: base-bg-panel;
     out property <brush> popup-bg-alt: base-bg-panel-alt;
 
-    // Active terminal tab: with wallpaper, pull from the image's average colour
-    // so the strip feels immersed; without wallpaper, make the active tab one
-    // clear step darker/lighter than the surrounding tab bar (#200).
-    out property <brush> tab-active-bg: root.wallpaper-active
-        ? root.wp-tint.mix(root.wp-accent, 0.68).with-alpha(min(1.0, root.panel-alpha + 0.10))
-        : (dark ? #171a20 : #ffffff);
+    // (#tab-flush 2026-09-14) 选中标签底色 = 内容区底色(term-bg)，与终端完全同源。
+    // 标签下沿方角贴住终端区顶边后，只有底色也一致才真正"连成一片"；早先这里独立
+    // 取 #171a20(比终端 #0e0f13 浅一档)/ 亮色 #ffffff(比终端 #fafafa 更白)，贴合处
+    // 会留一条色带，等于白贴。壁纸模式下 term-bg 自身霜化，直接引用即自动跟随。
+    out property <brush> tab-active-bg: root.term-bg;
     out property <brush> tab-active-border: root.wallpaper-active
         ? root.wp-accent.with-alpha(0.72)
         : (dark ? #06070a : #c7c7cc);

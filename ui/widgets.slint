@@ -115,6 +115,10 @@ export component LabeledInput inherits VerticalLayout {
     callback canceled();   // Esc pressed in the field (#140-3)
     spacing: 4px;
     property <bool> focus-pending: false;
+    // (#pw-visibility-toggle 2026-09-15) 密码明文/密文开关:输入框右缘的眼睛
+    // 图标,点击切换。只在 password 模式下渲染;切换不改文字本身,只改
+    // TextInput 的 input-type。
+    property <bool> password-visible: false;
     public function focus-input() { input.focus(); }
 
     // A LabeledInput is often created inside a conditional dialog. Focusing its
@@ -145,10 +149,11 @@ export component LabeledInput inherits VerticalLayout {
         background: root.input-background;
 
         // Hide on focus: IME preedit is visible before value is committed.
+        // (#pw-visibility-toggle) 密码模式右侧要让位给眼睛图标。
         if root.value == "" && !input.has-focus : Text {
             x: 10px;
             y: 0px;
-            width: parent.width - 20px;
+            width: parent.width - (root.password ? 44px : 20px);
             height: parent.height;
             overflow: elide;
             text: placeholder;
@@ -161,7 +166,7 @@ export component LabeledInput inherits VerticalLayout {
         input := TextInput {
             x: 10px;
             y: 0px;
-            width: parent.width - 20px;
+            width: parent.width - (root.password ? 44px : 20px);
             height: parent.height;
             text <=> root.value;
             color: Theme.text-primary;
@@ -172,11 +177,43 @@ export component LabeledInput inherits VerticalLayout {
             font-size: Theme.fs-md;
             vertical-alignment: center;
             single-line: true;
-            input-type: root.password ? InputType.password : InputType.text;
+            input-type: root.password && !root.password-visible
+                ? InputType.password : InputType.text;
             accepted => { root.accepted(); }
             key-pressed(e) => {
                 if (e.text == Key.Escape) { root.canceled(); accept }
                 else { reject }   // let TextInput handle normal typing
+            }
+        }
+
+        // (#pw-visibility-toggle 2026-09-15) 眼睛图标:点击在密文(••••)与明文
+        // 之间切换。闭眼/睁眼双字形与状态同步;图标右侧留 4px,与输入文字的
+        // 10px 左边距对称。
+        if root.password : pw-eye := TouchArea {
+            x: parent.width - 30px;
+            width: 26px;
+            height: parent.height;
+            mouse-cursor: pointer;
+            clicked => { root.password-visible = !root.password-visible; }
+            Rectangle {
+                x: (parent.width - 18px) / 2;
+                y: (parent.height - 18px) / 2;
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                background: pw-eye.has-hover ? Theme.bg-hover : transparent;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    // Material Icons: visibility(睁眼 E8F4) / visibility_off(闭眼 E8F5)。
+                    // 旧码 E8B4/E8B5 是 timer 一类字形,画出来像时钟(用户截图)。
+                    text: root.password-visible ? "\u{E8F4}" : "\u{E8F5}";
+                    font-family: "Material Icons";
+                    color: Theme.text-secondary;
+                    font-size: Theme.fs-md;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
         }
     }

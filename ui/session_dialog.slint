@@ -296,14 +296,18 @@ component GroupCombo inherits VerticalLayout {
     border-color: ginput.has-focus ? Theme.accent : Theme.border-strong;
     background: Theme.bg-elevated;
 
-        // (#group-dot 2026-09-14) 输入框左缘的组色回显:value 对应的那个组的
-        // 色点。Slint 没有"按名查数组"的写法,这里用一组**绝对定位叠放**的色点,
+        // (#group-dot 2026-09-14) 输入框**右缘**的组色回显:value 对应的那个组
+        // 的色点。Slint 没有"按名查数组"的写法,这里用一组**绝对定位叠放**的色点,
         // 只有名字匹配的那一个 visible —— 不可见元素既不占位也不吃事件,等价于
-        // "回显选中组的色",且不需要任何额外状态。色点位置恒定预留,该组无色或
-        // 用户正在输入新组名时只留空位,文字不左右跳动。
+        // "回显选中组的色",且不需要任何额外状态。
+        // (#group-combo-align 2026-09-15) 色点从左缘移到**右缘**(▾ 按钮左侧):
+        // 旧版恒在左侧预留 16px 色点空位(输入框 x: 26px 起),占位提示文字因此
+        // 比"名称"输入框缩进一截,左侧空出一块(用户截图:要和上面的名称对齐)。
+        // 文字左缘现在与 LabeledInput 同为 10px;色点只在选中了有色的组时出现,
+        // 不再挤占文字起始位置。
         for ge in root.groups : Rectangle {
             visible: ge.hex != "" && ge.name == root.value;
-            x: 12px;
+            x: parent.width - 48px;
             y: (parent.height - self.height) / 2;
             width: 8px;
             height: 8px;
@@ -313,7 +317,7 @@ component GroupCombo inherits VerticalLayout {
 
         // Hide on focus: IME preedit is visible before value is committed.
         if root.value == "" && !ginput.has-focus : Text {
-            x: 26px;
+            x: 10px;
             width: parent.width - 60px;
             height: parent.height;
             overflow: elide;
@@ -325,7 +329,7 @@ component GroupCombo inherits VerticalLayout {
         }
 
         ginput := TextInput {
-            x: 26px;                        // 让位给左缘色点
+            x: 10px;                        // 与 LabeledInput 的文字左缘对齐
             width: parent.width - 60px;     // room for the ▾ button
             height: parent.height;
             text <=> root.value;

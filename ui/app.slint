@@ -137,6 +137,14 @@ component GroupColorField inherits VerticalLayout {
     in-out property <string> hex;      // "" = 无色
     in property <color> value;         // hex 对应的颜色
     in property <[GroupSwatch]> palette;
+    // (#ui-refresh-v3-6 2026-09-15) 头部开关:设计稿里「当前色点 + 标题 + hex」
+    // 头部只属于**取色面板**;对话框的字段标签(fld-label「分组颜色」)已由
+    // 对话框自己渲染,再带头部就重复两行"分组颜色"(用户截图)。对话框关掉。
+    in property <bool> show-header: true;
+    // (#ui-refresh-v3-6) 色格边长:取色面板 242px 内容宽 → 32px 恰好满宽;
+    // 对话框 362px 内容宽 326px → 49px 才能像设计稿 grid6(6×1fr)那样铺满
+    // 色板区,固定 32px 会让右侧空出一大块(用户截图"排版乱")。
+    in property <length> cell-size: 32px;
     // 只回传 hex。**不再回传 color**:手输 hex 时组件根本无从解析字符串(Slint
     // 没有 string → color),只能把调用方上次给的预览色原样回传,那会让色块显示
     // 一个**实际颜色并不对应**的值。改由调用方按需解析:
@@ -148,8 +156,10 @@ component GroupColorField inherits VerticalLayout {
 
     // (#group-color-field-r2 2026-09-15) 头部:当前色圆点 + hex 原文只读展示。
     // 改色立即反馈;hex 手输收进底部行,普通用户不被打扰(设计稿 v3)。
-    HorizontalLayout {
-        alignment: center;
+    // (#ui-refresh-v3-5 2026-09-15) 对齐设计稿 picker-head:**左对齐**
+    // (色点 + 标题靠左,hex 推到右缘)—— 旧版 alignment: center 把整行
+    // 居中,hex 为空时标题悬在面板中间,与设计稿不符(用户截图)。
+    if root.show-header : HorizontalLayout {
         spacing: 8px;
         Rectangle {
             width: 12px;
@@ -183,8 +193,8 @@ component GroupColorField inherits VerticalLayout {
             row: i / 6;
             // Slint 没有 `%`,取模走 Math.mod。
             col: Math.mod(i, 6);
-            width: 32px;
-            height: 32px;
+            width: root.cell-size;
+            height: root.cell-size;
             border-radius: 7px;
             border-width: 2px;
             border-color: root.palette[i].hex == root.hex
@@ -250,17 +260,36 @@ component GroupColorField inherits VerticalLayout {
             background: Theme.bg-root;
             border-width: 1px;
             border-color: hex-edit.has-focus ? Theme.accent-solid : Theme.border-strong;
-            // (#group-color-field-r3 2026-09-15) 去掉装饰前缀"#":text<=>hex 双向
-            // 绑定的内容本身带 #(Rust 归一化回写),再画一个前缀会显示 "##"(实测)。
-            hex-edit := LineEdit {
+            // (#hex-input-plain 2026-09-15) 不用 std LineEdit:它自带清叉(×)
+            // 按钮,在 28px 高的短栏里显得像搜索框、点叉还会把颜色清掉
+            // (用户截图"输入框看上去或者操作就不协调")。改 TextInput 纯文本,
+            // 与「无颜色」按钮同高同圆角,回车提交、失焦也提交。
+            if root.hex == "" && !hex-edit.has-focus : Text {
                 x: 8px;
                 width: parent.width - 16px;
+                height: parent.height;
+                text: "#RRGGBB";
+                color: Theme.text-muted;
                 font-size: Theme.fs-xs;
-                // 双向绑定:输入即时反映"选中"判定;Rust 规范化后的值(如
-                // `#f00` → `#ff0000`)也能回写输入框。
+                font-family: Theme.font-mono;
+                vertical-alignment: center;
+            }
+            hex-edit := TextInput {
+                x: 8px;
+                width: parent.width - 16px;
+                height: parent.height;
+                font-size: Theme.fs-xs;
+                font-family: Theme.font-mono;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                single-line: true;
                 text <=> root.hex;
-                placeholder-text: "#RRGGBB";
-                accepted(t) => { root.picked(t); }
+                accepted => { root.picked(root.hex); }
+                // 失焦也提交:点色格/点空白离开输入框时,手输的 hex 立刻生效,
+                // 不必非按回车(与「点色格即选」同一手感)。
+                changed has-focus => {
+                    if (!self.has-focus) { root.picked(root.hex); }
+                }
             }
         }
     }
@@ -2956,7 +2985,12 @@ export component AppWindow inherits Window {
                 // 依托,150ms 就被误判"离开安全区"自动关闭——菜单一闪而过(实测)。
                 // blank 全是全局动作、也无"一步换菜单"需求,改为纯点击/Esc 关闭,
                 // 不参与 hover 自动关闭;组头/成员行菜单维持原机制。
-                if (root.ctx-menu-kind == "blank") {
+                // (#grp-menu-sticky 2026-09-15) **组头菜单也改为移出不消失**
+                // (用户定稿,与 blank 同款):组头菜单全是组级动作,没有"一步
+                // 换菜单"的必要;移出就关让取色面板(贴菜单弹出)很难用。关闭
+                // 路径保持:点空白/点菜单项/Esc/右击别处。成员行菜单(kind=row)
+                // 维持原 hover 自动关闭。
+                if (root.ctx-menu-kind == "blank" || root.ctx-menu-kind == "group") {
                     bd.unsafe-ticks = 0;
                 } else if (!bd.has-hover) {
                     bd.unsafe-ticks = 0;
@@ -3018,7 +3052,9 @@ export component AppWindow inherits Window {
                 ? max(8px, root.ctx-menu-y - self.height)
                 : root.ctx-menu-y,
             parent.height - self.height - 8px);
-        width: 140px;
+        // (#row-menu-layout 2026-09-15) 不再固定 140px:组名稍长就会顶出,
+        // 「移动到」分区也显得挤。跟组头菜单同一套:内容宽,下限 164 / 上限 220。
+        width: min(220px, max(164px, row-menu-vl.preferred-width));
         height: row-menu-vl.preferred-height;
         background: Theme.popup-bg;
         border-radius: Theme.radius-sm;
@@ -3033,11 +3069,13 @@ export component AppWindow inherits Window {
         // 此层挡住 backdrop 的 hover(bd.has-hover=false → 判定"在菜单上"安全)。
         menu-pad := TouchArea { width: 100%; height: 100%; }
         row-menu-vl := VerticalLayout {
-            padding: 4px;
-            // (#move-to-compact) spacing 收到 1:标题/条目/分组项之间不再有多余空档。
-            spacing: 1px;
+            // (#ui-refresh-v3-4 2026-09-15) 对齐设计稿 .menu:外边距 5px、行间 0;
+            // 行高 28px 为本菜单既有紧凑定稿(设计稿 30px 的统一行高只约束
+            // ④ 的四类组头/空白菜单),图标槽/间距与其它菜单同规格。
+            padding: 5px;
+            spacing: 0px;
             Rectangle {
-                height: 28px;
+                height: 30px;
                 border-radius: Theme.radius-sm;
                 background: m-edit-ta.has-hover ? Theme.bg-hover : transparent;
                 m-edit-ta := TouchArea {
@@ -3049,13 +3087,14 @@ export component AppWindow inherits Window {
                     }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Edit"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
             Rectangle {
-                height: 28px;
+                height: 30px;
                 border-radius: Theme.radius-sm;
                 background: m-dup-ta.has-hover ? Theme.bg-hover : transparent;
                 m-dup-ta := TouchArea {
@@ -3063,13 +3102,14 @@ export component AppWindow inherits Window {
                     clicked => { root.duplicate-session(root.ctx-open-key); root.ctx-open-key = ""; }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E14D}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E14D}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Duplicate"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
             Rectangle {
-                height: 28px;
+                height: 30px;
                 border-radius: Theme.radius-sm;
                 background: m-del-ta.has-hover ? #cc333320 : transparent;
                 m-del-ta := TouchArea {
@@ -3077,12 +3117,18 @@ export component AppWindow inherits Window {
                     clicked => { root.remove-session(root.ctx-open-key); root.ctx-open-key = ""; }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Delete"); color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
-            Rectangle { height: 1px; background: Theme.border-subtle; }
+            // (#ui-refresh-v3-4) 分隔线统一为内缩式(9px 区高 + 线左右各缩 6px),
+            // 与组头/空白菜单同一画法;旧 1px 全宽线顶到菜单边缘,分区感突兀。
+            Rectangle {
+                height: 9px;
+                Rectangle { y: 4px; x: 0px; width: parent.width; height: 1px; background: Theme.border-subtle; }
+            }
             // (#move-to-compact 2026-09-14) "移动到"分区紧凑化(第三轮):
             //  · 标题行 22 → 18px:标题只是分区标签,过高会在它与第一个组名
             //    之间堆出一段空白(用户实测"移动到和下面组别之间间距太多");
@@ -3091,9 +3137,20 @@ export component AppWindow inherits Window {
             //  · 末尾不再留 2px 呼吸位(它叠加在 spacing 上也是多余留白)。
             // 层级仍靠缩进差(标题 10 / 条目 20)+ 颜色(次要色 / 主色)表达。
             Rectangle {
-                height: 18px;
+                height: 30px;
                 HorizontalLayout {
-                    padding-left: 10px;
+                    // (#move-to-icon 2026-09-15) 分区标题也走 16px 图标槽,与上面
+                    // 编辑/复制/删除对齐;drive_file_move(E9A1) 表示"移到某组"。
+                    padding-left: 10px; spacing: 9px;
+                    Text {
+                        width: 16px;
+                        horizontal-alignment: center;
+                        text: "\u{E9A1}";
+                        font-family: "Material Icons";
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
+                    }
                     Text {
                         text: @tr("Move to");
                         color: Theme.text-muted;
@@ -3119,7 +3176,7 @@ export component AppWindow inherits Window {
                 // 默认组仍居清单首位,只是"人已在其中"时和其他组一样隐藏。
                 visible: g != (root.ctx-menu-group == ""
                     || root.ctx-menu-group == "default" ? "default" : root.ctx-menu-group);
-                height: self.visible ? 28px : 0px;
+                height: self.visible ? 30px : 0px;
                 border-radius: Theme.radius-sm;
                 background: m-mv-ta.has-hover ? Theme.bg-hover : transparent;
                 m-mv-ta := TouchArea {
@@ -3127,9 +3184,12 @@ export component AppWindow inherits Window {
                     clicked => { root.move-session(root.ctx-open-key, g); root.ctx-open-key = ""; }
                 }
                 HorizontalLayout {
-                    // 比标题多缩进一档:层级由这一档缩进表达。
-                    padding-left: 20px; spacing: 8px;
-                    Text { text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#row-menu-layout 2026-09-15) 组名与「移动到」标题同一左缘
+                    // (10 + 16 图标槽 + 9),不再多缩进 10px —— 那会让文件夹图标
+                    // 和上面几行错开,菜单显得乱。层级改由「标题 muted / 组名
+                    // primary」表达,不必靠缩进。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E2C7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text {
                         // (#move-to-default-label) 默认组存储名是 "default",菜单里
                         // 与组头/落点标签同一口径显示「默认组」,避免中文界面下
@@ -3173,8 +3233,9 @@ export component AppWindow inherits Window {
         drop-shadow-color: #00000050;
         b-pad := TouchArea { width: 100%; height: 100%; }
         blank-menu-vl := VerticalLayout {
-            padding: 4px;
-            spacing: 1px;
+            // (#ui-refresh-v3-4 2026-09-15) 对齐设计稿 .menu:外边距 5px、行间 0。
+            padding: 5px;
+            spacing: 0px;
             // (#ctx-blank-menu-fix 2026-09-15) 增补「新建会话 / 新建分组」:
             // 空白处右键新建是高频直觉操作(设计稿 v3 增补项)。动作与标题栏
             // "+ 新建会话"、组头菜单「新建分组」完全同源。
@@ -3187,8 +3248,9 @@ export component AppWindow inherits Window {
                     clicked => { root.ctx-open-key = ""; root.ctx-menu-kind = ""; root.new-session-clicked(); }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E879}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E879}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: root.lang-en ? "New session" : "新建会话"; color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
@@ -3210,14 +3272,15 @@ export component AppWindow inherits Window {
                     }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E2CC}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E2CC}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("New group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
             Rectangle {
                 height: 9px;
-                Rectangle { y: 4px; x: 8px; width: parent.width - 16px; height: 1px; background: Theme.border-subtle; }
+                Rectangle { y: 4px; x: 0px; width: parent.width; height: 1px; background: Theme.border-subtle; }
             }
             Rectangle {
                 height: 30px;
@@ -3228,8 +3291,9 @@ export component AppWindow inherits Window {
                     clicked => { root.ctx-open-key = ""; root.set-all-groups-collapsed(false); }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E5D7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E5D7}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Expand all"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
@@ -3242,15 +3306,16 @@ export component AppWindow inherits Window {
                     clicked => { root.ctx-open-key = ""; root.set-all-groups-collapsed(true); }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E5D6}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E5D6}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Collapse all"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
             // 分隔线(高保真 v3:新建 ─ 展开/折叠 ─ 隐藏本地终端)。
             Rectangle {
                 height: 9px;
-                Rectangle { y: 4px; x: 6px; width: parent.width - 12px; height: 1px; background: Theme.border-subtle; }
+                Rectangle { y: 4px; x: 0px; width: parent.width; height: 1px; background: Theme.border-subtle; }
             }
             Rectangle {
                 height: 30px;
@@ -3261,8 +3326,9 @@ export component AppWindow inherits Window {
                     clicked => { root.ctx-open-key = ""; root.set-system-group-hidden(!root.system-hidden); }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: root.system-hidden ? @tr("Show Local Terminals") : @tr("Hide Local Terminals"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
@@ -3276,11 +3342,12 @@ export component AppWindow inherits Window {
                 ? max(8px, root.ctx-menu-y - self.height)
                 : root.ctx-menu-y,
             parent.height - self.height - 8px);
-        // (#ctx-menu-fit 2026-09-13) 同空白菜单:宽度跟着内容走,左右留白一致
-        // (固定 140px 时较长的条目会顶出右缘)。
-        // (#ctx-menu-narrow 2026-09-15) 改为固定 190px(设计稿 v3):菜单收窄,
-        // 长条目(隐藏本地终端/Hide Local Terminals)实测仍放得下。
-        width: 190px;
+        // (#ctx-menu-fit 2026-09-13) 宽度跟着内容走,左右留白一致。
+        // (#ui-menu-compact-right 2026-09-15) 不再固定 190px:那会把"分组颜色"
+        // 行的色块+箭头硬顶到菜单右缘,中间被 stretch 撑出一大块空档(用户
+        // 截图"右侧看起来很空")。改回内容宽,色块紧贴文字;下限 164px 保证
+        // 「隐藏本地终端」放得下,上限 220px 防英文长条目撑破。
+        width: min(220px, max(164px, grp-menu-vl.preferred-width));
         height: grp-menu-vl.preferred-height;
         background: Theme.popup-bg;
         border-radius: Theme.radius-sm;
@@ -3293,8 +3360,10 @@ export component AppWindow inherits Window {
         // (#ctx-menu-autoclose) 垫底探测:同 row 菜单,挡住 backdrop hover。
         g-pad := TouchArea { width: 100%; height: 100%; }
         grp-menu-vl := VerticalLayout {
-            padding: 4px;
-            spacing: 1px;
+            // (#ui-refresh-v3-4 2026-09-15) 对齐设计稿 .menu:外边距 5px、
+            // **行间 0**(行高 30px 自带紧凑感,行与行之间不再加空档)。
+            padding: 5px;
+            spacing: 0px;
             // (#default-group-locked 2026-09-10) 默认组是保留组、不可重命名
             // (Rust rename_group 会以"该名称为系统保留分组"拒绝)。隐藏入口,
             // 避免"点开对话框 → 提交 → 才报错"的空转。删除项本就不出现:
@@ -3321,8 +3390,11 @@ export component AppWindow inherits Window {
                     }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4 2026-09-15) 对齐设计稿 .mi:图标槽恒
+                    // **16px 居中**(Material 字形宽窄不一,无固定槽时各行文字
+                    // 起点参差 —— "菜单文字排版乱"的主因),图标与文字间距 9px。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E3C9}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Edit group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
@@ -3341,32 +3413,44 @@ export component AppWindow inherits Window {
                     clicked => { root.group-color-picker-open = !root.group-color-picker-open; }
                 }
                 HorizontalLayout {
-                    // 色块纵向居中改由布局 alignment 负责(见 GroupColorField 注释)。
-                    alignment: center;
-                    padding-left: 10px; padding-right: 10px; spacing: 8px;
-                    Text { text: "\u{E40A}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-fix-align 2026-09-15) **不能设 alignment: center**:
+                    // 那是主轴(水平)对齐,会让整行内容居中、stretch 失效 ——
+                    // 色块贴着文字、箭头漂移,与其它行(图标恒从左缘 10px 起)
+                    // 规则不一致,三个菜单全都错位(用户截图)。删掉后本行与
+                    // 其它行同一套规则:图标槽 16px 从左缘起,色块 + ▶ 靠右缘。
+                    padding-left: 10px; padding-right: 8px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E40A}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("Group color"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; }
-                    // (#ctx-menu-align-r2 2026-09-15) 对齐高保真 v3:色块 + ▶ 靠
-                    // **行右缘**(stretch 在文字之后),图标槽与其它行左对齐 ——
-                    // 旧版"色块紧跟文字"与其它行的右缘元素(快捷键/箭头)不对齐。
-                    Rectangle { horizontal-stretch: 1; }
-                    // 色块:外层撑满行高,内层 14×14 垂直居中 —— Slint 的
-                    // Rectangle 没有 vertical-alignment(那是 Text / 布局的属性),
-                    // 居中只能靠一层"撑满 + 手算 y"的壳。
-                    // (#group-color-field 2026-09-14) 无色 = 透明底 + 描边,与
-                    // 取色面板 / 对话框里的当前色块同口径。
+                    // (#ui-menu-compact-right 2026-09-15) **不要 stretch**:stretch
+                    // 会把色块+箭头推到菜单右缘,中间空出一大块(用户截图)。色块
+                    // 紧跟文字 6px,箭头再跟 4px,整组作为文字的后缀。菜单其它行
+                    // 文字带 horizontal-stretch,整菜单宽度由最长行("隐藏本地终端")
+                    // 决定,本行自然短一截、右侧不再空。
+                    Rectangle { width: 6px; }
+                    // (#ui-fix-align) 色块垂直居中靠**外壳**:壳横向 13px、纵向
+                    // 撑满行高(布局交叉轴拉伸),内层 13×13 手算 y 居中 ——
+                    // Slint 的 Rectangle 没有 vertical-alignment,裸放固定高度
+                    // 的色块会偏上行高的一半(用户截图:色块与文字不在一条线)。
+                    // 13×13 / 圆角 3.5,同高保真 .mi .sw 规格;无色 = 透明底 +
+                    // 描边,与取色面板 / 对话框里的当前色块同口径。
                     Rectangle {
-                        width: 14px;
-                        height: 14px;
-                        border-radius: 3px;
-                        background: root.ctx-menu-group-color-hex != ""
-                            ? root.ctx-menu-group-color : transparent;
-                        border-width: 1px;
-                        border-color: root.ctx-menu-group-color-hex != ""
-                            ? Theme.border-strong : Theme.text-muted;
+                        width: 13px;
+                        Rectangle {
+                            y: (parent.height - 13px) / 2;
+                            width: 13px;
+                            height: 13px;
+                            border-radius: 3.5px;
+                            background: root.ctx-menu-group-color-hex != ""
+                                ? root.ctx-menu-group-color : transparent;
+                            border-width: 1px;
+                            border-color: root.ctx-menu-group-color-hex != ""
+                                ? Theme.border-strong : Theme.text-muted;
+                        }
                     }
-                    // ▶ 展开箭头:暗示侧挂取色面板。
+                    // ▶ 展开箭头:暗示侧挂取色面板。槽收成 12px,紧贴色块。
                     Text {
+                        width: 12px;
+                        horizontal-alignment: center;
                         text: "\u{E5CC}";
                         font-family: "Material Icons";
                         color: Theme.text-muted;
@@ -3375,29 +3459,15 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            // 分隔线(高保真 v3:编辑分组/分组颜色 ─ 新建/删除 ─ 隐藏本地终端)。
+            // 分隔线A(高保真 v3:编辑分组/分组颜色 ─ 新建/删除 ─ 隐藏本地终端)。
             Rectangle {
                 height: 9px;
-                Rectangle { y: 4px; x: 6px; width: parent.width - 12px; height: 1px; background: Theme.border-subtle; }
-            }
-            // (#ctx-menu-narrow 2026-09-15) system 保留组无「删除分组」可谈
-            // (它永远非空且不可删),一并收起。
-            if root.ctx-menu-empty && root.ctx-menu-group != "system" : Rectangle {
-                height: 30px;
-                border-radius: Theme.radius-sm;
-                background: g-del-ta.has-hover ? #cc333320 : transparent;
-                g-del-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.ctx-open-key = ""; root.delete-group(root.ctx-menu-group); }
-                }
-                HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
-                    Text { text: @tr("Delete group"); color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
-                }
+                Rectangle { y: 4px; x: 0px; width: parent.width; height: 1px; background: Theme.border-subtle; }
             }
             // (#ctx-menu-narrow 2026-09-15) system(本地终端)保留组收起「新建分组」:
             // 保留组是容器不是分类,不该往里建组;菜单与设计稿一致只留 改色+隐藏。
+            // (#ui-fix-menu-sep 2026-09-15) 顺序对齐设计稿:新建在前、删除在后
+            // (危险项收尾,同分区不加分隔线)。
             if root.ctx-menu-group != "system" : Rectangle {
                 height: 30px;
                 border-radius: Theme.radius-sm;
@@ -3416,15 +3486,36 @@ export component AppWindow inherits Window {
                     }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: "\u{E2CC}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E2CC}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: @tr("New group"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
-            // 分隔线(高保真 v3:新建/删除 ─ 隐藏本地终端)。
-            Rectangle {
+            // (#ctx-menu-narrow 2026-09-15) system 保留组无「删除分组」可谈
+            // (它永远非空且不可删),一并收起。
+            if root.ctx-menu-empty && root.ctx-menu-group != "system" : Rectangle {
+                height: 30px;
+                border-radius: Theme.radius-sm;
+                background: g-del-ta.has-hover ? #cc333320 : transparent;
+                g-del-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.ctx-open-key = ""; root.delete-group(root.ctx-menu-group); }
+                }
+                HorizontalLayout {
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: "\u{E872}"; font-family: "Material Icons"; color: #cc3333; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    Text { text: @tr("Delete group"); color: #cc3333; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
+                }
+            }
+            // 分隔线B(新建/删除 ─ 隐藏本地终端)。(#ui-fix-menu-sep) **仅当
+            // 中段有内容行**(新建分组可见,即非 system)才渲染 —— 本地终端
+            // 菜单中段整段隐藏,两条分隔线直接相邻叠出"两条横线"(用户截图),
+            // 这里收掉一条,只留分隔线A。
+            if root.ctx-menu-group != "system" : Rectangle {
                 height: 9px;
-                Rectangle { y: 4px; x: 6px; width: parent.width - 12px; height: 1px; background: Theme.border-subtle; }
+                Rectangle { y: 4px; x: 0px; width: parent.width; height: 1px; background: Theme.border-subtle; }
             }
             // (#ctx-blank-menu 2026-09-13) 组头菜单里也放一份"隐藏 / 显示本地终端":
             // 手上正按着某个组时不必先去找空白处。文案随状态切换。
@@ -3437,8 +3528,9 @@ export component AppWindow inherits Window {
                     clicked => { root.ctx-open-key = ""; root.set-system-group-hidden(!root.system-hidden); }
                 }
                 HorizontalLayout {
-                    padding-left: 10px; spacing: 8px;
-                    Text { text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
+                    // (#ui-refresh-v3-4) 图标槽 16px + 间距 9px,同 .mi 规格。
+                    padding-left: 10px; spacing: 9px;
+                    Text { width: 16px; horizontal-alignment: center; text: root.system-hidden ? "\u{E8F4}" : "\u{E8F5}"; font-family: "Material Icons"; color: Theme.text-secondary; font-size: Theme.fs-sm; vertical-alignment: center; }
                     Text { text: root.system-hidden ? @tr("Show Local Terminals") : @tr("Hide Local Terminals"); color: Theme.text-primary; font-size: Theme.fs-md; vertical-alignment: center; horizontal-stretch: 1; }
                 }
             }
@@ -3485,7 +3577,11 @@ export component AppWindow inherits Window {
                 // 编辑分组对话框**同一套控件**,布局只在组件里维护一份。
                 // 面板语义 = 点即提交(写盘 + 广播 + 回写菜单色块),与对话框的
                 // "先暂存、随确定提交"区别只体现在这个回调里。
+                // (#picker-no-dup-header 2026-09-15) 关掉头部:菜单项已经是
+                // 「分组颜色 + 色块 + hex」,面板再画一行圆点/标题/hex 就是
+                // 重复(用户截图)。面板只留色格 + 无颜色 + 输入。
                 GroupColorField {
+                    show-header: false;
                     hex <=> root.ctx-menu-group-color-hex;
                     value: root.ctx-menu-group-color;
                     palette: root.group-palette;
@@ -4607,94 +4703,144 @@ export component AppWindow inherits Window {
             TouchArea {}   // swallow inside clicks
 
             gd-body := VerticalLayout {
-                padding: 18px;
-                spacing: 12px;
-                // (#group-dialog-preview 2026-09-15) 预览交互状态:pv-open = 组头
-                // 折叠/展开;pv-active = 预览页签活动索引(0/1)。
-                property <bool> pv-open: true;
+                padding: 0px;
+                spacing: 0px;
+                // (#group-dialog-layout 2026-09-15) 对齐高保真 v3 的三段式:
+                // 标题栏(独立 padding + 底部分隔) / 内容区 / 按钮栏。旧版把
+                // 标题、字段、预览、按钮全塞进同一 18px padding + 12px spacing
+                // 的 VL,区块节奏糊成一团。
                 property <int> pv-active: 0;
-                Text {
-                    text: root.group-dialog-orig == ""
-                        ? (root.lang-en ? "New group" : "新建分组")
-                        : (root.lang-en ? "Edit group" : "编辑分组");
-                    color: Theme.text-primary;
-                    font-size: Theme.fs-lg;
-                    font-weight: 700;
+                // —— 标题栏 ——
+                VerticalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 14px;
+                    padding-bottom: 12px;
+                    spacing: 0px;
+                    Text {
+                        text: root.group-dialog-orig == ""
+                            ? (root.lang-en ? "New group" : "新建分组")
+                            : (root.lang-en ? "Edit group" : "编辑分组");
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-lg;
+                        font-weight: 700;
+                    }
                 }
-                // (#group-dialog-preview 2026-09-15) 标题分隔线(高保真 v3)。
                 Rectangle { height: 1px; background: Theme.border-subtle; }
-                Text {
-                    text: @tr("Group name");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                ge-input := LineEdit {
-                    text <=> root.group-dialog-name;
-                    font-family: Theme.ui-font-family; // CJK-capable (#54)
-                    placeholder-text: @tr("Group name");
-                    edited => { root.group-dialog-error = ""; }
-                    // Enter confirms when non-empty.
-                    accepted => {
-                        if (root.group-dialog-name != "") {
-                            root.group-dialog-error = root.submit-group(
-                                root.group-dialog-orig,
-                                root.group-dialog-name,
-                                root.group-dialog-color-hex,
-                            );
-                            if (root.group-dialog-error == "") {
-                                root.group-dialog-open = false;
+                // —— 内容区 ——
+                VerticalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 16px;
+                    padding-bottom: 4px;
+                    spacing: 6px;
+                    Text {
+                        text: @tr("Group name");
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-sm;
+                        font-weight: 600;
+                    }
+                    // (#hex-input-plain) 不用 std LineEdit:自带清叉在短栏里
+                    // 像搜索框。名称输入同样改 TextInput,与会话对话框其它
+                    // 字段同一视觉语言。
+                    Rectangle {
+                        height: 32px;
+                        border-radius: Theme.radius-sm;
+                        background: Theme.bg-root;
+                        border-width: 1px;
+                        border-color: ge-input.has-focus ? Theme.accent-solid : Theme.border-strong;
+                        if root.group-dialog-name == "" && !ge-input.has-focus : Text {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            text: @tr("Group name");
+                            color: Theme.text-muted;
+                            font-family: Theme.ui-font-family;
+                            font-size: Theme.fs-md;
+                            vertical-alignment: center;
+                        }
+                        ge-input := TextInput {
+                            x: 10px;
+                            width: parent.width - 20px;
+                            height: parent.height;
+                            text <=> root.group-dialog-name;
+                            font-family: Theme.ui-font-family;
+                            font-size: Theme.fs-md;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            single-line: true;
+                            edited => { root.group-dialog-error = ""; }
+                            accepted => {
+                                if (root.group-dialog-name != "") {
+                                    root.group-dialog-error = root.submit-group(
+                                        root.group-dialog-orig,
+                                        root.group-dialog-name,
+                                        root.group-dialog-color-hex,
+                                    );
+                                    if (root.group-dialog-error == "") {
+                                        root.group-dialog-open = false;
+                                    }
+                                }
                             }
                         }
                     }
-                }
-                Text {
-                    text: root.group-dialog-error;
-                    color: Theme.danger;
-                    font-size: Theme.fs-xs;
-                    height: 18px;
-                }
-                // (#group-dialog-color 2026-09-14) 分组颜色:与右键菜单的取色面板
-                // **共用 GroupColorField**。这里不即时写盘 —— 改动只落在
-                // group-dialog-color-hex 草稿上,随「确定」一起提交(取消即回退)。
-                Text {
-                    text: @tr("Group color");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                GroupColorField {
-                    hex <=> root.group-dialog-color-hex;
-                    value: root.group-dialog-color;
-                    palette: root.group-palette;
-                    // 只改草稿(含手输 hex —— 手动打的原文要留在输入框里,故先写
-                    // hex 再让 Rust 解析颜色;提交时才归一化)。
-                    picked(hex) => {
-                        root.group-dialog-color-hex = hex;
-                        root.group-dialog-color = root.resolve-color(hex);
+                    if root.group-dialog-error != "" : Text {
+                        text: root.group-dialog-error;
+                        color: Theme.danger;
+                        font-size: Theme.fs-xs;
                     }
-                }
+                    Rectangle { height: 8px; }
+                    Text {
+                        text: @tr("Group color");
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-sm;
+                        font-weight: 600;
+                    }
+                    GroupColorField {
+                        show-header: false;
+                        // (#ui-refresh-v3-6) 362px 对话框内容宽 326px,6 列 49px 格
+                        // (6×49 + 5×6 = 324)铺满色板区,对齐设计稿 grid6 满宽。
+                        cell-size: 49px;
+                        hex <=> root.group-dialog-color-hex;
+                        value: root.group-dialog-color;
+                        palette: root.group-palette;
+                        picked(hex) => {
+                            root.group-dialog-color-hex = hex;
+                            root.group-dialog-color = root.resolve-color(hex);
+                        }
+                    }
+                    Rectangle { height: 8px; }
                 // (#group-dialog-preview 2026-09-15) 可交互实时预览:所见即「确定」
                 // 后的效果。上半 = 页签条(点击切换活动态),下半 = 列表组头(点击
                 // 折叠/展开,编辑态展开该组现有成员,超高滚动)。颜色全部读草稿
                 // group-dialog-color,「无颜色」回落次级前景灰 —— 与列表实际
                 // 渲染同一条 group-color() 规则。
-                VerticalLayout {
+                Rectangle {
+                    border-radius: Theme.radius-md;
+                    border-width: 1px;
+                    border-color: Theme.border-subtle;
+                    clip: true;
+                    VerticalLayout {
                     spacing: 0px;
                     // (#group-dialog-preview 2026-09-15) 预览标题行(高保真 v3)。
-                    Text {
-                        height: 26px;
-                        text: root.lang-en
-                            ? "Live preview · click tabs to switch · click group header to fold"
-                            : "实时预览 · 页签可点击切换 · 组头可点击折叠";
-                        color: Theme.text-muted;
-                        font-size: Theme.fs-xs;
-                        vertical-alignment: center;
+                    Rectangle {
+                        height: 22px;
+                        background: Theme.bg-panel-alt;
+                        Text {
+                            x: 10px;
+                            height: parent.height;
+                            text: root.lang-en
+                                ? "Live preview · click tabs to switch"
+                                : "实时预览 · 页签可点击切换";
+                            color: Theme.text-muted;
+                            font-size: Theme.fs-xs;
+                            vertical-alignment: center;
+                        }
                     }
                     // 页签条 mock(4px 顶留白 + 36px 页签 + 底部方角贴"终端")
                     Rectangle {
                         height: 40px;
                         background: Theme.tab-bar-bg;
-                        border-radius: Theme.radius-md;
-                        clip: true;
                         HorizontalLayout {
                             padding-top: 4px;
                             padding-left: 3px;
@@ -4775,134 +4921,77 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    // "终端"连通条:页签下沿从它长出来
                     Rectangle {
-                        height: 12px;
-                        background: Theme.bg-root;
-                        border-radius: 0px;
+                        height: 1px;
+                        background: Theme.border-subtle;
                     }
-                    // 组头行 + 成员(编辑态展开该组真实成员)
+                    // (#group-dialog-preview-static 2026-09-15) 组头预览 = **静态
+                    // 折叠态**,照搬左侧会话列表组头(chevron ▸ + 闭合文件夹 +
+                    // 组名 + 计数徽章),不可点击折叠。成员列表一并去掉。
                     Rectangle {
-                        background: Theme.bg-panel-alt;
-                        border-radius: Theme.radius-md;
-                        clip: true;
-                        VerticalLayout {
-                            padding-top: 6px;
-                            padding-bottom: 6px;
+                        height: 32px;
+                        background: Theme.bg-panel;
+                        HorizontalLayout {
                             padding-left: 10px;
                             padding-right: 10px;
-                            // 组头行(整行可点击折叠/展开)。热区 fold-ta 声明在
-                            // 内容之后 = 上层,接管整行点击。
-                            Rectangle {
-                                height: 32px;
-                                HorizontalLayout {
-                                    width: 100%;
-                                    height: 100%;
-                                    spacing: 5px;
-                                    property <color> pc: root.group-dialog-color-hex != ""
-                                        ? root.group-dialog-color : Theme.text-secondary;
-                                    Text {
-                                        width: 14px;
-                                        text: gd-body.pv-open ? "\u{E5CF}" : "\u{E5CC}";
-                                        font-family: "Material Icons";
-                                        color: pc;
-                                        font-size: Theme.fs-md;
-                                        vertical-alignment: center;
-                                        horizontal-alignment: center;
-                                    }
-                                    Text {
-                                        text: "\u{E2C8}";
-                                        font-family: "Material Icons";
-                                        color: pc;
-                                        font-size: Theme.fs-md;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: root.group-dialog-name == ""
-                                            ? @tr("Group name")
-                                            : root.group-dialog-name;
-                                        color: pc;
-                                        font-size: Theme.fs-md;
-                                        font-weight: 600;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                        horizontal-stretch: 1;
-                                    }
-                                }
-                                fold-ta := TouchArea {
-                                    width: 100%;
-                                    height: 100%;
-                                    mouse-cursor: pointer;
-                                    clicked => { gd-body.pv-open = !gd-body.pv-open; }
-                                }
+                            spacing: 4px;
+                            property <color> pc: root.group-dialog-color-hex != ""
+                                ? root.group-dialog-color : Theme.text-secondary;
+                            // 折叠三角 ▸,与左侧组头折叠态同字形、同字号。
+                            Text {
+                                text: "\u{E5CC}";
+                                font-family: "Material Icons";
+                                color: pc;
+                                font-size: Theme.fs-xl;
+                                vertical-alignment: center;
                             }
-                            // 成员列表:编辑态(有组名)过滤真实成员;新建态显示空态。
-                            // (#group-dialog-preview-r2) Flickable + preferred-height
-                            // 在对话框 VL 中实测不渲染内容,改普通 VL。外层固定
-                            // 84px(3 行) + clip:成员多时裁切,保证对话框不撑出窗口。
-                            if gd-body.pv-open : Rectangle {
-                                height: 84px;
-                                clip: true;
-                                pv-mem := VerticalLayout {
-                                    // Rectangle 内布局不自动铺满:显式 100%,
-                                    // 否则 VL 宽度为 preferred(0),行内容全部不可见。
-                                    width: 100%;
-                                    spacing: 0px;
-                                    Rectangle { height: 0px; }
-                                    for s in root.sessions : Rectangle {
-                                        // (#group-dialog-preview-r3) for + visible 的行
-                                        // 在条件元素内实测不渲染(数据/条件均正确)——
-                                        // Slint 1.8 渲染怪癖。改用 height 三元:不匹配行
-                                        // 高 0。条件 = 组匹配且**有名字**:模型把首成员行
-                                        // 打上 header 标记(name 仍为会话名),一并列出,
-                                        // 空组占位行(name 为空)自然排除。
-                                        height: (root.group-dialog-orig != ""
-                                            && s.group == root.group-dialog-orig
-                                            && s.name != "") ? 28px : 0px;
-                                        clip: true;
-                                        HorizontalLayout {
-                                            width: 100%;
-                                            height: 100%;
-                                            spacing: 0px;
-                                            property <color> pc: root.group-dialog-color-hex != ""
-                                                ? root.group-dialog-color : Theme.text-secondary;
-                                            // 脊线槽(内层竖线上下内缩,模拟列表脊线段)
-                                            Rectangle {
-                                                width: 14px;
-                                                Rectangle {
-                                                    x: 8px;
-                                                    y: 4px;
-                                                    width: 2px;
-                                                    height: parent.height - 8px;
-                                                    border-radius: 1px;
-                                                    background: pc;
-                                                    opacity: 0.32;
-                                                }
-                                            }
-                                            Rectangle { width: 4px; }
-                                            Text {
-                                                width: 14px;
-                                                text: "\u{E30C}";
-                                                font-family: "Material Icons";
-                                                color: Theme.text-muted;
-                                                font-size: Theme.fs-xs;
-                                                vertical-alignment: center;
-                                            }
-                                            Rectangle { width: 2px; }
-                                            Text {
-                                                horizontal-stretch: 1;
-                                                text: s.name;
-                                                color: Theme.text-secondary;
-                                                font-size: Theme.fs-sm;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                            }
-                                        }
+                            // 闭合文件夹,与左侧折叠组头同口径。
+                            Text {
+                                text: "\u{E2C7}";
+                                font-family: "Material Icons";
+                                color: pc;
+                                font-size: Theme.fs-xl;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.group-dialog-name == ""
+                                    ? @tr("Group name")
+                                    : root.group-dialog-name;
+                                color: Theme.text-secondary;
+                                font-size: Theme.fs-md;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                                horizontal-alignment: left;
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    height: 16px;
+                                    width: pv-num.preferred-width + 12px;
+                                    border-radius: 8px;
+                                    background: Theme.bg-elevated;
+                                    pv-num := Text {
+                                        x: 6px;
+                                        height: parent.height;
+                                        text: "0";
+                                        font-family: Theme.font-mono;
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
                                     }
-                                    if root.group-dialog-orig == "" : Text {
-                                        height: 26px;
-                                        text: @tr("No members yet");
-                                        color: Theme.text-muted;
+                                    // 编辑态:组头行(group-header == 组名)带真实
+                                    // group-size,叠在 "0" 上盖住;新建组无匹配行,
+                                    // 底下的 0 就是正确值。
+                                    for s in root.sessions : Text {
+                                        visible: root.group-dialog-orig != ""
+                                            && s.group-header == root.group-dialog-orig;
+                                        x: 6px;
+                                        height: parent.height;
+                                        text: "\{s.group-size}";
+                                        font-family: Theme.font-mono;
+                                        color: Theme.text-secondary;
                                         font-size: Theme.fs-xs;
                                         vertical-alignment: center;
                                     }
@@ -4910,9 +4999,15 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    }
+                    }
                 }
-                Rectangle { vertical-stretch: 1; }
+                // —— 按钮栏 ——
                 HorizontalLayout {
+                    padding-left: 18px;
+                    padding-right: 18px;
+                    padding-top: 12px;
+                    padding-bottom: 16px;
                     alignment: end;
                     spacing: 8px;
                     Button {

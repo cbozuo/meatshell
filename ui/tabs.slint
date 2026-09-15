@@ -64,18 +64,17 @@ component SingleTab inherits Rectangle {
     border-bottom-right-radius: 0px;
     background: lifted ? Theme.bg-active
         : (touch.pressed ? Theme.bg-active
-        : (active ? Theme.tab-active-bg
+        : (active ? (info.kind == "terminal" ? Theme.tab-active-bg : Theme.bg-root)
         // (#tab-shape 2026-09-15) 非活动常态给 bg-elevated 底色:比条带亮一档,
         // 页签块轮廓清晰可辨(旧版透明底彼此黏连,多页签时读不出块)。
         : (touch.has-hover ? Theme.bg-hover : Theme.bg-elevated)));
     animate background { duration: 130ms; }
     // Lift the ghost off the strip so it reads as "in hand".
-    // 选中态另有一层很轻的外投影把标签从条带上托起（暗/亮各一档）；ghost 的投影
-    // 更强，二者共用这组属性。
-    drop-shadow-blur: ghost ? 12px : (active ? 7px : 0px);
-    drop-shadow-offset-y: active ? 1px : 0px;
-    drop-shadow-color: ghost ? #00000070
-        : (active ? (Theme.dark ? #00000057 : #00000024) : transparent);
+    // (#tab-flush 2026-09-14) 选中态不再有投影：标签要跟终端连成一片，任何投影
+    // （尤其下偏移 1px）都会在贴合缝渗出灰边，与"贴住"互相抵消。ghost 悬空浮层照旧。
+    drop-shadow-blur: ghost ? 12px : 0px;
+    drop-shadow-offset-y: 0px;
+    drop-shadow-color: ghost ? #00000070 : transparent;
 
     // Declared FIRST so the HorizontalLayout's children (close button) are at
     // a higher z-order and receive their own click events.
@@ -201,15 +200,19 @@ component SingleTab inherits Rectangle {
     // 旧版画在页签底部、贴住与终端区的连通缝,且非活动页签也全亮 —— 一排色条
     // 连片,页签块轮廓被吞掉(用户实测"看不到页签块")。改为**左缘竖条**:
     // 与左侧会话列表的组头图标/成员脊线同方位,全程悬浮在页签内部,不碰连通缝。
-    // 透明度分级:活动/悬停 100%,非活动 55%。无色(hex 为空)整个元素不创建。
-    if info.group_color_hex != "" : Rectangle {
+    // 透明度分级:活动/悬停 100%,非活动 55%。无色(hex 为空)不画(宽 0),
+    // 但元素始终存在 —— `if` 条件元素在 hex 从空变非空时,Slint 1.8 不一定
+    // 重建子树,已打开的无色页签改色后竖条出不来(用户截图:组 2 已着色,
+    // 页签 202 仍无色条)。
+    Rectangle {
         x: 4px;
         y: 7px;
-        width: 3px;
+        width: info.group_color_hex != "" ? 3px : 0px;
         height: parent.height - 14px;
         border-radius: 2px;
         background: info.group_color;
-        opacity: active || touch.has-hover ? 1.0 : 0.55;
+        opacity: info.group_color_hex == "" ? 0.0
+            : (active || touch.has-hover ? 1.0 : 0.55);
         animate opacity { duration: 140ms; }
     }
 
@@ -670,14 +673,17 @@ export component TabBar inherits Rectangle {
                             background: t.id == root.active-id || row-ta.has-hover
                                 ? Theme.bg-hover : transparent;
                             // 行首组色竖条:与页签左缘竖条同一视觉语言。
-                            if t.group_color_hex != "" : Rectangle {
+                            // 元素始终存在,无色时宽 0 —— 避免 `if` 条件元素
+                            // 在 hex 从空变非空时不重建。
+                            Rectangle {
                                 x: 7px;
                                 y: 8px;
-                                width: 3px;
+                                width: t.group_color_hex != "" ? 3px : 0px;
                                 height: parent.height - 16px;
                                 border-radius: 2px;
                                 background: t.group_color;
-                                opacity: t.id == root.active-id ? 1.0 : 0.55;
+                                opacity: t.group_color_hex == "" ? 0.0
+                                    : (t.id == root.active-id ? 1.0 : 0.55);
                             }
                             Text {
                                 x: 20px;
