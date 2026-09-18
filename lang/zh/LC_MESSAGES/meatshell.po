@@ -114,6 +114,9 @@ msgstr "键盘交互"
 msgid "Password / first answer"
 msgstr "密码 / 首次应答"
 
+msgid "Password / first prompt"
+msgstr "密码 / 首个回答"
+
 msgid "Server prompts are shown during login; MFA / OTP prompts will ask again."
 msgstr "登录时会显示服务器提示；MFA / OTP 会再次询问。"
 
@@ -121,7 +124,7 @@ msgid "Leave blank to keep the current password"
 msgstr "留空则不修改密码"
 
 msgid "Key passphrase"
-msgstr "私钥密码"
+msgstr "私钥口令"
 
 msgid "Leave blank if the key isn't encrypted"
 msgstr "若私钥未加密则留空"
@@ -314,6 +317,9 @@ msgstr "交换"
 
 msgid "Local"
 msgstr "本机"
+
+msgid "On this machine"
+msgstr "本地"
 
 msgid "Path"
 msgstr "路径"
@@ -776,3 +782,162 @@ msgstr "{n} 台"
 
 msgid "{0} 台"
 msgstr "{0} 台"
+
+# v4 new-session dialog
+msgid "Previewing"
+msgstr "预览中"
+
+msgid "Soon"
+msgstr "即将"
+
+msgid "New forward"
+msgstr "新转发"
+
+msgid "New trigger"
+msgstr "新触发器"
+
+msgid "Trigger"
+msgstr "触发器"
+
+msgid "Fire"
+msgstr "触发"
+
+msgid "Preview layout · not implemented yet"
+msgstr "预览布局 · 尚未实现"
+
+msgid "Preview"
+msgstr "预览"
+
+msgid "Configure a local serial connection"
+msgstr "配置本地串口连接"
+
+msgid "Configure a local serial (Serial) connection"
+msgstr "配置一个本地串口（Serial）连接"
+
+msgid "Configure a Telnet connection"
+msgstr "配置一个 Telnet 连接"
+
+msgid "Configure a remote desktop connection"
+msgstr "配置一个远程桌面连接"
+
+msgid "Configure a VNC connection"
+msgstr "配置一个 VNC 连接"
+
+msgid "Configure an SSH connection"
+msgstr "配置一个 SSH 连接"
+
+msgid "Edit the {0} connection"
+msgstr "编辑「{0}」连接"
+
+msgid "Configure a {0} connection (preview · not implemented yet)"
+msgstr "配置一个 {0} 连接（预览 · 尚未实现）"
+
+msgid "Pick an existing group, or type a new name"
+msgstr "选择已有分组，或输入新名称"
+
+msgid "Choose an existing group, or type a new name"
+msgstr "可从现有分组中选择，或直接输入新名称"
+
+msgid "Existing group «{0}» · {1} sessions"
+msgstr "已有分组「{0}」· {1} 台"
+
+msgid "Will create group «{0}»"
+msgstr "将新建分组「{0}」"
+
+msgid "Will be named «{0}» from the serial port"
+msgstr "将使用串口号命名为「{0}」"
+
+msgid "Will be named «{0}» from the host"
+msgstr "将使用主机地址命名为「{0}」"
+
+msgid "More"
+msgstr "更多"
+
+msgid "Shown on the tab bar"
+msgstr "显示在标签栏"
+
+msgid "{0} / 4"
+msgstr "{0} / 4"
+
+msgid "Restore defaults"
+msgstr "恢复默认"
+
+msgid "Other protocols"
+msgstr "其他协议"
+
+msgid "Pin limit reached. Remove one to add another."
+msgstr "已满 4 个。先移除一个再添加。"
+
+msgid "{0} connection · layout preview"
+msgstr "{0} 连接 · 布局预览"
+
+msgid "{0} connection · layout reserved"
+msgstr "{0} 连接 · 布局预留"
+
+msgid "Dedicated options (color depth, read-only / shared, clipboard) TBD; placeholders below."
+msgstr "专用选项（色深、只读/共享、剪贴板）待实现；下方为占位字段。"
+
+msgid "Dedicated options (resolution, clipboard / drive redirection, gateway) TBD; placeholders below."
+msgstr "专用选项（分辨率、剪贴板/驱动器重定向、网关）待实现；下方为占位字段。"
+
+msgid "Leave blank to use the host address"
+msgstr "留空则使用主机地址"
+
+msgid "Leave blank to name from the host"
+msgstr "留空则用主机地址命名"
+
+msgid "e.g. production / staging"
+msgstr "例如：生产环境 / 测试环境"
+
+msgid "e.g. internal only · maintenance window Friday 22:00"
+msgstr "例如：仅内网可访问 · 维护窗口 周五 22:00"
+
+msgid "Administrator"
+msgstr "Administrator"
+
+msgid "Data bits"
+msgstr "数据位"
+
+msgid "Stop bits"
+msgstr "停止位"
+
+msgid "Parity"
+msgstr "校验位"
+
+msgid "Leave blank to use the serial port"
+msgstr "留空则使用串口号"
+
+msgid "Add a port forward"
+msgstr "添加端口转发"
+
+msgid "Used to reach internal services. Example:"
+msgstr "用于访问内网服务。示例："
+
+msgid "Add a trigger"
+msgstr "添加触发器"
+
+msgid "Auto-reply when matching text appears. Example:"
+msgstr "匹配到文本时自动回复。示例："
+
+# (#proto-select 2026-09-18) 本轮新增:字段级「连接协议」下拉 / 高级开关文案
+msgid "Connection protocol"
+msgstr "连接协议"
+
+msgid "Remote login"
+msgstr "远程登录"
+
+msgid "Remote desktop"
+msgstr "远程桌面"
+
+msgid "Odd"
+msgstr "奇"
+
+msgid "Even"
+msgstr "偶"
+
+msgid "Show advanced options"
+msgstr "显示高级选项"
+
+msgid "Hide advanced options"
+msgstr "隐藏高级选项"
+

@@ -145,6 +145,11 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
+    # (#close-behavior) 真托盘:Shell_NotifyIconW / 消息窗口 / 菜单 / 取图标。
+    # 只加 feature —— windows crate 已在依赖里,不引入新 crate。
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
 ] }
 
 [profile.release]

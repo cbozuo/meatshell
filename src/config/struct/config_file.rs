@@ -175,6 +175,11 @@ pub struct ConfigFile {
     /// existing configurations unless the user explicitly disables it (#300).
     #[serde(default)]
     pub paste_confirm_disabled: bool,
+    /// (#close-behavior) 点窗口关闭键时的行为:ask 每次询问 /
+    /// tray 最小化到系统托盘 / exit 直接完全退出。
+    /// 空串(旧配置)按 ask 处理,见 ConfigStore::close_behavior。
+    #[serde(default)]
+    pub close_behavior: String,
     /// Stored inverted so Ctrl+Alt+V, Shift+Insert, and middle-click paste stay
     /// enabled for existing users (#300).
     #[serde(default)]

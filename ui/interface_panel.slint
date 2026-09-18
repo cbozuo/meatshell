@@ -394,6 +394,9 @@ export component InterfacePanel inherits Rectangle {
     in-out property <bool> welcome-as-sidebar;
     in-out property <bool> quick-commands-as-sidebar;
     in-out property <bool> update-check-enabled;
+    // (#close-behavior) 点窗口关闭键时的行为:"ask" / "tray" / "exit"。
+    // 与关闭确认卡共用同一份状态(双向绑定在 app.slint 里)。
+    in-out property <string> close-behavior: "ask";
     in-out property <bool> mcp-enabled: true;
     in-out property <bool> mcp-use-saved-credentials: true;
     in-out property <bool> mcp-allow-commands: true;
@@ -444,9 +447,11 @@ export component InterfacePanel inherits Rectangle {
     callback set-paste-confirm-enabled(bool);
     callback set-extra-paste-shortcuts-enabled(bool);
     callback set-zen-mode(bool);
-    callback set-welcome-as-sidebar(bool);
     callback set-quick-commands-as-sidebar(bool);
+    // (#close-behavior) 设置 › 窗口 的「关闭按钮行为」下发回调。
+    callback set-close-behavior(string);
     callback set-update-check-enabled(bool);   // startup new-version check (#184)
+    callback set-welcome-as-sidebar(bool);
     callback set-mcp-permissions(bool, bool, bool, bool);
     callback persist-wallpaper-overlay(float);   // save the overlay opacity
     callback set-wallpaper(string);    // none / builtin selection
@@ -535,6 +540,12 @@ export component InterfacePanel inherits Rectangle {
                     icon: "\u{E2C4}"; label: root.lang-en ? "Download" : "下载";
                     active: root.ifd-page == "download";
                     clicked => { root.ifd-page = "download"; }
+                }
+                // (#close-behavior) 新增:「窗口」页承载关闭按钮行为。
+                NavItem {
+                    icon: "\u{E5D4}"; label: root.lang-en ? "Window" : "窗口";
+                    active: root.ifd-page == "window";
+                    clicked => { root.ifd-page = "window"; }
                 }
                 NavItem {
                     icon: "\u{E335}"; label: "MCP";
@@ -1585,6 +1596,44 @@ export component InterfacePanel inherits Rectangle {
                     Switch {
                         on: root.download-always-ask;
                         toggled(v) => { root.download-always-ask = v; root.set-download-always-ask(v); }
+                    }
+                }
+            }
+
+            // --- (#close-behavior) Window page --------------------------
+            // 承载「关闭按钮行为」。与关闭确认卡共用同一份状态:
+            // 这里改了,关窗弹卡的默认项/直退行为同步变(反之亦然)。
+            if root.ifd-page == "window" : VerticalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-top: 14px;
+                spacing: 0;
+                alignment: start;
+                SectionHeader { text: root.lang-en ? "WINDOW" : "窗口"; height: 24px; }
+                SettingRow {
+                    label: root.lang-en ? "Close button behavior" : "关闭按钮行为";
+                    desc: root.lang-en
+                        ? "What the window close button does."
+                        : "点击窗口关闭按钮时的行为";
+                    show-divider: false;
+                    close-dd := ComboBox {
+                        width: 200px;
+                        // 选项文案随语言;selected 里再映射回 id 下发。
+                        model: root.lang-en
+                            ? ["Ask every time", "Minimize to tray", "Quit completely"]
+                            : ["每次询问", "最小化到托盘", "直接完全退出"];
+                        current-value: root.close-behavior == "tray"
+                            ? (root.lang-en ? "Minimize to tray" : "最小化到托盘")
+                            : root.close-behavior == "exit"
+                                ? (root.lang-en ? "Quit completely" : "直接完全退出")
+                                : (root.lang-en ? "Ask every time" : "每次询问");
+                        selected(v) => {
+                            root.close-behavior = v == (root.lang-en ? "Minimize to tray" : "最小化到托盘")
+                                ? "tray"
+                                : v == (root.lang-en ? "Quit completely" : "直接完全退出")
+                                    ? "exit" : "ask";
+                            root.set-close-behavior(root.close-behavior);
+                        }
                     }
                 }
             }

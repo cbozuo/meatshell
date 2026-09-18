@@ -883,6 +883,26 @@ impl ConfigStore {
         self.cache.paste_confirm_disabled = !enabled;
     }
 
+    /// (#close-behavior) 点窗口关闭键时的行为。旧配置里该字段为空 →
+    /// 归一化为 "ask"(每次询问),保持既有行为不变。
+    pub fn close_behavior(&self) -> &'static str {
+        match self.cache.close_behavior.as_str() {
+            "tray" => "tray",
+            "exit" => "exit",
+            _ => "ask",
+        }
+    }
+
+    /// 写入关闭行为;非法值一律落到 "ask"。
+    pub fn set_close_behavior(&mut self, value: &str) {
+        self.cache.close_behavior = match value {
+            "tray" => "tray",
+            "exit" => "exit",
+            _ => "ask",
+        }
+        .to_string();
+    }
+
     pub fn extra_paste_shortcuts_enabled(&self) -> bool {
         !self.cache.extra_paste_shortcuts_disabled
     }

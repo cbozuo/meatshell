@@ -1,5 +1,4 @@
 import { Theme } from "theme.slint";
-import { ComboBox } from "std-widgets.slint";
 import { LabeledInput, PrimaryButton, GhostButton } from "widgets.slint";
 
 // One SSH port-forward row shown in the session dialog (#56). `summary` is a
@@ -11,6 +10,8 @@ export struct PortFwd {
     bind-port: string,
     host: string,
     host-port: string,
+    // UI-only: collapsed row state. Not persisted.
+    open: bool,
 }
 
 export struct TriggerDraft {
@@ -18,6 +19,8 @@ export struct TriggerDraft {
     response: string,
     append-enter: bool,
     repeat: bool,
+    // UI-only: collapsed row state. Not persisted.
+    open: bool,
 }
 
 // (#group-entry 2026-09-14) 会话对话框「分组」下拉的一项:组名 + 该组颜色。
@@ -68,25 +71,557 @@ export struct SessionDraft {
     jump-session-id: string,
 }
 
-// A single segment in a segmented selector (auth toggle, baud presets, …).
+// Segmented selector chip. Selected = Theme.chip (neutral float), never solid accent.
 component SegOption inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    in property <string> glyph;
+    in property <string> badge;
+    callback clicked();
+    height: 30px;
+    horizontal-stretch: 1;
+    // (#hifi-v17) 段内**无边框**(单一外框由容器画,见 .seg 用法):选中 =
+    // chip 淡染圆块,hover = text 8% 浅底(原型 .seg button:hover),未选中
+    // 透明。文字三态:选中 accent / hover primary / 常态 secondary。
+    border-radius: 7px;
+    background: active ? Theme.chip : (ta.has-hover ? Theme.text-primary.with-alpha(0.08) : transparent);
+    Text {
+        visible: root.glyph == "";
+        text: root.label;
+        color: active ? Theme.accent : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
+        font-size: Theme.fs-sm;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    HorizontalLayout {
+        visible: root.glyph != "";
+        spacing: 6px;
+        alignment: center;
+        padding-left: 6px;
+        padding-right: 6px;
+        Text {
+            text: root.glyph;
+            font-family: "Material Icons";
+            color: active ? Theme.accent : Theme.text-secondary;
+            font-size: 15px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            color: active ? Theme.accent : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
+            font-size: Theme.fs-sm;
+            vertical-alignment: center;
+        }
+        if root.badge != "" : Rectangle {
+            height: 16px;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.accent.with-alpha(0.45);
+            HorizontalLayout {
+                padding-left: 5px;
+                padding-right: 5px;
+                Text {
+                    text: root.badge;
+                    color: Theme.accent;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// Toggle-style small pill: accent-soft fill, never solid accent.
+component PillToggle inherits Rectangle {
     in property <string> label;
     in property <bool> active;
     callback clicked();
     height: 30px;
-    horizontal-stretch: 1;
+    horizontal-stretch: 0;
     border-radius: Theme.radius-sm;
     border-width: 1px;
-    background: active ? Theme.accent : Theme.bg-root;
-    border-color: active ? Theme.accent : Theme.border-subtle;
-    Text {
-        text: root.label;
-        color: active ? white : Theme.text-primary;
-        font-size: Theme.fs-md;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    border-color: active ? Theme.accent.with-alpha(0.45) : Theme.border-subtle;
+    background: active ? Theme.accent-soft : Theme.bg-root;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: active ? Theme.accent : Theme.text-secondary;
+            font-size: Theme.fs-sm;
+            vertical-alignment: center;
+        }
     }
     TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// --- 连接协议下拉 (#proto-select 2026-09-18) -----------------------------
+// 高保真 v17 定稿:废弃旧的「协议标签轨道 + 更多面板」(固定 4 个槽位 / 拖拽
+// 排序 / 重置固定),改为**字段级的下拉选择器** —— 与「跳板机 / 终端字符集」
+// 同一套控件与手感。它本身就是「连接到哪」那一行的第一个字段,不再独占一行。
+//
+// 列表形态对齐高保真 .pop:按分类分组、当前项打勾;勾位**常驻且定宽**,
+// 未选中留空占位 —— 否则选中行多出的勾会把「即将 / 预览」徽标列挤歪。
+component ProtoItem inherits Rectangle {
+    in property <string> proto-id;      // "ssh" | "serial" | "telnet" | "rdp" | "vnc"
+    in property <string> label;
+    in property <bool> selected: false;
+    in property <string> badge;         // "" | "soon" | "prev"
+    callback picked();
+
+    // (#hifi-v17) 原型 .pop .item:padding 8px 9px + gap 9px ≈ 32px 行高;
+    // hover 底 = --field-2(比面板亮半档,非 bg-hover 的重灰);
+    // 选中 = accent-soft 淡染。
+    height: 32px;
+    border-radius: 8px;
+    background: pita.has-hover ? Theme.field-2
+        : (root.selected ? Theme.accent-soft : transparent);
+
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        spacing: 9px;
+
+        Rectangle {
+            width: 15px;
+            height: 15px;
+            y: (parent.height - self.height) / 2;
+            Text {
+                width: 100%; height: 100%;
+                text: Theme.protocol-glyph(root.proto-id);
+                font-family: "Material Icons";
+                color: Theme.text-secondary;
+                font-size: 15px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: root.label;
+            color: Theme.text-primary;
+            font-size: Theme.fs-md;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        if root.badge != "" : Rectangle {
+            min-width: 34px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: root.badge == "prev"
+                ? Theme.accent.with-alpha(0.45) : Theme.warning.with-alpha(0.45);
+            background: transparent;
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 6px;
+                Text {
+                    text: root.badge == "prev" ? @tr("Preview") : @tr("Soon");
+                    color: root.badge == "prev" ? Theme.accent : Theme.warning;
+                    font-size: 9.5px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // 勾位常驻:未选中也占 14px,保证徽标列右缘纵向对齐(#badge-col)。
+        Rectangle {
+            width: 14px;
+            height: 14px;
+            y: (parent.height - self.height) / 2;
+            Text {
+                width: 100%; height: 100%;
+                text: root.selected ? "\u{E5CA}" : "";
+                font-family: "Material Icons";
+                color: Theme.accent;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    pita := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(); }
+    }
+}
+
+// 字段级「连接协议」选择器:按钮(图标 + 名称 + 徽标 + ▾)+ 分类列表弹层。
+// 选完即收起;未实现的协议(RDP / VNC)进入「预览」态,由调用方决定语义。
+component ProtoSelect inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;         // 当前协议 id
+    in property <bool> previewing: false;
+    callback picked(string);
+    spacing: 5px;
+    property <bool> drop-open: false;
+
+    pure function proto-label(id: string) -> string {
+        if (id == "serial") { return @tr("Serial"); }
+        if (id == "telnet") { return "Telnet"; }
+        if (id == "rdp") { return "RDP"; }
+        if (id == "vnc") { return "VNC"; }
+        return "SSH";
+    }
+    pure function is-soon(id: string) -> bool {
+        return id == "rdp" || id == "vnc";
+    }
+    function badge-of(id: string) -> string {
+        if (!root.is-soon(id)) { return ""; }
+        return root.previewing ? "prev" : "soon";
+    }
+
+    Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.fs-sm;
+    }
+
+    pbtn := Rectangle {
+        height: 38px;
+        // (#hifi-v17) .select:圆角 9px、hover 提亮描边;常态边框用
+        // border-control(与输入框同线,两控件并排时深浅一致)。
+        border-radius: 9px;
+        border-width: 1px;
+        // Slint 1.16 读不到 PopupWindow.visible,用 drop-open 镜像展开态
+        // (与 GroupCombo 同一套:点开置位、选中项清位)。
+        border-color: root.drop-open ? Theme.accent
+            : (bta.has-hover ? Theme.line-2 : Theme.border-control);
+        background: root.drop-open ? Theme.field-2 : Theme.field;
+        if root.drop-open : Rectangle {
+            x: -3px; y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 11px;
+            border-width: 3px;
+            border-color: Theme.accent-soft;
+        }
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 9px;
+
+            Rectangle {
+                width: 15px;
+                height: 15px;
+                Text {
+                    width: 100%; height: 100%;
+                    text: Theme.protocol-glyph(root.value);
+                    font-family: "Material Icons";
+                    color: Theme.text-secondary;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Text {
+                text: root.proto-label(root.value);
+                color: Theme.text-primary;
+                font-size: Theme.fs-md;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            if root.badge-of(root.value) != "" : Rectangle {
+                min-width: 34px;
+                height: 16px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.badge-of(root.value) == "prev"
+                    ? Theme.accent.with-alpha(0.45) : Theme.warning.with-alpha(0.45);
+                background: transparent;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    Text {
+                        text: root.badge-of(root.value) == "prev" ? @tr("Preview") : @tr("Soon");
+                        color: root.badge-of(root.value) == "prev" ? Theme.accent : Theme.warning;
+                        font-size: 9.5px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                Text {
+                    width: 100%; height: 100%;
+                    text: "\u{E5CF}";     // expand_more
+                    font-family: "Material Icons";
+                    color: Theme.text-muted;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        bta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.drop-open = true;
+                proto-pop.show();
+            }
+        }
+    }
+
+    proto-pop := PopupWindow {
+        x: 0px;
+        y: parent.height + 6px;
+        width: parent.width;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            // (#hifi-v17) 原型 .pop 底 = --panel(与弹框同底色),边 = --line-2。
+            background: Theme.popup-bg;
+            border-radius: 11px;
+            border-width: 1px;
+            border-color: Theme.line-2;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: #00000066;
+
+            VerticalLayout {
+                padding: 5px;
+                spacing: 1px;
+
+                // (#hifi-v17) 分组标题 = .grp:10.5px / letter-spacing .08em /
+                // 上下留白(8px 9px 4px)。中文无大小写,以「字距+小号」表达同级。
+                Rectangle {
+                    height: 26px;
+                    Text {
+                        x: 9px;
+                        width: parent.width - 18px;
+                        height: parent.height;
+                        text: @tr("Remote login");
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-xs;
+                        vertical-alignment: center;
+                    }
+                }
+                ProtoItem {
+                    proto-id: "ssh"; label: "SSH";
+                    selected: root.value == "ssh"; badge: root.badge-of("ssh");
+                    picked => { root.drop-open = false; root.picked("ssh"); proto-pop.close(); }
+                }
+                ProtoItem {
+                    proto-id: "telnet"; label: "Telnet";
+                    selected: root.value == "telnet"; badge: root.badge-of("telnet");
+                    picked => { root.drop-open = false; root.picked("telnet"); proto-pop.close(); }
+                }
+
+                Rectangle {
+                    height: 26px;
+                    Text {
+                        x: 9px;
+                        width: parent.width - 18px;
+                        height: parent.height;
+                        text: @tr("On this machine");
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-xs;
+                        vertical-alignment: center;
+                    }
+                }
+                ProtoItem {
+                    proto-id: "serial"; label: @tr("Serial");
+                    selected: root.value == "serial"; badge: root.badge-of("serial");
+                    picked => { root.drop-open = false; root.picked("serial"); proto-pop.close(); }
+                }
+
+                Rectangle {
+                    height: 26px;
+                    Text {
+                        x: 9px;
+                        width: parent.width - 18px;
+                        height: parent.height;
+                        text: @tr("Remote desktop");
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-xs;
+                        vertical-alignment: center;
+                    }
+                }
+                ProtoItem {
+                    proto-id: "rdp"; label: "RDP";
+                    selected: root.value == "rdp"; badge: root.badge-of("rdp");
+                    picked => { root.drop-open = false; root.picked("rdp"); proto-pop.close(); }
+                }
+                ProtoItem {
+                    proto-id: "vnc"; label: "VNC";
+                    selected: root.value == "vnc"; badge: root.badge-of("vnc");
+                    picked => { root.drop-open = false; root.picked("vnc"); proto-pop.close(); }
+                }
+            }
+        }
+    }
+}
+
+// (#hifi-v17) 与协议下拉同一套 .select + .pop:编码 / 串口四参数 / 跳板共用。
+component SelectField inherits VerticalLayout {
+    in property <string> label;
+    in property <[string]> choices;
+    in property <string> value;
+    in property <string> placeholder: "";
+    callback picked(string);
+    spacing: 5px;
+    property <bool> drop-open: false;
+
+    Text {
+        visible: root.label != "";
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.fs-sm;
+    }
+
+    sbtn := Rectangle {
+        height: 38px;
+        border-radius: 9px;
+        border-width: 1px;
+        border-color: root.drop-open ? Theme.accent
+            : (sta.has-hover ? Theme.line-2 : Theme.border-control);
+        background: root.drop-open ? Theme.field-2 : Theme.field;
+        if root.drop-open : Rectangle {
+            x: -3px; y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 11px;
+            border-width: 3px;
+            border-color: Theme.accent-soft;
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 9px;
+            Text {
+                text: root.value != "" ? root.value : root.placeholder;
+                color: root.value != "" ? Theme.text-primary : Theme.text-muted;
+                font-size: Theme.fs-md;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                Text {
+                    width: 100%; height: 100%;
+                    text: "\u{E5CF}";
+                    font-family: "Material Icons";
+                    color: (sta.has-hover || root.drop-open) ? Theme.text-secondary : Theme.text-muted;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        sta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.drop-open = true;
+                sel-pop.show();
+            }
+        }
+    }
+
+    sel-pop := PopupWindow {
+        x: 0px;
+        y: parent.height + 6px;
+        width: parent.width;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.popup-bg;
+            border-radius: 11px;
+            border-width: 1px;
+            border-color: Theme.line-2;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: #00000066;
+            VerticalLayout {
+                padding: 5px;
+                spacing: 1px;
+                for c in root.choices : Rectangle {
+                    height: 32px;
+                    border-radius: 8px;
+                    background: c-ta.has-hover ? Theme.field-2
+                        : (root.value == c ? Theme.accent-soft : transparent);
+                    c-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.drop-open = false;
+                            root.picked(c);
+                            sel-pop.close();
+                        }
+                    }
+                    Text {
+                        x: 9px;
+                        width: parent.width - 32px;
+                        height: parent.height;
+                        text: c;
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 23px;
+                        y: (parent.height - 14px) / 2;
+                        width: 14px;
+                        height: 14px;
+                        Text {
+                            width: 100%; height: 100%;
+                            text: root.value == c ? "\u{E5CA}" : "";
+                            font-family: "Material Icons";
+                            color: Theme.accent;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component EmptyAddButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 42px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ta.has-hover ? Theme.accent : Theme.line-2;
+    background: ta.has-hover ? Theme.accent-soft : transparent;
+    HorizontalLayout {
+        spacing: 7px;
+        alignment: center;
+        Text {
+            text: "\u{E145}";
+            font-family: "Material Icons";
+            color: ta.has-hover ? Theme.accent : Theme.text-muted;
+            font-size: Theme.fs-md;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.label;
+            color: ta.has-hover ? Theme.accent : Theme.text-muted;
+            font-size: Theme.fs-sm;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
@@ -97,12 +632,20 @@ component MiniInput inherits Rectangle {
     in property <string> placeholder;
     in-out property <string> value;
     callback edited(string);
-    height: 30px;
+    height: 34px;
     horizontal-stretch: 1;
-    border-radius: Theme.radius-sm;
+    border-radius: 8px;
     border-width: 1px;
-    border-color: mi.has-focus ? Theme.accent : Theme.border-subtle;
-    background: Theme.bg-root;
+    border-color: mi.has-focus ? Theme.accent : Theme.border-control;
+    background: Theme.popup-bg;
+    if mi.has-focus : Rectangle {
+        x: -3px; y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: 10px;
+        border-width: 3px;
+        border-color: Theme.accent-soft;
+    }
     // Hide on focus: IME preedit is visible before value is committed.
     if root.value == "" && !mi.has-focus : Text {
         x: 8px;
@@ -130,9 +673,7 @@ component MiniInput inherits Rectangle {
     }
 }
 
-// Every forwarding rule stays editable in-place. "Add" creates another row
-// of this same form instead of converting the current form into a summary (#277).
-component PortForwardRow inherits VerticalLayout {
+component PortForwardRow inherits Rectangle {
     in property <PortFwd> forward;
     in property <int> index;
     callback updated(int, PortFwd);
@@ -144,79 +685,165 @@ component PortForwardRow inherits VerticalLayout {
     property <string> bind-port: forward.bind-port;
     property <string> host: forward.host;
     property <string> host-port: forward.host-port;
+    property <bool> open: forward.open;
 
-    function notify-updated() {
-        root.updated(root.index, {
+    function snapshot() -> PortFwd {
+        return {
             kind: root.kind,
             name: root.name,
             bind-addr: root.bind-addr,
             bind-port: root.bind-port,
             host: root.host,
             host-port: root.host-port,
-        });
+            open: root.open,
+        };
+    }
+    function notify-updated() { root.updated(root.index, root.snapshot()); }
+    function fw-kind-tag(kind: string) -> string {
+        return kind == "remote" ? "-R" : (kind == "dynamic" ? "-D" : "-L");
+    }
+    function fw-summary(f: PortFwd) -> string {
+        if (f.name == "" && f.bind-addr == "" && f.bind-port == "" && f.host == "" && f.host-port == "") {
+            return @tr("New forward");
+        }
+        if (f.kind == "dynamic") {
+            return (f.name != "" ? f.name + " · " : "") + root.fw-kind-tag(f.kind) + " " + (f.bind-addr != "" ? f.bind-addr : "…") + (f.bind-port != "" ? ":" + f.bind-port : "");
+        }
+        return (f.name != "" ? f.name + " · " : "") + root.fw-kind-tag(f.kind) + " " + (f.bind-addr != "" ? f.bind-addr : "…") + (f.bind-port != "" ? ":" + f.bind-port : "") + " → " + (f.host != "" ? f.host : "…") + (f.host-port != "" ? ":" + f.host-port : "");
     }
 
-    spacing: 6px;
-    padding: 8px;
 
-    HorizontalLayout {
-        spacing: 6px;
-        SegOption { label: @tr("Local (-L)"); active: root.kind == "local"; clicked => { root.kind = "local"; root.notify-updated(); } }
-        SegOption { label: @tr("Remote (-R)"); active: root.kind == "remote"; clicked => { root.kind = "remote"; root.notify-updated(); } }
-        SegOption { label: @tr("Dynamic (-D)"); active: root.kind == "dynamic"; clicked => { root.kind = "dynamic"; root.notify-updated(); } }
+    border-radius: 11px;
+    border-width: 1px;
+    border-color: Theme.border-control;
+    background: Theme.field;
+    VerticalLayout {
+        spacing: 0px;
         Rectangle {
-            width: 30px;
-            height: 30px;
-            border-radius: Theme.radius-sm;
-            background: remove-area.has-hover ? Theme.danger.with-alpha(0.18) : transparent;
-            remove-area := TouchArea {
+            height: 38px;
+            head-ta := TouchArea {
                 mouse-cursor: pointer;
-                clicked => { root.remove(root.index); }
+                clicked => { root.open = !root.open; root.notify-updated(); }
             }
-            Text {
-                text: "\u{E5CD}";
-                font-family: "Material Icons";
-                color: Theme.danger;
-                font-size: Theme.fs-sm;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            HorizontalLayout {
+                padding-left: 11px;
+                padding-right: 8px;
+                spacing: 9px;
+                Rectangle {
+                    width: 28px; height: 20px; y: (parent.height - self.height) / 2;
+                    border-radius: 6px;
+                    background: Theme.accent-soft;
+                    Text {
+                        text: root.fw-kind-tag(root.kind);
+                        color: Theme.accent;
+                        font-family: Theme.font-mono;
+                        font-size: Theme.fs-xs;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: root.fw-summary(root.snapshot());
+                    color: Theme.text-secondary;
+                    font-family: Theme.font-mono;
+                    font-size: Theme.fs-sm;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Rectangle {
+                    width: 28px; height: 28px; y: (parent.height - self.height) / 2;
+                    border-radius: Theme.radius-sm;
+                    background: remove-area.has-hover ? Theme.danger.with-alpha(0.18) : transparent;
+                    remove-area := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.remove(root.index); }
+                    }
+                    Text {
+                        text: "\u{E5CD}";
+                        font-family: "Material Icons";
+                        color: remove-area.has-hover ? Theme.danger : Theme.text-muted;
+                        font-size: Theme.fs-sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    width: 16px;
+                    height: 16px;
+                    y: (parent.height - self.height) / 2;
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "\u{E5CC}";
+                        font-family: "Material Icons";
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-md;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        transform-origin: { x: 8px, y: 8px };
+                        transform-rotation: root.open ? 90deg : 0deg;
+                        animate transform-rotation { duration: 240ms; }
+                    }
+                }
             }
         }
-    }
-    MiniInput {
-        placeholder: @tr("Name (optional)");
-        value <=> root.name;
-        edited(value) => { root.name = value; root.notify-updated(); }
-    }
-    HorizontalLayout {
-        spacing: 6px;
-        MiniInput {
-            placeholder: "127.0.0.1";
-            value <=> root.bind-addr;
-            edited(value) => { root.bind-addr = value; root.notify-updated(); }
-        }
-        MiniInput {
-            placeholder: @tr("Listen port");
-            value <=> root.bind-port;
-            edited(value) => { root.bind-port = value; root.notify-updated(); }
-        }
-    }
-    if root.kind != "dynamic" : HorizontalLayout {
-        spacing: 6px;
-        MiniInput {
-            placeholder: @tr("Target host");
-            value <=> root.host;
-            edited(value) => { root.host = value; root.notify-updated(); }
-        }
-        MiniInput {
-            placeholder: @tr("Target port");
-            value <=> root.host-port;
-            edited(value) => { root.host-port = value; root.notify-updated(); }
+        if root.open : VerticalLayout {
+            padding-left: 11px;
+            padding-right: 11px;
+            padding-bottom: 12px;
+            spacing: 8px;
+            Rectangle {
+                height: 36px;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: Theme.border-control;
+                background: Theme.field;
+                HorizontalLayout {
+                    padding: 3px;
+                    spacing: 2px;
+                    SegOption { label: @tr("Local (-L)"); active: root.kind == "local"; clicked => { root.kind = "local"; root.notify-updated(); } }
+                    SegOption { label: @tr("Remote (-R)"); active: root.kind == "remote"; clicked => { root.kind = "remote"; root.notify-updated(); } }
+                    SegOption { label: @tr("Dynamic (-D)"); active: root.kind == "dynamic"; clicked => { root.kind = "dynamic"; root.notify-updated(); } }
+                }
+            }
+            MiniInput {
+                placeholder: @tr("Name (optional)");
+                value <=> root.name;
+                edited(value) => { root.name = value; root.notify-updated(); }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                MiniInput {
+                    placeholder: "127.0.0.1";
+                    value <=> root.bind-addr;
+                    edited(value) => { root.bind-addr = value; root.notify-updated(); }
+                }
+                MiniInput {
+                    placeholder: @tr("Listen port");
+                    value <=> root.bind-port;
+                    edited(value) => { root.bind-port = value; root.notify-updated(); }
+                }
+            }
+            if root.kind != "dynamic" : HorizontalLayout {
+                spacing: 8px;
+                MiniInput {
+                    placeholder: @tr("Target host");
+                    value <=> root.host;
+                    edited(value) => { root.host = value; root.notify-updated(); }
+                }
+                MiniInput {
+                    placeholder: @tr("Target port");
+                    value <=> root.host-port;
+                    edited(value) => { root.host-port = value; root.notify-updated(); }
+                }
+            }
         }
     }
 }
 
-component TriggerRow inherits VerticalLayout {
+component TriggerRow inherits Rectangle {
     in property <TriggerDraft> trigger;
     in property <int> index;
     callback updated(int, TriggerDraft);
@@ -226,50 +853,127 @@ component TriggerRow inherits VerticalLayout {
     property <string> response: trigger.response;
     property <bool> append-enter: trigger.append-enter;
     property <bool> repeat: trigger.repeat;
+    property <bool> open: trigger.open;
 
-    function notify-updated() {
-        root.updated(root.index, {
+    function snapshot() -> TriggerDraft {
+        return {
             expect: root.expect,
             response: root.response,
             append-enter: root.append-enter,
             repeat: root.repeat,
-        });
+            open: root.open,
+        };
+    }
+    function notify-updated() { root.updated(root.index, root.snapshot()); }
+    function trg-summary(t: TriggerDraft) -> string {
+        if (t.expect == "" && t.response == "") {
+            return @tr("New trigger");
+        }
+        if (t.expect != "" && t.response != "") {
+            return "「" + t.expect + "」 → 「" + t.response + "」";
+        }
+        if (t.expect != "") {
+            return "「" + t.expect + "」";
+        }
+        return "「" + t.response + "」";
     }
 
-    spacing: 6px;
-    padding: 8px;
-    HorizontalLayout {
-        spacing: 6px;
-        MiniInput {
-            placeholder: @tr("Expected output");
-            value <=> root.expect;
-            edited(value) => { root.expect = value; root.notify-updated(); }
-        }
+
+    border-radius: 11px;
+    border-width: 1px;
+    border-color: Theme.border-control;
+    background: Theme.field;
+    VerticalLayout {
+        spacing: 0px;
         Rectangle {
-            width: 30px; height: 30px;
-            border-radius: Theme.radius-sm;
-            background: trigger-remove.has-hover ? Theme.danger.with-alpha(0.18) : transparent;
-            trigger-remove := TouchArea { mouse-cursor: pointer; clicked => { root.remove(root.index); } }
-            Text {
-                text: "\u{E5CD}"; font-family: "Material Icons"; color: Theme.danger;
-                font-size: Theme.fs-sm; horizontal-alignment: center; vertical-alignment: center;
+            height: 38px;
+            head-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.open = !root.open; root.notify-updated(); }
+            }
+            HorizontalLayout {
+                padding-left: 11px;
+                padding-right: 8px;
+                spacing: 9px;
+                Rectangle {
+                    width: 36px; height: 20px; y: (parent.height - self.height) / 2;
+                    border-radius: 6px;
+                    background: Theme.accent-soft;
+                    Text {
+                        text: @tr("Fire");
+                        color: Theme.accent;
+                        font-size: Theme.fs-xs;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: root.trg-summary(root.snapshot());
+                    color: Theme.text-secondary;
+                    font-size: Theme.fs-sm;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Rectangle {
+                    width: 28px; height: 28px; y: (parent.height - self.height) / 2;
+                    border-radius: Theme.radius-sm;
+                    background: trigger-remove.has-hover ? Theme.danger.with-alpha(0.18) : transparent;
+                    trigger-remove := TouchArea { mouse-cursor: pointer; clicked => { root.remove(root.index); } }
+                    Text {
+                        text: "\u{E5CD}"; font-family: "Material Icons";
+                        color: trigger-remove.has-hover ? Theme.danger : Theme.text-muted;
+                        font-size: Theme.fs-sm; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    width: 16px;
+                    height: 16px;
+                    y: (parent.height - self.height) / 2;
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "\u{E5CC}";
+                        font-family: "Material Icons";
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-md;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        transform-origin: { x: 8px, y: 8px };
+                        transform-rotation: root.open ? 90deg : 0deg;
+                        animate transform-rotation { duration: 240ms; }
+                    }
+                }
             }
         }
-    }
-    MiniInput {
-        placeholder: @tr("Response (leave blank to keep saved value)");
-        value <=> root.response;
-        edited(value) => { root.response = value; root.notify-updated(); }
-    }
-    HorizontalLayout {
-        spacing: 14px;
-        SegOption {
-            label: @tr("Send Enter"); active: root.append-enter;
-            clicked => { root.append-enter = !root.append-enter; root.notify-updated(); }
-        }
-        SegOption {
-            label: @tr("Repeat"); active: root.repeat;
-            clicked => { root.repeat = !root.repeat; root.notify-updated(); }
+        if root.open : VerticalLayout {
+            padding-left: 11px;
+            padding-right: 11px;
+            padding-bottom: 12px;
+            spacing: 8px;
+            MiniInput {
+                placeholder: @tr("Expected output");
+                value <=> root.expect;
+                edited(value) => { root.expect = value; root.notify-updated(); }
+            }
+            MiniInput {
+                placeholder: @tr("Response (leave blank to keep saved value)");
+                value <=> root.response;
+                edited(value) => { root.response = value; root.notify-updated(); }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                PillToggle {
+                    label: @tr("Send Enter"); active: root.append-enter;
+                    clicked => { root.append-enter = !root.append-enter; root.notify-updated(); }
+                }
+                PillToggle {
+                    label: @tr("Repeat"); active: root.repeat;
+                    clicked => { root.repeat = !root.repeat; root.notify-updated(); }
+                }
+            }
         }
     }
 }
@@ -281,7 +985,14 @@ component GroupCombo inherits VerticalLayout {
     in property <string> placeholder;
     in-out property <string> value;
     in property <[GroupEntry]> groups;   // existing groups (+ their colour)
-    spacing: 4px;
+    in property <string> hint;
+    // (#hifi-v17) 标签↔框的 gap 与 LabeledInput 同为 5px —— 4px 时两列的
+    // 输入框顶边差 1px,并排看就是"名称框和分组框不一样"。
+    spacing: 5px;
+    // (#hifi-v17 2026-09-18) 弹层展开态镜像:Slint 1.16 读不到 PopupWindow 的
+    // visible,而原型 .combo:has([aria-expanded=true]) 要求"点 ▾ 展开时整框
+    // 也进聚焦态"(accent 描边 + field-2 底),没有这个镜像就做不出来。
+    property <bool> drop-open: false;
 
     Text {
         text: root.label;
@@ -290,11 +1001,22 @@ component GroupCombo inherits VerticalLayout {
     }
 
     Rectangle {
-        height: 32px;
-        border-radius: Theme.radius-sm;
+        height: 38px;      // (#identity-row 2026-09-18) 与 LabeledInput 的 38px 对齐
+        // (#hifi-v17) 与名称输入框完全同一套:9px 圆角 + border-control 常态边;
+        // 聚焦点有两处 —— 直接点输入框(ginput.has-focus)或点 ▾ 展开弹层
+        // (drop-open),两者任一为真整框都进聚焦态(accent 描边 + 亮底)。
+        border-radius: 9px;
         border-width: 1px;
-    border-color: ginput.has-focus ? Theme.accent : Theme.border-strong;
-    background: Theme.bg-elevated;
+        border-color: ginput.has-focus || drop-open ? Theme.accent : Theme.border-control;
+        background: ginput.has-focus || drop-open ? Theme.field-2 : Theme.field;
+        if ginput.has-focus || drop-open : Rectangle {
+            x: -3px; y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 11px;
+            border-width: 3px;
+            border-color: Theme.accent-soft;
+        }
 
         // (#group-dot 2026-09-14) 输入框**右缘**的组色回显:value 对应的那个组
         // 的色点。Slint 没有"按名查数组"的写法,这里用一组**绝对定位叠放**的色点,
@@ -317,8 +1039,8 @@ component GroupCombo inherits VerticalLayout {
 
         // Hide on focus: IME preedit is visible before value is committed.
         if root.value == "" && !ginput.has-focus : Text {
-            x: 10px;
-            width: parent.width - 60px;
+            x: 12px;
+            width: parent.width - 62px;
             height: parent.height;
             overflow: elide;
             text: root.placeholder;
@@ -329,10 +1051,15 @@ component GroupCombo inherits VerticalLayout {
         }
 
         ginput := TextInput {
-            x: 10px;                        // 与 LabeledInput 的文字左缘对齐
-            width: parent.width - 60px;     // room for the ▾ button
+            x: 12px;
+            width: parent.width - 62px;
             height: parent.height;
             text <=> root.value;
+            // (#hifi-v17) 输入框拿到焦点 = 弹层必已收起(close-on-click-outside
+            // 或已选中):这里兜底清展开态镜像,防"框亮着、弹层没了"的假聚焦。
+            changed has-focus => {
+                if (self.has-focus) { root.drop-open = false; }
+            }
             color: Theme.text-primary;
             font-family: Theme.ui-font-family;
             font-size: Theme.fs-md;
@@ -342,23 +1069,33 @@ component GroupCombo inherits VerticalLayout {
 
 
         // ▾ — opens the existing-groups list (no-op when there are none).
+        // (#hifi-v17) chevron 用 Material expand_more(E5CF)——原型是 SVG
+        // stroke chevron,与其余下拉(协议/跳板)同一语言;旧 Unicode "▼"
+        // 字形重、与弹层里的角标不搭。28px inset 居中(hover 浅底)。
         drop-ta := TouchArea {
             x: parent.width - 36px;
             width: 36px;
             height: parent.height;
             mouse-cursor: root.groups.length > 0 ? pointer : default;
-            clicked => { if (root.groups.length > 0) { groups-popup.show(); } }
+            clicked => {
+                if (root.groups.length > 0) {
+                    root.drop-open = true;
+                    groups-popup.show();
+                }
+            }
             Rectangle {
                 width: 28px;
                 height: 28px;
-                border-radius: Theme.radius-sm;
-                background: (drop-ta.has-hover && root.groups.length > 0) ? Theme.bg-hover : transparent;
+                y: (parent.height - self.height) / 2;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: (drop-ta.has-hover && root.groups.length > 0) ? Theme.text-primary.with-alpha(0.24) : transparent;
+                background: (drop-ta.has-hover && root.groups.length > 0) ? Theme.text-primary.with-alpha(0.15) : transparent;
                 Text {
-                    // Plain Unicode caret — the dialog's CJK UI font has this but
-                    // not the Material icon range, which would tofu (#179).
-                    text: "▼";
+                    text: root.groups.length > 0 ? "\u{E5CF}" : "";
+                    font-family: "Material Icons";
                     color: root.groups.length > 0 ? Theme.text-secondary : Theme.border-strong;
-                    font-size: Theme.fs-xs;
+                    font-size: Theme.fs-md;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -367,28 +1104,42 @@ component GroupCombo inherits VerticalLayout {
 
         groups-popup := PopupWindow {
             x: 0;
-            y: parent.height + 3px;
+            y: parent.height + 6px;
             width: parent.width;
             Rectangle {
-                background: Theme.popup-bg-alt;
-                border-radius: Theme.radius-sm;
+                // (#hifi-v17) 弹层 = .pop:panel 底(与弹框同色) + line-2 边 +
+                // 11px 圆角;旧 popup-bg-alt + radius-sm 又灰又方,和协议弹层
+                // 也不是一套。
+                background: Theme.popup-bg;
+                border-radius: 11px;
                 border-width: 1px;
-                border-color: Theme.border-subtle;
+                border-color: Theme.line-2;
+                drop-shadow-blur: 18px;
+                drop-shadow-color: #00000066;
                 VerticalLayout {
-                    padding: 4px;
+                    padding: 5px;
                     spacing: 1px;
                     for g in root.groups : Rectangle {
-                        height: 28px;
-                        border-radius: Theme.radius-sm;
-                        background: g-ta.has-hover ? Theme.bg-hover : transparent;
+                        // .pop .item:padding 8px 9px ≈ 32px 行、8px 圆角;
+                        // hover = field-2(亮半档),选中 = accent-soft 淡染。
+                        height: 32px;
+                        border-radius: 8px;
+                        background: g-ta.has-hover ? Theme.field-2
+                            : (root.value == g.name ? Theme.accent-soft : transparent);
                         g-ta := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.value = g.name; groups-popup.close(); }
+                            clicked => {
+                                root.value = g.name;
+                                groups-popup.close();
+                                // Slint 1.16 的 PopupWindow 无 closed 回调,
+                                // 展开态镜像在选择/窗口失焦两路手动清。
+                                root.drop-open = false;
+                            }
                         }
                         // (#group-dot 2026-09-14) 色点 + 组名。无色组不画点,但
                         // **保留 8px 空位**,所有组名左缘因此对齐(与输入框同口径)。
                         Rectangle {
-                            x: 10px;
+                            x: 9px;
                             y: (parent.height - self.height) / 2;
                             width: 8px;
                             height: 8px;
@@ -396,15 +1147,15 @@ component GroupCombo inherits VerticalLayout {
                             background: g.hex != "" ? g.color : transparent;
                         }
                         Text {
-                            x: 26px;
-                            width: parent.width - 80px;
+                            x: 25px;
+                            width: parent.width - 90px;
                             text: g.name;
                             color: Theme.text-primary;
                             font-size: Theme.fs-md;
                             vertical-alignment: center;
                             overflow: elide;
                         }
-                        // (#group-dot-r2 2026-09-15) 右缘成员数(muted,弱化)。
+                        // (#group-dot-r2) 右缘成员数(.cnt:muted 弱化、右对齐)。
                         Text {
                             x: parent.width - 44px;
                             width: 34px;
@@ -419,6 +1170,13 @@ component GroupCombo inherits VerticalLayout {
             }
         }
     }
+    Text {
+        visible: root.hint != "";
+        text: root.hint;
+        color: Theme.text-muted;
+        font-size: Theme.fs-xs;
+        overflow: elide;
+    }
 }
 
 // Read-only dropdown picking an SSH jump host from a fixed list of saved
@@ -428,7 +1186,8 @@ component JumpCombo inherits VerticalLayout {
     in property <string> label;
     in property <[string]> choices;      // display labels; index 0 = "no jump host"
     in-out property <int> selected-index: 0;
-    spacing: 4px;
+    spacing: 5px;
+    property <bool> drop-open: false;
 
     Text {
         text: root.label;
@@ -437,19 +1196,31 @@ component JumpCombo inherits VerticalLayout {
     }
 
     Rectangle {
-        height: 32px;
-        border-radius: Theme.radius-sm;
+        height: 38px;
+        border-radius: 9px;
         border-width: 1px;
-    border-color: jump-ta.has-hover ? Theme.accent : Theme.border-strong;
-    background: Theme.bg-elevated;
+        border-color: root.drop-open ? Theme.accent
+            : (jump-ta.has-hover ? Theme.line-2 : Theme.border-control);
+        background: root.drop-open ? Theme.field-2 : Theme.field;
+        if root.drop-open : Rectangle {
+            x: -3px; y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 11px;
+            border-width: 3px;
+            border-color: Theme.accent-soft;
+        }
 
         jump-ta := TouchArea {
             mouse-cursor: pointer;
-            clicked => { jump-popup.show(); }
+            clicked => {
+                root.drop-open = true;
+                jump-popup.show();
+            }
         }
 
         Text {
-            x: 10px;
+            x: 12px;
             width: parent.width - 44px;
             height: parent.height;
             text: (root.selected-index >= 0 && root.selected-index < root.choices.length)
@@ -461,15 +1232,16 @@ component JumpCombo inherits VerticalLayout {
         }
 
         Rectangle {
-            x: parent.width - 36px;
-            width: 28px;
-            height: 28px;
-            border-radius: Theme.radius-sm;
-            background: jump-ta.has-hover ? Theme.bg-hover : transparent;
+            x: parent.width - 30px;
+            y: (parent.height - 14px) / 2;
+            width: 14px;
+            height: 14px;
             Text {
-                text: "▼";
-                color: Theme.text-secondary;
-                font-size: Theme.fs-xs;
+                width: 100%; height: 100%;
+                text: "\u{E5CF}";
+                font-family: "Material Icons";
+                color: (jump-ta.has-hover || root.drop-open) ? Theme.text-secondary : Theme.text-muted;
+                font-size: 14px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -477,32 +1249,56 @@ component JumpCombo inherits VerticalLayout {
 
         jump-popup := PopupWindow {
             x: 0;
-            y: parent.height + 3px;
+            y: parent.height + 6px;
             width: parent.width;
+            close-policy: close-on-click-outside;
             Rectangle {
-                background: Theme.popup-bg-alt;
-                border-radius: Theme.radius-sm;
+                background: Theme.popup-bg;
+                border-radius: 11px;
                 border-width: 1px;
-                border-color: Theme.border-subtle;
+                border-color: Theme.line-2;
+                drop-shadow-blur: 18px;
+                drop-shadow-color: #00000066;
                 VerticalLayout {
-                    padding: 4px;
+                    padding: 5px;
                     spacing: 1px;
                     for c[idx] in root.choices : Rectangle {
-                        height: 28px;
-                        border-radius: Theme.radius-sm;
-                        background: c-ta.has-hover ? Theme.bg-hover : transparent;
+                        height: 32px;
+                        border-radius: 8px;
+                        background: c-ta.has-hover ? Theme.field-2
+                            : (root.selected-index == idx ? Theme.accent-soft : transparent);
                         c-ta := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.selected-index = idx; jump-popup.close(); }
+                            clicked => {
+                                root.selected-index = idx;
+                                root.drop-open = false;
+                                jump-popup.close();
+                            }
                         }
                         Text {
-                            x: 10px;
-                            width: parent.width - 20px;
+                            x: 9px;
+                            width: parent.width - 32px;
+                            height: parent.height;
                             text: c;
                             color: Theme.text-primary;
                             font-size: Theme.fs-md;
                             vertical-alignment: center;
                             overflow: elide;
+                        }
+                        Rectangle {
+                            x: parent.width - 23px;
+                            y: (parent.height - 14px) / 2;
+                            width: 14px;
+                            height: 14px;
+                            Text {
+                                width: 100%; height: 100%;
+                                text: root.selected-index == idx ? "\u{E5CA}" : "";
+                                font-family: "Material Icons";
+                                color: Theme.accent;
+                                font-size: 14px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
                         }
                     }
                 }
@@ -550,54 +1346,277 @@ export component SessionDialog inherits Rectangle {
     in-out property <bool> draft-disable-shell-integration: false;
     in-out property <string> draft-note;
     in-out property <string> test-status;
+    in-out property <bool> serial-missing: false;
 
     // Port forwards / tunnels (#56). Every row is an editable form (#277).
     in property <[PortFwd]> forwards;
     in property <[TriggerDraft]> triggers;
     property <bool> show-advanced: false;   // collapse proxy + forwarding (#56)
 
+    // 未实现协议(RDP / VNC)的「预览」态:选中它只预览布局,不可创建。
+    in-out property <string> preview-kind: "";
+    property <int> host-focus-seq: 0;
+    property <int> serial-focus-seq: 0;
+
     callback submit(SessionDraft);
     callback test-connection(SessionDraft);
     callback cancel();
     callback add-forward();
+    callback add-sample-forward();
     callback update-forward(int /* index */, PortFwd);
     callback delete-forward(int /* index */);
     callback add-trigger();
+    callback add-sample-trigger();
     callback update-trigger(int /* index */, TriggerDraft);
     callback delete-trigger(int /* index */);
     callback pick-key-file();   // open a native file picker for the private key
 
     visible: is-open;
-    background: #00000080;
+    background: Theme.modal-scrim;
+
+    property <bool> is-preview: root.preview-kind != "" && root.draft-kind == root.preview-kind;
+    property <bool> is-real: root.draft-kind == "ssh" || root.draft-kind == "serial" || root.draft-kind == "telnet";
+    function proto-glyph(id: string) -> string {
+        return Theme.protocol-glyph(id);
+    }
+    function header-sub() -> string {
+        if (root.is-editing) {
+            return @tr("Edit the {0} connection", root.proto-label(root.draft-kind));
+        }
+        if (root.is-preview) {
+            return @tr("Configure a {0} connection (preview · not implemented yet)", root.proto-label(root.draft-kind));
+        }
+        return root.proto-sub(root.draft-kind);
+    }
+    function proto-label(id: string) -> string {
+        if (id == "serial") { return @tr("Serial"); }
+        if (id == "telnet") { return "Telnet"; }
+        if (id == "rdp") { return "RDP"; }
+        if (id == "vnc") { return "VNC"; }
+        return "SSH";
+    }
+    function proto-sub(id: string) -> string {
+        if (id == "serial") { return @tr("Configure a local serial (Serial) connection"); }
+        if (id == "telnet") { return @tr("Configure a Telnet connection"); }
+        if (id == "rdp") { return @tr("Configure a remote desktop connection"); }
+        if (id == "vnc") { return @tr("Configure a VNC connection"); }
+        return @tr("Configure an SSH connection");
+    }
+    function default-port-of(id: string) -> string {
+        if (id == "telnet") { return "23"; }
+        if (id == "rdp") { return "3389"; }
+        if (id == "vnc") { return "5900"; }
+        return "22";
+    }
+    function is-default-port(p: string) -> bool {
+        return p == "22" || p == "23" || p == "3389" || p == "5900" || p == "";
+    }
+    function set-kind(id: string) {
+        if (root.is-default-port(root.draft-port) && id != "serial") {
+            root.draft-port = root.default-port-of(id);
+        }
+        if (id != root.preview-kind) {
+            root.preview-kind = "";
+        }
+        root.draft-kind = id;
+        root.host-missing = false;
+        root.serial-missing = false;
+        root.test-status = "";
+        root.show-advanced = false;
+    }
+    function start-preview(id: string) {
+        root.preview-kind = id;
+        root.set-kind(id);
+    }
+    function group-hint() -> string {
+        if (root.draft-group == "") {
+            return @tr("Choose an existing group, or type a new name");
+        }
+        if (root.session-groups.length > 0 && root.session-groups[0].name == root.draft-group) {
+            return @tr("Existing group «{0}» · {1} sessions", root.session-groups[0].name, root.session-groups[0].count);
+        }
+        if (root.session-groups.length > 1 && root.session-groups[1].name == root.draft-group) {
+            return @tr("Existing group «{0}» · {1} sessions", root.session-groups[1].name, root.session-groups[1].count);
+        }
+        if (root.session-groups.length > 2 && root.session-groups[2].name == root.draft-group) {
+            return @tr("Existing group «{0}» · {1} sessions", root.session-groups[2].name, root.session-groups[2].count);
+        }
+        if (root.session-groups.length > 3 && root.session-groups[3].name == root.draft-group) {
+            return @tr("Existing group «{0}» · {1} sessions", root.session-groups[3].name, root.session-groups[3].count);
+        }
+        if (root.session-groups.length > 4 && root.session-groups[4].name == root.draft-group) {
+            return @tr("Existing group «{0}» · {1} sessions", root.session-groups[4].name, root.session-groups[4].count);
+        }
+        if (root.session-groups.length > 5 && root.session-groups[5].name == root.draft-group) {
+            return @tr("Existing group «{0}» · {1} sessions", root.session-groups[5].name, root.session-groups[5].count);
+        }
+        return @tr("Will create group «{0}»", root.draft-group);
+    }
+    function name-hint() -> string {
+        if (root.draft-name != "") { return ""; }
+        if (root.draft-kind == "serial") {
+            return root.draft-serial-port == "" ? "" : @tr("Will be named «{0}» from the serial port", root.draft-serial-port);
+        }
+        return root.draft-host == "" ? "" : @tr("Will be named «{0}» from the host", root.draft-host);
+    }
+    // 串口参数:Slint 内置 ComboBox 的 model 只能是 [string],而 draft-* 里存的是
+    // 协议值(none / odd / even / hardware / software)。这里做显示文本 ↔ 协议值的
+    // 双向映射,保证提交给 Rust 的仍是协议值。
+    function parity-text(v: string) -> string {
+        if (v == "odd") { return @tr("Odd"); }
+        if (v == "even") { return @tr("Even"); }
+        return @tr("None");
+    }
+    function parity-from-text(t: string) -> string {
+        if (t == @tr("Odd")) { return "odd"; }
+        if (t == @tr("Even")) { return "even"; }
+        return "none";
+    }
+    function flow-text(v: string) -> string {
+        if (v == "hardware") { return @tr("Hardware"); }
+        if (v == "software") { return @tr("Software"); }
+        return @tr("None");
+    }
+    function flow-from-text(t: string) -> string {
+        if (t == @tr("Hardware")) { return "hardware"; }
+        if (t == @tr("Software")) { return "software"; }
+        return "none";
+    }
+    function footer-status-color() -> brush {
+        if (root.host-missing || root.serial-missing) { return Theme.danger; }
+        if (root.test-status == @tr("Connection OK")) { return Theme.success; }
+        if (root.test-status == @tr("Testing...")) { return Theme.text-muted; }
+        if (root.test-status != "") { return Theme.danger; }
+        return Theme.text-muted;
+    }
+    function footer-status-text() -> string {
+        if (root.host-missing) { return @tr("Please enter a host / IP address."); }
+        if (root.serial-missing) { return @tr("Please enter a serial port."); }
+        return root.test-status;
+    }
+    function footer-status-icon() -> string {
+        if (root.host-missing || root.serial-missing) { return "\u{E000}"; }
+        if (root.test-status == @tr("Connection OK")) { return "\u{E5CA}"; }
+        if (root.test-status == @tr("Testing...")) { return ""; }
+        if (root.test-status != "") { return "\u{E000}"; }
+        return "";
+    }
+    function focus-error-field() {
+        if (root.host-missing) { root.host-focus-seq += 1; }
+        if (root.serial-missing) { root.serial-focus-seq += 1; }
+    }
+    function make-draft() -> SessionDraft {
+        return {
+            id: root.draft-id,
+            name: root.draft-name,
+            kind: root.draft-kind,
+            host: root.draft-host,
+            port: root.draft-port.to-float(),
+            user: root.draft-user,
+            auth: root.draft-auth,
+            password: root.draft-password,
+            private-key-path: root.draft-key-path,
+            private-key-inline: root.draft-key-inline,
+            private-key-inline-mode: root.draft-key-inline-mode,
+            proxy: (root.draft-proxy-type == "none" || root.draft-proxy-hostport == "") ? ""
+                 : root.draft-proxy-type == "http" ? "http://" + root.draft-proxy-hostport
+                 : "socks5://" + root.draft-proxy-hostport,
+            group: root.draft-group,
+            serial-port: root.draft-serial-port,
+            baud-rate: root.draft-baud.to-float(),
+            data-bits: root.draft-data-bits.to-float(),
+            stop-bits: root.draft-stop-bits.to-float(),
+            parity: root.draft-parity,
+            flow-control: root.draft-flow,
+            encoding: root.draft-encoding,
+            vt100-drawing: root.draft-vt100-drawing,
+            disable-shell-integration: root.draft-disable-shell-integration,
+            note: root.draft-note,
+            jump-session-id: (root.draft-jump-index > 0 && root.draft-jump-index < root.jump-ids.length)
+                ? root.jump-ids[root.draft-jump-index] : "",
+        };
+    }
+    function try-submit() {
+        if (root.is-preview) { return; }
+        if (root.draft-kind != "serial" && root.draft-host == "") {
+            root.host-missing = true;
+            root.host-focus-seq += 1;
+            return;
+        }
+        if (root.draft-kind == "serial" && root.draft-serial-port == "") {
+            root.serial-missing = true;
+            root.serial-focus-seq += 1;
+            return;
+        }
+        root.host-missing = false;
+        root.serial-missing = false;
+        root.submit(root.make-draft());
+    }
+    function try-test() {
+        if (root.draft-kind != "serial" && root.draft-host == "") {
+            root.host-missing = true;
+            root.host-focus-seq += 1;
+            return;
+        }
+        if (root.draft-kind == "serial" && root.draft-serial-port == "") {
+            root.serial-missing = true;
+            root.serial-focus-seq += 1;
+            return;
+        }
+        root.host-missing = false;
+        root.serial-missing = false;
+        root.test-status = @tr("Testing...");
+        root.test-connection(root.make-draft());
+    }
 
     // Clear the host-required flag each time the dialog opens (#110).
     changed is-open => {
         if (self.is-open) {
             self.host-missing = false;
+            self.serial-missing = false;
+            self.host-focus-seq = 0;
+            self.serial-focus-seq = 0;
+            self.preview-kind = "";
+            self.show-advanced = false;
+            self.test-status = "";
         }
     }
 
-    // Swallow clicks on the backdrop
+    // Swallow clicks on the backdrop (dialog stays open).
     TouchArea {
         width: 100%; height: 100%;
     }
+    FocusScope {
+        width: 100%;
+        height: 100%;
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.cancel();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
 
-    Rectangle {
-        width: 440px;
-        // Height follows the content, but never exceeds the window — past that
-        // the body scrolls (the dialog grows with the advanced section / many
-        // port forwards) (#56).
-        height: min(body.preferred-height + 53px, parent.height - 40px);
+    dlg-card := Rectangle {
+        width: min(600px, parent.width - 48px);
+        // (#dialog-fit 2026-09-18) 高度由**内容**决定,上限才是视口 - 32px。
+        // 原先取视口 78%,全屏时弹窗被撑成一整屏、内容只占上半截,下面大片留白,
+        // 且内容超高时还会把首字段挤出可视区(打开就要往上滚)。
+        height: min(body.preferred-height + hdr.height + foot.height + 2px, parent.height - 32px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.popup-bg;
-        border-radius: Theme.radius-lg;
+        clip: true;
+        // (#hifi-v17) 对齐高保真 .dialog:1px **line-2** 外框 + 16px 圆角。
+        border-radius: Theme.radius-xl;
         border-width: 1px;
-        border-color: Theme.border-strong;
+        border-color: Theme.line-2;
         drop-shadow-blur: 24px;
         drop-shadow-color: #00000080;
 
-        // Prevent backdrop click from propagating when user clicks inside the card
         TouchArea {
             width: 100%; height: 100%;
         }
@@ -605,34 +1624,66 @@ export component SessionDialog inherits Rectangle {
         VerticalLayout {
             spacing: 0px;
 
-        Rectangle {
+        hdr := Rectangle {
             width: 100%;
-            height: 52px;
-            background: Theme.bg-panel-alt;
-            border-radius: Theme.radius-lg;
+            height: 49px;
+            // (#hifi-v17) 头部与内容**同底色**(原型 .dlg-head 无独立底色),
+            // 只靠 border-bottom 分界;旧 bg-panel-alt 色块把头部切成一条带。
+            background: transparent;
 
             HorizontalLayout {
                 padding-left: 20px;
-                padding-right: 10px;
+                padding-right: 16px;
                 spacing: 10px;
 
-                Text {
-                    text: is-editing ? @tr("Edit session") : @tr("New session");
-                    color: Theme.text-primary;
-                    font-size: Theme.fs-lg;
-                    font-weight: 600;
-                    vertical-alignment: center;
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 8px;
+                    background: Theme.accent-soft;
+                    Text {
+                        text: root.proto-glyph(root.draft-kind);
+                        font-family: "Material Icons";
+                        color: Theme.accent;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // (#head-oneline 2026-09-18) 标题与副标题**同一行**并排(高保真 v17):
+                // 原先竖排两行占掉 36px,是头部偏高的主因;单行后头部 61px → 49px,
+                // 标题仍是最强视觉,副标题退为行内说明(可省略号截断)。
+                // (#head-oneline-align 2026-09-18) 标题组必须**靠左**紧跟字形块。
+                // 上一版给这里加了 alignment: center,HorizontalLayout 的主轴对齐
+                // 把「标题+副标题」整体推到了弹窗中央,与之字形块脱开。
+                // 垂直居中由布局自身的交叉轴行为负责,不需要 alignment。
+                HorizontalLayout {
+                    spacing: 9px;
                     horizontal-stretch: 1;
-                    overflow: elide;
+                    Text {
+                        text: is-editing ? @tr("Edit session") : @tr("New session");
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-lg;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.header-sub();
+                        color: Theme.text-muted;
+                        font-size: 11.5px;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
                 }
 
                 Rectangle {
-                    width: 32px;
-                    height: 32px;
+                    width: 28px;
+                    height: 28px;
                     y: (parent.height - self.height) / 2;
-                    border-radius: Theme.radius-sm;
-                    // Match ProcWindow's close button: red (#e81123) on hover,
-                    // white glyph, smooth 90ms transition (#close-hover-red).
+                    border-radius: 7px;
                     background: close-ta.has-hover ? #e81123 : transparent;
                     animate background { duration: 90ms; }
                     close-ta := TouchArea {
@@ -642,8 +1693,8 @@ export component SessionDialog inherits Rectangle {
                     Text {
                         text: "\u{E5CD}";
                         font-family: "Material Icons";
-                        color: close-ta.has-hover ? white : Theme.text-secondary;
-                        font-size: 18px;
+                        color: close-ta.has-hover ? white : Theme.text-muted;
+                        font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -654,662 +1705,973 @@ export component SessionDialog inherits Rectangle {
         Rectangle {
             width: 100%;
             height: 1px;
-            background: Theme.border-subtle;
+            background: Theme.border-control;
         }
 
-        Flickable {
+        Rectangle {
             width: 100%;
             vertical-stretch: 1;
-            viewport-width: self.width;
-            viewport-height: body.preferred-height;
-            body := VerticalLayout {
-                padding: 20px;
-                spacing: 12px;
+            clip: true;
 
-            // Connection type selector (always shown).
-            VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Connection type");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    SegOption {
-                        label: "SSH";
-                        active: root.draft-kind == "ssh";
-                        clicked => {
-                            // Switch protocol defaults while leaving non-default ports untouched (#303).
-                            if (root.draft-kind != "ssh" && root.draft-port == "23") {
-                                root.draft-port = "22";
+            body-flick := Flickable {
+                width: 100%;
+                height: 100%;
+                viewport-width: self.width;
+                viewport-height: body.preferred-height;
+                body := VerticalLayout {
+                    padding-top: 16px;
+                    padding-right: 20px;
+                    padding-bottom: 16px;
+                    padding-left: 20px;
+                    spacing: 14px;
+
+                    // ① 标识 —— 名称 / 分组 / 备注是所有协议共用的「标识」信息,置顶。
+                    // (高保真 sectionsHTML 把 identitySection 放在最前,再是「连到哪」。)
+                    VerticalLayout {
+                        spacing: 10px;
+                        // (#identity-row 2026-09-18) 名称 + 分组 **同行**:两者都是简短的
+                        // "标识"信息,同行后标识区从 3 行降到 2 行(备注仍整行)。
+                        HorizontalLayout {
+                            spacing: 10px;
+                            // (#hifi-v17 2026-09-18) 原型这两列是 CSS Grid `1fr 1fr`:
+                            // **严格对半**,列宽与内容无关。Slint 的 HorizontalLayout
+                            // 在 stretch 相等时仍受 preferred-width 影响 —— 名称列
+                            // 的 hint("将使用主机地址命名为「长主机名」")一出现就把
+                            // 列首选宽撑大、分组框被挤窄,主机每敲一个字宽度都在变
+                            // (用户实测)。修法:hint 单行省略 + 两个 **min-width 0**
+                            // 的等权列,列宽只由权重决定,不随内容抖动。
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                min-width: 0;
+                                spacing: 5px;
+                                LabeledInput {
+                                    dialog-field: true;
+                                    input-height: 38px;
+                                    auto-focus: true;
+                                    label: @tr("Name (optional)");
+                                    placeholder: root.draft-kind == "serial"
+                                        ? @tr("Leave blank to use the serial port")
+                                        : @tr("Leave blank to name from the host");
+                                    value <=> root.draft-name;
+                                    clearable: true;
+                                    canceled => { root.cancel(); }
+                                    accepted => { root.try-submit(); }
+                                }
+                                if root.name-hint() != "" : Text {
+                                    text: root.name-hint();
+                                    color: Theme.text-muted;
+                                    font-size: Theme.fs-xs;
+                                    overflow: elide;
+                                }
                             }
-                            root.draft-kind = "ssh";
-                        }
-                    }
-                    SegOption {
-                        label: @tr("Serial");
-                        active: root.draft-kind == "serial";
-                        clicked => { root.draft-kind = "serial"; }
-                    }
-                    SegOption {
-                        label: "Telnet";
-                        active: root.draft-kind == "telnet";
-                        clicked => {
-                            if (root.draft-kind != "telnet" && root.draft-port == "22") {
-                                root.draft-port = "23";
+                            GroupCombo {
+                                horizontal-stretch: 1;
+                                min-width: 0;
+                                label: @tr("Group (optional)");
+                                placeholder: @tr("e.g. production / staging");
+                                value <=> root.draft-group;
+                                groups: root.session-groups;
+                                hint: root.group-hint();
                             }
-                            root.draft-kind = "telnet";
+                        }
+                        LabeledInput {
+                            dialog-field: true;
+                            input-height: 38px;
+                            label: @tr("Note (optional)");
+                            placeholder: @tr("e.g. internal only · maintenance window Friday 22:00");
+                            value <=> root.draft-note;
+                            clearable: true;
+                            canceled => { root.cancel(); }
+                            accepted => { root.try-submit(); }
                         }
                     }
-                }
-            }
 
-            LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: @tr("Name");
-                placeholder: @tr("e.g. production web-01");
-                value <=> root.draft-name;
-            }
+                    Rectangle { height: 1px; background: Theme.border-control; }
 
-            // Optional group/folder to organize sessions by business (#41).
-            // Editable + dropdown of existing groups (#179).
-            GroupCombo {
-                label: @tr("Group (optional)");
-                placeholder: @tr("e.g. Production / Database");
-                value <=> root.draft-group;
-                groups: root.session-groups;
-            }
-
-            // Free-form note — extra info to keep with the session (B站 suggestion).
-            LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: @tr("Note (optional)");
-                placeholder: @tr("Anything to remember about this host");
-                value <=> root.draft-note;
-            }
-
-            // ── SSH / Telnet share host + port ──────────────────────────────
-            if root.draft-kind != "serial" : HorizontalLayout {
-                spacing: 10px;
-                LabeledInput {
-                    input-background: Theme.bg-elevated;
-                    idle-border: Theme.border-strong;
-                    label: @tr("Host / IP");
-                    placeholder: "192.168.1.10";
-                    value <=> root.draft-host;
-                    horizontal-stretch: 2;
-                }
-                LabeledInput {
-                    input-background: Theme.bg-elevated;
-                    idle-border: Theme.border-strong;
-                    label: @tr("Port");
-                    placeholder: root.draft-kind == "telnet" ? "23" : "22";
-                    value <=> root.draft-port;
-                    horizontal-stretch: 1;
-                }
-            }
-
-            // Inline error when a host-less SSH/Telnet session is submitted (#110).
-            if root.host-missing && root.draft-host == "" && root.draft-kind != "serial" : Text {
-                text: @tr("Please enter a host / IP address.");
-                color: Theme.danger;
-                font-size: Theme.fs-sm;
-            }
-
-            // ── SSH-only: user + auth ───────────────────────────────────────
-            if root.draft-kind == "ssh" : LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: @tr("Username");
-                placeholder: @tr("Prompted on connect if blank");
-                value <=> root.draft-user;
-            }
-
-            if root.draft-kind == "ssh" : VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Authentication");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    SegOption {
-                        label: @tr("Password");
-                        active: root.draft-auth == "password";
-                        clicked => { root.draft-auth = "password"; }
+                    // ② 连接到哪 —— 「连接协议 + 主机/串口 + 端口/波特率」同一行:
+                    // 三者同属"连到哪",放一行既省高度,也让"协议决定主机字段语义"一眼可见。
+                    if root.is-real : VerticalLayout {
+                        spacing: 10px;
+HorizontalLayout {
+    spacing: 12px;
+    ProtoSelect {
+        label: @tr("Connection protocol");
+        value: root.draft-kind;
+        previewing: root.is-preview;
+        horizontal-stretch: 1.25;
+        min-width: 0;
+        picked(id) => {
+            if (id == "rdp" || id == "vnc") { root.start-preview(id); } else { root.set-kind(id); }
+        }
+    }
+    if root.draft-kind != "serial" : LabeledInput {
+        dialog-field: true;
+        input-height: 38px;
+        label: @tr("Host / IP");
+        placeholder: "192.168.1.10";
+        value <=> root.draft-host;
+        horizontal-stretch: 1.5;
+        min-width: 0;
+        clearable: true;
+        error: root.host-missing && root.draft-host == "";
+        focus-seq: root.host-focus-seq;
+        canceled => { root.cancel(); }
+        accepted => { root.try-submit(); }
+    }
+    if root.draft-kind != "serial" : LabeledInput {
+        dialog-field: true;
+        input-height: 38px;
+        label: @tr("Port");
+        placeholder: root.default-port-of(root.draft-kind);
+        value <=> root.draft-port;
+        horizontal-stretch: 0.8;
+        min-width: 0;
+        clearable: true;
+        canceled => { root.cancel(); }
+        accepted => { root.try-submit(); }
+    }
+    if root.draft-kind == "serial" : LabeledInput {
+        dialog-field: true;
+        input-height: 38px;
+        label: @tr("Serial port");
+        placeholder: "COM3  /  /dev/ttyUSB0";
+        value <=> root.draft-serial-port;
+        horizontal-stretch: 1.5;
+        min-width: 0;
+        clearable: true;
+        error: root.serial-missing && root.draft-serial-port == "";
+        focus-seq: root.serial-focus-seq;
+        canceled => { root.cancel(); }
+        accepted => { root.try-submit(); }
+    }
+    if root.draft-kind == "serial" : LabeledInput {
+        dialog-field: true;
+        input-height: 38px;
+        label: @tr("Baud rate");
+        placeholder: "115200";
+        value <=> root.draft-baud;
+        horizontal-stretch: 0.8;
+        min-width: 0;
+        clearable: true;
+        canceled => { root.cancel(); }
+        accepted => { root.try-submit(); }
+    }
+}
+if root.draft-kind == "serial" : HorizontalLayout {
+    spacing: 12px;
+    SelectField {
+        horizontal-stretch: 1;
+        min-width: 0;
+        label: @tr("Data bits");
+        choices: ["7", "8"];
+        value: root.draft-data-bits;
+        picked(value) => { root.draft-data-bits = value; }
+    }
+    SelectField {
+        horizontal-stretch: 1;
+        min-width: 0;
+        label: @tr("Stop bits");
+        choices: ["1", "2"];
+        value: root.draft-stop-bits;
+        picked(value) => { root.draft-stop-bits = value; }
+    }
+    SelectField {
+        horizontal-stretch: 1;
+        min-width: 0;
+        label: @tr("Parity");
+        choices: [@tr("None"), @tr("Odd"), @tr("Even")];
+        value: root.parity-text(root.draft-parity);
+        picked(value) => { root.draft-parity = root.parity-from-text(value); }
+    }
+    SelectField {
+        horizontal-stretch: 1;
+        min-width: 0;
+        label: @tr("Flow control");
+        choices: [@tr("None"), @tr("Hardware"), @tr("Software")];
+        value: root.flow-text(root.draft-flow);
+        picked(value) => { root.draft-flow = root.flow-from-text(value); }
+    }
+}
                     }
-                    SegOption {
-                        label: @tr("Keyboard-interactive");
-                        active: root.draft-auth == "keyboard-interactive";
-                        clicked => { root.draft-auth = "keyboard-interactive"; }
-                    }
-                    SegOption {
-                        label: @tr("Private key");
-                        active: root.draft-auth == "key";
-                        clicked => { root.draft-auth = "key"; }
-                    }
-                }
-            }
-
-            if root.draft-kind == "ssh" && (root.draft-auth == "password" || root.draft-auth == "keyboard-interactive") : LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: root.draft-auth == "keyboard-interactive" ? @tr("Password / first answer") : @tr("Password");
-                placeholder: root.is-editing ? @tr("Leave blank to keep the current password") : "••••••••";
-                password: true;
-                value <=> root.draft-password;
-            }
-
-            if root.draft-kind == "ssh" && root.draft-auth == "keyboard-interactive" : Text {
-                text: @tr("Server prompts are shown during login; MFA / OTP prompts will ask again.");
-                color: Theme.text-muted;
-                font-size: Theme.fs-xs;
-                wrap: word-wrap;
-            }
-
-            if root.draft-kind == "ssh" && root.draft-auth == "key" : VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Private key");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    SegOption {
-                        label: @tr("Private key file");
-                        active: !root.draft-key-inline-mode;
-                        clicked => { root.draft-key-inline-mode = false; }
-                    }
-                    SegOption {
-                        label: @tr("Paste private key");
-                        active: root.draft-key-inline-mode;
-                        clicked => { root.draft-key-inline-mode = true; }
-                    }
-                }
-                if !root.draft-key-inline-mode : VerticalLayout {
-                    spacing: 4px;
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        height: 32px;
-                        horizontal-stretch: 1;
-                        border-radius: Theme.radius-sm;
-                        border-width: 1px;
-                        border-color: keyin.has-focus ? Theme.accent : Theme.border-strong;
-                        background: Theme.bg-elevated;
-                        keyin := TextInput {
-                            x: 10px; y: 0px;
-                            width: parent.width - 20px;
-                            height: parent.height;
-                            text <=> root.draft-key-path;
-                            color: Theme.text-primary;
-                            font-family: Theme.ui-font-family; // CJK-capable (#54)
-                            font-size: Theme.fs-md;
-                            vertical-alignment: center;
-                            single-line: true;
+                    if !root.is-real : VerticalLayout {
+                        spacing: 10px;
+                        Rectangle {
+                            border-radius: 11px;
+                            border-width: 1px;
+                            border-color: Theme.border-control;
+                            background: Theme.field;
+                            VerticalLayout {
+                                padding-top: 12px;
+                                padding-right: 13px;
+                                padding-bottom: 12px;
+                                padding-left: 13px;
+                                HorizontalLayout {
+                                    spacing: 11px;
+                                    Rectangle {
+                                        height: 22px;
+                                        y: 1px;
+                                        border-radius: 7px;
+                                        background: Theme.accent-soft;
+                                        HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 8px;
+                                            Text {
+                                                text: root.proto-label(root.draft-kind);
+                                                color: Theme.accent;
+                                                font-size: Theme.fs-xs;
+                                                font-weight: 500;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        spacing: 3px;
+                                        horizontal-stretch: 1;
+                                        Text {
+                                            text: root.is-preview
+                                                ? @tr("{0} connection · layout preview", root.proto-label(root.draft-kind))
+                                                : @tr("{0} connection · layout reserved", root.proto-label(root.draft-kind));
+                                            color: Theme.text-primary;
+                                            font-size: Theme.fs-sm;
+                                            font-weight: 500;
+                                        }
+                                        Text {
+                                            text: root.draft-kind == "vnc"
+                                                ? @tr("Dedicated options (color depth, read-only / shared, clipboard) TBD; placeholders below.")
+                                                : @tr("Dedicated options (resolution, clipboard / drive redirection, gateway) TBD; placeholders below.");
+                                            color: Theme.text-muted;
+                                            font-size: Theme.fs-xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        if root.draft-key-path == "" : Text {
-                            x: 10px; y: 0px;
-                            height: parent.height;
-                            text: "/home/you/.ssh/id_ed25519";
+                    }
+                    if !root.is-real : Rectangle { height: 1px; background: Theme.border-control; }
+                    if !root.is-real : HorizontalLayout {
+    spacing: 12px;
+    ProtoSelect {
+        label: @tr("Connection protocol");
+        value: root.draft-kind;
+        previewing: root.is-preview;
+        horizontal-stretch: 1.25;
+        min-width: 0;
+        picked(id) => {
+            if (id == "rdp" || id == "vnc") { root.start-preview(id); } else { root.set-kind(id); }
+        }
+    }
+    LabeledInput {
+        dialog-field: true;
+        input-height: 38px;
+        label: @tr("Host / IP");
+        placeholder: root.draft-kind == "rdp" ? "192.168.1.20" : "192.168.1.30";
+        value <=> root.draft-host;
+        horizontal-stretch: 1.5;
+        min-width: 0;
+        clearable: true;
+        error: root.host-missing && root.draft-host == "";
+        focus-seq: root.host-focus-seq;
+        canceled => { root.cancel(); }
+        accepted => { root.try-submit(); }
+    }
+    LabeledInput {
+        dialog-field: true;
+        input-height: 38px;
+        label: @tr("Port");
+        placeholder: root.default-port-of(root.draft-kind);
+        value <=> root.draft-port;
+        horizontal-stretch: 0.8;
+        min-width: 0;
+        clearable: true;
+        canceled => { root.cancel(); }
+        accepted => { root.try-submit(); }
+    }
+}
+
+                    Rectangle { height: 1px; background: Theme.border-control; }
+
+                    if !root.is-real : VerticalLayout {
+                        spacing: 10px;
+                        VerticalLayout {
+                            spacing: 10px;
+                            LabeledInput {
+                                dialog-field: true;
+                                input-height: 38px;
+                                label: @tr("Username");
+                                placeholder: root.draft-kind == "rdp" ? @tr("Administrator") : @tr("Prompted on connect if blank");
+                                value <=> root.draft-user;
+                                clearable: true;
+                                canceled => { root.cancel(); }
+                                accepted => { root.try-submit(); }
+                            }
+                            LabeledInput {
+                                dialog-field: true;
+                                input-height: 38px;
+                                label: @tr("Password");
+                                placeholder: "••••••••";
+                                password: true;
+                                value <=> root.draft-password;
+                                canceled => { root.cancel(); }
+                                accepted => { root.try-submit(); }
+                            }
+                        }
+                    }
+                    if !root.is-real : Rectangle { height: 1px; background: Theme.border-control; }
+
+                    // ③ 身份认证(仅 SSH) —— 先选「认证方式」,再填凭据:
+                    // 谁决定"下面出现哪些字段"谁在前,读起来才顺(#auth-order,高保真 v17)。
+                    if root.draft-kind == "ssh" : VerticalLayout {
+                        spacing: 10px;
+                        VerticalLayout {
+                            spacing: 5px;
+                            Text { text: @tr("Authentication"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                            // (#hifi-v17) .seg = **单一外框**:容器画"这是一组"
+                            // (field 底 + line 边 + 3px 内衬),段内不各自描边;
+                            // 选中 = chip 淡染浮块(非实心 accent),未选中段靠
+                            // hover 浅底提亮文字表达可点。旧版每段各自描边,
+                            // 三个独立按钮视觉散、与原型完全两样。
+                            Rectangle {
+                                height: 36px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: Theme.border-control;
+                                background: Theme.field;
+                                HorizontalLayout {
+                                    padding: 3px;
+                                    spacing: 2px;
+                                    SegOption { label: @tr("Password"); active: root.draft-auth == "password"; clicked => { root.draft-auth = "password"; } }
+                                    SegOption { label: @tr("Keyboard-interactive"); active: root.draft-auth == "keyboard-interactive"; clicked => { root.draft-auth = "keyboard-interactive"; } }
+                                    SegOption { label: @tr("Private key"); active: root.draft-auth == "key"; clicked => { root.draft-auth = "key"; } }
+                                }
+                            }
+                        }
+                        // (#auth-row 2026-09-18) 用户名 + 密码 **同行**:两者都是短字段,
+                        // 同行后认证区少一行,视线也不必在上下行之间来回跳。
+                        if root.draft-auth != "key" : HorizontalLayout {
+                            spacing: 10px;
+                            LabeledInput {
+                                dialog-field: true;
+                                input-height: 38px;
+                                label: @tr("Username");
+                                placeholder: @tr("Prompted on connect if blank");
+                                value <=> root.draft-user;
+                                horizontal-stretch: 1;
+                                clearable: true;
+                                canceled => { root.cancel(); }
+                                accepted => { root.try-submit(); }
+                            }
+                            LabeledInput {
+                                dialog-field: true;
+                                input-height: 38px;
+                                label: root.draft-auth == "keyboard-interactive" ? @tr("Password / first prompt") : @tr("Password");
+                                placeholder: root.is-editing ? @tr("Leave blank to keep the current password") : "••••••••";
+                                password: true;
+                                value <=> root.draft-password;
+                                horizontal-stretch: 1;
+                                canceled => { root.cancel(); }
+                                accepted => { root.try-submit(); }
+                            }
+                        }
+                        if root.draft-auth == "keyboard-interactive" : Text {
+                            text: @tr("Server prompts are shown during login; MFA / OTP prompts will ask again.");
                             color: Theme.text-muted;
-                            font-size: Theme.fs-md;
-                            vertical-alignment: center;
-                        }
-                    }
-                    Rectangle {
-                        width: 64px; height: 32px;
-                        border-radius: Theme.radius-sm;
-                        border-width: 1px;
-                        border-color: Theme.border-subtle;
-                        background: browse-ta.has-hover ? Theme.bg-hover : Theme.bg-elevated;
-                        Text {
-                            text: @tr("Browse…");
-                            color: Theme.text-primary;
-                            font-size: Theme.fs-sm;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                        browse-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.pick-key-file(); }
-                        }
-                    }
-                }
-                Text {
-                    text: @tr("Pick the private key itself (not the .pub public key)");
-                    color: Theme.text-muted;
-                    font-size: Theme.fs-xs;
-                }
-                }
-                if root.draft-key-inline-mode : VerticalLayout {
-                    spacing: 4px;
-                    Rectangle {
-                        height: 118px;
-                        horizontal-stretch: 1;
-                        border-radius: Theme.radius-sm;
-                        border-width: 1px;
-                        border-color: keytext.has-focus ? Theme.accent : Theme.border-strong;
-                        background: Theme.bg-elevated;
-                        keytext := TextInput {
-                            x: 10px;
-                            y: 8px;
-                            width: parent.width - 20px;
-                            height: parent.height - 16px;
-                            text <=> root.draft-key-inline;
-                            color: Theme.text-primary;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.fs-sm;
-                            single-line: false;
+                            font-size: Theme.fs-xs;
                             wrap: word-wrap;
                         }
-                        if root.draft-key-inline == "" : Text {
-                            x: 10px;
-                            y: 8px;
-                            width: parent.width - 20px;
-                            text: "-----BEGIN OPENSSH PRIVATE KEY-----";
-                            color: Theme.text-muted;
-                            font-family: Theme.font-mono;
-                            font-size: Theme.fs-sm;
+                        // 私钥认证的凭据是「密钥 + 口令」,用户名单独一行在前。
+                        if root.draft-auth == "key" : LabeledInput {
+                            dialog-field: true;
+                            input-height: 38px;
+                            label: @tr("Username");
+                            placeholder: @tr("Prompted on connect if blank");
+                            value <=> root.draft-user;
+                            clearable: true;
+                            canceled => { root.cancel(); }
+                            accepted => { root.try-submit(); }
+                        }
+                        if root.draft-auth == "key" : VerticalLayout {
+                            spacing: 4px;
+                            Text { text: @tr("Private key"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                            // (#hifi-v17) 同 .seg 单一外框。
+                            Rectangle {
+                                height: 36px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: Theme.border-control;
+                                background: Theme.field;
+                                HorizontalLayout {
+                                    padding: 3px;
+                                    spacing: 2px;
+                                    SegOption { label: @tr("Private key file"); active: !root.draft-key-inline-mode; clicked => { root.draft-key-inline-mode = false; } }
+                                    SegOption { label: @tr("Paste private key"); active: root.draft-key-inline-mode; clicked => { root.draft-key-inline-mode = true; } }
+                                }
+                            }
+                            if !root.draft-key-inline-mode : VerticalLayout {
+                                spacing: 4px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Rectangle {
+                                        height: 38px;
+                                        horizontal-stretch: 1;
+                                        border-radius: 9px;
+                                        border-width: 1px;
+                                        border-color: keyin.has-focus ? Theme.accent : Theme.border-control;
+                                        background: keyin.has-focus ? Theme.field-2 : Theme.field;
+                                        if keyin.has-focus : Rectangle {
+                                            x: -3px; y: -3px;
+                                            width: parent.width + 6px;
+                                            height: parent.height + 6px;
+                                            border-radius: 11px;
+                                            border-width: 3px;
+                                            border-color: Theme.accent-soft;
+                                        }
+                                        keyin := TextInput {
+                                            x: 12px; y: 0px;
+                                            width: parent.width - 24px;
+                                            height: parent.height;
+                                            text <=> root.draft-key-path;
+                                            color: Theme.text-primary;
+                                            font-family: Theme.ui-font-family;
+                                            font-size: Theme.fs-md;
+                                            vertical-alignment: center;
+                                            single-line: true;
+                                            accepted => { root.try-submit(); }
+                                        }
+                                        if root.draft-key-path == "" && !keyin.has-focus : Text {
+                                            x: 12px; y: 0px;
+                                            height: parent.height;
+                                            text: "/home/you/.ssh/id_ed25519";
+                                            color: Theme.text-muted;
+                                            font-size: Theme.fs-md;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    Rectangle {
+                                        width: 72px; height: 38px;
+                                        border-radius: 9px;
+                                        border-width: 1px;
+                                        border-color: browse-ta.has-hover ? Theme.line-2 : Theme.border-control;
+                                        background: browse-ta.has-hover ? Theme.field-2 : Theme.field;
+                                        Text {
+                                            text: @tr("Browse…");
+                                            color: Theme.text-primary;
+                                            font-size: Theme.fs-sm;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        browse-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.pick-key-file(); }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: @tr("Pick the private key itself (not the .pub public key)");
+                                    color: Theme.text-muted;
+                                    font-size: Theme.fs-xs;
+                                }
+                            }
+                            if root.draft-key-inline-mode : VerticalLayout {
+                                spacing: 4px;
+                                Rectangle {
+                                    height: 118px;
+                                    horizontal-stretch: 1;
+                                    border-radius: 9px;
+                                    border-width: 1px;
+                                    border-color: keytext.has-focus ? Theme.accent : Theme.border-control;
+                                    background: keytext.has-focus ? Theme.field-2 : Theme.field;
+                                    if keytext.has-focus : Rectangle {
+                                        x: -3px; y: -3px;
+                                        width: parent.width + 6px;
+                                        height: parent.height + 6px;
+                                        border-radius: 11px;
+                                        border-width: 3px;
+                                        border-color: Theme.accent-soft;
+                                    }
+                                    keytext := TextInput {
+                                        x: 12px;
+                                        y: 10px;
+                                        width: parent.width - 24px;
+                                        height: parent.height - 20px;
+                                        text <=> root.draft-key-inline;
+                                        color: Theme.text-primary;
+                                        font-family: Theme.font-mono;
+                                        font-size: Theme.fs-sm;
+                                        single-line: false;
+                                        wrap: word-wrap;
+                                    }
+                                    if root.draft-key-inline == "" && !keytext.has-focus : Text {
+                                        x: 12px;
+                                        y: 10px;
+                                        width: parent.width - 24px;
+                                        text: "-----BEGIN OPENSSH PRIVATE KEY-----";
+                                        color: Theme.text-muted;
+                                        font-family: Theme.font-mono;
+                                        font-size: Theme.fs-sm;
+                                    }
+                                }
+                                Text {
+                                    text: @tr("Private key content is encrypted before saving.");
+                                    color: Theme.text-muted;
+                                    font-size: Theme.fs-xs;
+                                }
+                            }
+                        }
+                        if root.draft-auth == "key" : LabeledInput {
+                            dialog-field: true;
+                            input-height: 38px;
+                            label: @tr("Key passphrase");
+                            placeholder: root.is-editing
+                                ? @tr("Leave blank to keep the current passphrase")
+                                : @tr("Leave blank if the key isn't encrypted");
+                            password: true;
+                            value <=> root.draft-password;
+                            canceled => { root.cancel(); }
+                            accepted => { root.try-submit(); }
                         }
                     }
-                    Text {
-                        text: @tr("Private key content is encrypted before saving.");
-                        color: Theme.text-muted;
-                        font-size: Theme.fs-xs;
-                    }
-                }
-            }
+                    if root.draft-kind == "ssh" : Rectangle { height: 1px; background: Theme.border-control; }
 
-            // Passphrase for an *encrypted* private key (#90). Reuses the
-            // password field; blank means the key isn't encrypted (or, when
-            // editing, keep the saved passphrase).
-            if root.draft-kind == "ssh" && root.draft-auth == "key" : LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: @tr("Key passphrase");
-                placeholder: root.is-editing
-                    ? @tr("Leave blank to keep the current passphrase")
-                    : @tr("Leave blank if the key isn't encrypted");
-                password: true;
-                value <=> root.draft-password;
-            }
-
-            // ── Serial-only fields ──────────────────────────────────────────
-            if root.draft-kind == "serial" : LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: @tr("Serial port");
-                placeholder: "COM3  /  /dev/ttyUSB0";
-                value <=> root.draft-serial-port;
-            }
-
-            if root.draft-kind == "serial" : LabeledInput {
-                input-background: Theme.bg-elevated;
-                idle-border: Theme.border-strong;
-                label: @tr("Baud rate");
-                placeholder: "115200";
-                value <=> root.draft-baud;
-            }
-
-            if root.draft-kind == "serial" : VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Data bits / Stop bits / Parity");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    SegOption { label: "7"; active: root.draft-data-bits == "7"; clicked => { root.draft-data-bits = "7"; } }
-                    SegOption { label: "8"; active: root.draft-data-bits == "8"; clicked => { root.draft-data-bits = "8"; } }
-                    Rectangle { width: 8px; }
-                    SegOption { label: "1"; active: root.draft-stop-bits == "1"; clicked => { root.draft-stop-bits = "1"; } }
-                    SegOption { label: "2"; active: root.draft-stop-bits == "2"; clicked => { root.draft-stop-bits = "2"; } }
-                    Rectangle { width: 8px; }
-                    SegOption { label: "N"; active: root.draft-parity == "none"; clicked => { root.draft-parity = "none"; } }
-                    SegOption { label: "O"; active: root.draft-parity == "odd"; clicked => { root.draft-parity = "odd"; } }
-                    SegOption { label: "E"; active: root.draft-parity == "even"; clicked => { root.draft-parity = "even"; } }
-                }
-            }
-
-            if root.draft-kind == "serial" : VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Flow control");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    SegOption { label: @tr("None"); active: root.draft-flow == "none"; clicked => { root.draft-flow = "none"; } }
-                    SegOption { label: @tr("Hardware"); active: root.draft-flow == "hardware"; clicked => { root.draft-flow = "hardware"; } }
-                    SegOption { label: @tr("Software"); active: root.draft-flow == "software"; clicked => { root.draft-flow = "software"; } }
-                }
-            }
-
-            // ── Advanced (collapsed by default): proxy + port forwarding ────
-            if root.draft-kind != "serial" : Rectangle {
-                height: 26px;
-                adv-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.show-advanced = !root.show-advanced; }
-                }
-                HorizontalLayout {
-                    spacing: 4px;
-                    Text {
-                        text: @tr("Advanced (encoding, proxy, tunnels)");
-                        color: adv-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
-                        font-size: Theme.fs-sm;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        text: root.show-advanced ? "\u{E5CE}" : "\u{E5CF}";
-                        font-family: "Material Icons";
-                        color: Theme.text-muted;
-                        font-size: Theme.fs-md;
-                        vertical-alignment: center;
-                    }
-                    Rectangle { horizontal-stretch: 1; }
-                }
-            }
-
-            // ── Terminal character encoding (SSH only) (#338) ───────────────
-            if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Terminal character encoding");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                ComboBox {
-                    model: ["UTF-8", "GBK", "Big5", "Shift_JIS", "EUC-KR", "Windows-1252"];
-                    current-value: root.draft-encoding;
-                    selected(value) => { root.draft-encoding = value; }
-                }
-                Text {
-                    text: @tr("Use GBK for servers configured for GB2312 or GBK output.");
-                    color: Theme.text-muted;
-                    font-size: Theme.fs-xs;
-                }
-                Rectangle { height: 6px; }
-            }
-
-            // ── VT100 line drawing (all session kinds) (#376) ───────────────
-            // Mirror of PuTTY's "Enable VT100 line drawing even in UTF-8 mode":
-            // honor ESC(0 / SO-SI charset switches and map DEC Special Graphics
-            // to box-drawing glyphs even when the encoding is UTF-8.
-            if root.show-advanced : VerticalLayout {
-                spacing: 6px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        width: 18px; height: 18px; y: 1px;
-                        border-radius: 4px;
-                        border-width: 1px;
-                        border-color: root.draft-vt100-drawing ? Theme.accent : Theme.border-strong;
-                        background: root.draft-vt100-drawing ? Theme.accent : transparent;
-                        Text {
-                            text: root.draft-vt100-drawing ? "\u{E5CA}" : "";
-                            font-family: "Material Icons"; color: white; font-size: 14px;
-                            width: 100%; height: 100%;
-                            horizontal-alignment: center; vertical-alignment: center;
+                    // ④ 高级 —— 所有协议统一形态:按钮 + 折叠容器(#adv-uniform)。
+                    // 旧版 Serial 只渲染内容、不渲染开关,从 SSH 切过来会出现"字段露在外面
+                    // 却没有收起按钮"的卡死态;统一后不再有这种不一致。
+                    if root.is-real : VerticalLayout {
+                        spacing: 10px;
+                        Rectangle {
+                            height: 38px;
+                            border-radius: 9px;
+                            border-width: 1px;
+                            border-color: adv-ta.has-hover ? Theme.line-2 : Theme.border-control;
+                            background: Theme.field;
+                            adv-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.show-advanced = !root.show-advanced; }
+                            }
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                spacing: 8px;
+                                Text {
+                                    text: root.show-advanced
+                                        ? @tr("Hide advanced options")
+                                        : @tr("Show advanced options");
+                                    color: adv-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                                    font-size: 12.5px;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                Rectangle {
+                                    width: 16px;
+                                    height: 16px;
+                                    y: (parent.height - self.height) / 2;
+                                    Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: "\u{E5CC}";
+                                        font-family: "Material Icons";
+                                        color: Theme.text-muted;
+                                        font-size: Theme.fs-md;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        transform-origin: { x: 8px, y: 8px };
+                                        transform-rotation: root.show-advanced ? 90deg : 0deg;
+                                        animate transform-rotation { duration: 240ms; }
+                                    }
+                                }
+                            }
                         }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.draft-vt100-drawing = !root.draft-vt100-drawing; }
+                        if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
+                            spacing: 4px;
+                            Text { text: @tr("Terminal character encoding"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                            SelectField {
+                                choices: ["UTF-8", "GBK", "Big5", "Shift_JIS", "EUC-KR", "Windows-1252"];
+                                value: root.draft-encoding;
+                                picked(value) => { root.draft-encoding = value; }
+                            }
+                            Text {
+                                text: @tr("Use GBK for servers configured for GB2312 or GBK output.");
+                                color: Theme.text-muted;
+                                font-size: Theme.fs-xs;
+                            }
+                        }
+
+                        if root.show-advanced : VerticalLayout {
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    width: 18px; height: 18px; y: 1px;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: root.draft-vt100-drawing ? Theme.accent : Theme.line-2;
+                                    background: root.draft-vt100-drawing ? Theme.accent : transparent;
+                                    Text {
+                                        text: root.draft-vt100-drawing ? "\u{E5CA}" : "";
+                                        font-family: "Material Icons"; color: white; font-size: 14px;
+                                        width: 100%; height: 100%;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.draft-vt100-drawing = !root.draft-vt100-drawing; }
+                                    }
+                                }
+                                Text {
+                                    text: @tr("Enable VT100 line drawing even in UTF-8 mode");
+                                    color: Theme.text-primary; font-size: Theme.fs-sm;
+                                    vertical-alignment: center; horizontal-stretch: 1;
+                                }
+                            }
+                            Text {
+                                text: @tr("Show box-drawing output from servers that switch charsets (ESC(0, SO/SI) while staying in UTF-8, e.g. top or mc frames.");
+                                color: Theme.text-muted; font-size: Theme.fs-xs; wrap: word-wrap;
+                            }
+                        }
+
+                        if root.show-advanced && root.draft-kind != "serial" : VerticalLayout {
+                            spacing: 4px;
+                            Text { text: @tr("Proxy (optional)"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                            // (#hifi-v17) 同 .seg 单一外框。
+                            Rectangle {
+                                height: 36px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: Theme.border-control;
+                                background: Theme.field;
+                                HorizontalLayout {
+                                    padding: 3px;
+                                    spacing: 2px;
+                                    SegOption { label: @tr("None"); active: root.draft-proxy-type == "none"; clicked => { root.draft-proxy-type = "none"; } }
+                                    SegOption { label: "SOCKS5"; active: root.draft-proxy-type == "socks5"; clicked => { root.draft-proxy-type = "socks5"; } }
+                                    SegOption { label: "HTTP"; active: root.draft-proxy-type == "http"; clicked => { root.draft-proxy-type = "http"; } }
+                                }
+                            }
+                            if root.draft-proxy-type != "none" : LabeledInput {
+                                dialog-field: true;
+                                input-height: 38px;
+                                label: @tr("Proxy address");
+                                placeholder: "127.0.0.1:1080";
+                                value <=> root.draft-proxy-hostport;
+                                clearable: true;
+                                canceled => { root.cancel(); }
+                                accepted => { root.try-submit(); }
+                            }
+                            Text {
+                                text: root.draft-proxy-type == "none"
+                                    ? @tr("No proxy — use $ALL_PROXY or connect directly")
+                                    : @tr("Format: host:port  (with auth: user:pass@host:port)");
+                                color: Theme.text-muted;
+                                font-size: Theme.fs-xs;
+                            }
+                        }
+
+                        if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
+                            spacing: 4px;
+                            JumpCombo {
+                                label: @tr("Jump host (optional)");
+                                choices: root.jump-choices;
+                                selected-index <=> root.draft-jump-index;
+                            }
+                            Text {
+                                text: @tr("Tunnel this connection through another saved SSH session.");
+                                color: Theme.text-muted;
+                                font-size: Theme.fs-xs;
+                            }
+                        }
+
+                        if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
+                            spacing: 6px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    width: 18px; height: 18px; y: 1px;
+                                    border-radius: 5px;
+                                    border-width: 1px;
+                                    border-color: root.draft-disable-shell-integration ? Theme.accent : Theme.line-2;
+                                    background: root.draft-disable-shell-integration ? Theme.accent : transparent;
+                                    Text {
+                                        text: root.draft-disable-shell-integration ? "\u{E5CA}" : "";
+                                        font-family: "Material Icons"; color: white; font-size: 14px;
+                                        width: 100%; height: 100%;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.draft-disable-shell-integration = !root.draft-disable-shell-integration; }
+                                    }
+                                }
+                                Text {
+                                    text: @tr("Disable shell integration (Windows / pwsh server)");
+                                    color: Theme.text-primary; font-size: Theme.fs-sm;
+                                    vertical-alignment: center; horizontal-stretch: 1;
+                                }
+                            }
+                            Text {
+                                text: @tr("Turn on for Windows servers: skips the cwd-follow hook and monitor that assume a POSIX shell and otherwise break the shell.");
+                                color: Theme.text-muted; font-size: Theme.fs-xs; wrap: word-wrap;
+                            }
+
+                            HorizontalLayout {
+                                Text {
+                                    text: @tr("Port forwarding");
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-sm;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                if root.forwards.length > 0 : Rectangle {
+                                    height: 26px;
+                                    border-radius: 7px;
+                                    border-width: 1px;
+                                    border-color: transparent;
+                                    background: add-fw-ta.has-hover ? Theme.accent-soft : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 9px;
+                                        padding-right: 9px;
+                                        spacing: 5px;
+                                        Text {
+                                            text: "\u{E145}";
+                                            font-family: "Material Icons";
+                                            color: add-fw-ta.has-hover ? Theme.accent : Theme.text-muted;
+                                            font-size: Theme.fs-sm;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: @tr("Add");
+                                            color: add-fw-ta.has-hover ? Theme.accent : Theme.text-muted;
+                                            font-size: Theme.fs-sm;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    add-fw-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.add-forward(); }
+                                    }
+                                }
+                            }
+                            if root.forwards.length == 0 : EmptyAddButton {
+                                label: @tr("Add a port forward");
+                                clicked => { root.add-forward(); }
+                            }
+                            if root.forwards.length == 0 : Rectangle {
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text {
+                                        text: @tr("Used to reach internal services. Example:");
+                                        color: Theme.text-muted;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: "-L 8080 → db.internal:5432";
+                                        color: Theme.accent;
+                                        font-family: Theme.font-mono;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.add-sample-forward(); }
+                                }
+                            }
+                            for f[i] in root.forwards : PortForwardRow {
+                                forward: f;
+                                index: i;
+                                updated(index, value) => { root.update-forward(index, value); }
+                                remove(index) => { root.delete-forward(index); }
+                            }
+                            if root.forwards.length > 0 : Text {
+                                text: @tr("-L: local port → target reached from the server; -R: server port → target reached from here; -D: local SOCKS5 proxy");
+                                color: Theme.text-muted;
+                                font-size: Theme.fs-xs;
+                            }
+
+                            HorizontalLayout {
+                                Text {
+                                    text: @tr("Login triggers");
+                                    color: Theme.text-secondary;
+                                    font-size: Theme.fs-sm;
+                                    vertical-alignment: center;
+                                    horizontal-stretch: 1;
+                                }
+                                if root.triggers.length > 0 : Rectangle {
+                                    height: 26px;
+                                    border-radius: 7px;
+                                    border-width: 1px;
+                                    border-color: transparent;
+                                    background: add-trg-ta.has-hover ? Theme.accent-soft : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 9px;
+                                        padding-right: 9px;
+                                        spacing: 5px;
+                                        Text {
+                                            text: "\u{E145}";
+                                            font-family: "Material Icons";
+                                            color: add-trg-ta.has-hover ? Theme.accent : Theme.text-muted;
+                                            font-size: Theme.fs-sm;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: @tr("Add");
+                                            color: add-trg-ta.has-hover ? Theme.accent : Theme.text-muted;
+                                            font-size: Theme.fs-sm;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    add-trg-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.add-trigger(); }
+                                    }
+                                }
+                            }
+                            if root.triggers.length == 0 : EmptyAddButton {
+                                label: @tr("Add a trigger");
+                                clicked => { root.add-trigger(); }
+                            }
+                            if root.triggers.length == 0 : Rectangle {
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    Text {
+                                        text: @tr("Auto-reply when matching text appears. Example:");
+                                        color: Theme.text-muted;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: "「password:」";
+                                        color: Theme.accent;
+                                        font-family: Theme.font-mono;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.add-sample-trigger(); }
+                                }
+                            }
+                            for trigger[i] in root.triggers : TriggerRow {
+                                trigger: trigger;
+                                index: i;
+                                updated(index, value) => { root.update-trigger(index, value); }
+                                remove(index) => { root.delete-trigger(index); }
+                            }
+                            if root.triggers.length > 0 : Text {
+                                text: @tr("When expected text appears, send the response automatically. Responses are stored encrypted.");
+                                color: Theme.text-muted;
+                                font-size: Theme.fs-xs;
+                                wrap: word-wrap;
+                            }
                         }
                     }
-                    Text {
-                        text: @tr("Enable VT100 line drawing even in UTF-8 mode");
-                        color: Theme.text-primary; font-size: Theme.fs-sm;
-                        vertical-alignment: center; horizontal-stretch: 1;
-                    }
-                }
-                Text {
-                    text: @tr("Show box-drawing output from servers that switch charsets (ESC(0, SO/SI) while staying in UTF-8, e.g. top or mc frames.");
-                    color: Theme.text-muted; font-size: Theme.fs-xs; wrap: word-wrap;
-                }
-                Rectangle { height: 6px; }
-            }
 
-            // ── Optional outbound proxy (SSH / Telnet only) ─────────────────
-            if root.show-advanced && root.draft-kind != "serial" : VerticalLayout {
-                spacing: 4px;
-                Text {
-                    text: @tr("Proxy (optional)");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-                HorizontalLayout {
-                    spacing: 6px;
-                    SegOption { label: @tr("None"); active: root.draft-proxy-type == "none"; clicked => { root.draft-proxy-type = "none"; } }
-                    SegOption { label: "SOCKS5"; active: root.draft-proxy-type == "socks5"; clicked => { root.draft-proxy-type = "socks5"; } }
-                    SegOption { label: "HTTP"; active: root.draft-proxy-type == "http"; clicked => { root.draft-proxy-type = "http"; } }
-                }
-                if root.draft-proxy-type != "none" : LabeledInput {
-                    input-background: Theme.bg-elevated;
-                    idle-border: Theme.border-strong;
-                    label: @tr("Proxy address");
-                    placeholder: "127.0.0.1:1080";
-                    value <=> root.draft-proxy-hostport;
-                }
-                Text {
-                    text: root.draft-proxy-type == "none"
-                        ? @tr("No proxy — use $ALL_PROXY or connect directly")
-                        : @tr("Format: host:port  (with auth: user:pass@host:port)");
-                    color: Theme.text-muted;
-                    font-size: Theme.fs-xs;
                 }
             }
 
-            // ── SSH jump host / bastion (SSH only) (#211) ───────────────────
-            if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
-                spacing: 4px;
-                JumpCombo {
-                    label: @tr("Jump host (optional)");
-                    choices: root.jump-choices;
-                    selected-index <=> root.draft-jump-index;
-                }
-                Text {
-                    text: @tr("Tunnel this connection through another saved SSH session.");
-                    color: Theme.text-muted;
-                    font-size: Theme.fs-xs;
-                }
+            Rectangle {
+                y: 0px;
+                width: 100%;
+                height: 18px;
+                visible: body-flick.viewport-y > 0px;
+                background: @linear-gradient(180deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
-
-            // ── Port forwarding / tunnels (SSH only) (#56) ──────────────────
-            if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
-                spacing: 6px;
-
-                // Shell-integration toggle (#140): the cwd-follow hook + resource
-                // monitor assume a POSIX shell; on a Windows pwsh/cmd server the
-                // injected hook breaks the shell, so let the user turn it off.
-                HorizontalLayout {
-                    spacing: 8px;
-                    Rectangle {
-                        width: 18px; height: 18px; y: 1px;
-                        border-radius: 4px;
-                        border-width: 1px;
-                        border-color: root.draft-disable-shell-integration ? Theme.accent : Theme.border-strong;
-                        background: root.draft-disable-shell-integration ? Theme.accent : transparent;
-                        Text {
-                            text: root.draft-disable-shell-integration ? "\u{E5CA}" : "";
-                            font-family: "Material Icons"; color: white; font-size: 14px;
-                            width: 100%; height: 100%;
-                            horizontal-alignment: center; vertical-alignment: center;
-                        }
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.draft-disable-shell-integration = !root.draft-disable-shell-integration; }
-                        }
-                    }
-                    Text {
-                        text: @tr("Disable shell integration (Windows / pwsh server)");
-                        color: Theme.text-primary; font-size: Theme.fs-sm;
-                        vertical-alignment: center; horizontal-stretch: 1;
-                    }
-                }
-                Text {
-                    text: @tr("Turn on for Windows servers: skips the cwd-follow hook and monitor that assume a POSIX shell and otherwise break the shell.");
-                    color: Theme.text-muted; font-size: Theme.fs-xs; wrap: word-wrap;
-                }
-                Rectangle { height: 6px; }
-
-                Text {
-                    text: @tr("Port forwarding");
-                    color: Theme.text-secondary;
-                    font-size: Theme.fs-sm;
-                }
-
-                for f[i] in root.forwards : PortForwardRow {
-                    forward: f;
-                    index: i;
-                    updated(index, value) => { root.update-forward(index, value); }
-                    remove(index) => { root.delete-forward(index); }
-                }
-                HorizontalLayout {
-                    alignment: end;
-                    PrimaryButton {
-                        text: @tr("Add");
-                        clicked => { root.add-forward(); }
-                    }
-                }
-                Text {
-                    text: @tr("-L: local port → target reached from the server; -R: server port → target reached from here; -D: local SOCKS5 proxy");
-                    color: Theme.text-muted;
-                    font-size: Theme.fs-xs;
-                }
+            Rectangle {
+                y: parent.height - 18px;
+                width: 100%;
+                height: 18px;
+                visible: body-flick.viewport-y < body.preferred-height - body-flick.height;
+                background: @linear-gradient(0deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
+        }
 
-            // ── Expect/send login triggers (SSH only) (#212) ───────────────
-            if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
-                spacing: 6px;
-                Text { text: @tr("Login triggers"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
-                for trigger[i] in root.triggers : TriggerRow {
-                    trigger: trigger;
-                    index: i;
-                    updated(index, value) => { root.update-trigger(index, value); }
-                    remove(index) => { root.delete-trigger(index); }
-                }
-                HorizontalLayout {
-                    alignment: end;
-                    PrimaryButton { text: @tr("Add trigger"); clicked => { root.add-trigger(); } }
-                }
-                Text {
-                    text: @tr("When expected text appears, send the response automatically. Responses are stored encrypted.");
-                    color: Theme.text-muted; font-size: Theme.fs-xs; wrap: word-wrap;
-                }
-            }
+        Rectangle {
+            width: 100%;
+            height: 1px;
+            background: Theme.border-control;
+        }
 
+        foot := Rectangle {
+            width: 100%;
+            // (#dialog-fit 2026-09-18) 显式高度 = 12 + 38 + 12(高保真 .dlg-foot 的
+            // padding 与按钮高)。必须写死:dlg-card 的高度要用 foot.height 推算,
+            // 若由布局算出来会构成 dlg-card.height -> layout-cache -> foot.height 的循环。
+            height: 62px;
+            // (#hifi-v17) 页脚底 = 原型 .dlg-foot 的 --panel-hi(比内容面板亮半档)。
+            background: Theme.panel-hi;
+            border-top-left-radius: 0px;
+            border-top-right-radius: 0px;
+            border-bottom-left-radius: Theme.radius-xl;
+            border-bottom-right-radius: Theme.radius-xl;
             HorizontalLayout {
-                spacing: 8px;
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 10px;
                 GhostButton {
+                    btn-height: 38px;
+                    btn-radius: 9px;
+                    dialog-chrome: true;
                     text: @tr("Test connection");
-                    clicked => {
-                        if (root.draft-kind != "serial" && root.draft-host == "") {
-                            root.host-missing = true;
-                            return;
+                    clicked => { root.try-test(); }
+                }
+                Rectangle {
+                    height: 38px;
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 1px;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                visible: root.footer-status-icon() != "";
+                                text: root.footer-status-icon();
+                                font-family: "Material Icons";
+                                color: root.footer-status-color();
+                                font-size: Theme.fs-md;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: root.footer-status-text();
+                                color: root.footer-status-color();
+                                font-size: Theme.fs-sm;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                            }
                         }
-                        if (root.draft-kind == "serial" && root.draft-serial-port == "") {
-                            root.test-status = @tr("Please enter a serial port.");
-                            return;
+                        Rectangle {
+                            height: 1px;
+                            background: (root.host-missing || root.serial-missing) && status-ta.has-hover
+                                ? Theme.danger : transparent;
                         }
-                        root.host-missing = false;
-                        root.test-status = @tr("Testing...");
-                        root.test-connection({
-                            id: root.draft-id,
-                            name: root.draft-name,
-                            kind: root.draft-kind,
-                            host: root.draft-host,
-                            port: root.draft-port.to-float(),
-                            user: root.draft-user,
-                            auth: root.draft-auth,
-                            password: root.draft-password,
-                            private-key-path: root.draft-key-path,
-                            private-key-inline: root.draft-key-inline,
-                            private-key-inline-mode: root.draft-key-inline-mode,
-                            proxy: (root.draft-proxy-type == "none" || root.draft-proxy-hostport == "") ? ""
-                                 : root.draft-proxy-type == "http" ? "http://" + root.draft-proxy-hostport
-                                 : "socks5://" + root.draft-proxy-hostport,
-                            group: root.draft-group,
-                            serial-port: root.draft-serial-port,
-                            baud-rate: root.draft-baud.to-float(),
-                            data-bits: root.draft-data-bits.to-float(),
-                            stop-bits: root.draft-stop-bits.to-float(),
-                            parity: root.draft-parity,
-                            flow-control: root.draft-flow,
-                            encoding: root.draft-encoding,
-                            vt100-drawing: root.draft-vt100-drawing,
-                            disable-shell-integration: root.draft-disable-shell-integration,
-                            note: root.draft-note,
-                            jump-session-id: (root.draft-jump-index > 0 && root.draft-jump-index < root.jump-ids.length)
-                                ? root.jump-ids[root.draft-jump-index] : "",
-                        });
+                    }
+                    status-ta := TouchArea {
+                        enabled: root.host-missing || root.serial-missing;
+                        mouse-cursor: (root.host-missing || root.serial-missing) ? pointer : default;
+                        clicked => { root.focus-error-field(); }
                     }
                 }
-                if root.test-status != "" : Text {
-                    text: root.test-status;
-                    color: root.test-status == @tr("Connection OK") ? Theme.success : Theme.text-muted;
-                    font-size: Theme.fs-xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
-                if root.test-status == "" : Rectangle { horizontal-stretch: 1; }
+                // (#hifi-v17) 页脚按钮 38px 高 / 9px 圆角,同原型 .btn。
                 GhostButton {
+                    btn-height: 38px;
+                    btn-radius: 9px;
+                    dialog-chrome: true;
                     text: @tr("Cancel");
                     clicked => { root.cancel(); }
                 }
                 PrimaryButton {
+                    btn-height: 38px;
+                    btn-radius: 9px;
                     text: is-editing ? @tr("Save") : @tr("Create");
-                    clicked => {
-                        // SSH/Telnet need a host; block submit and flag it (#110).
-                        if (root.draft-kind != "serial" && root.draft-host == "") {
-                            root.host-missing = true;
-                            return;
-                        }
-                        root.host-missing = false;
-                        root.submit({
-                            id: root.draft-id,
-                            name: root.draft-name,
-                            kind: root.draft-kind,
-                            host: root.draft-host,
-                            port: root.draft-port.to-float(),
-                            user: root.draft-user,
-                            auth: root.draft-auth,
-                            password: root.draft-password,
-                            private-key-path: root.draft-key-path,
-                            private-key-inline: root.draft-key-inline,
-                            private-key-inline-mode: root.draft-key-inline-mode,
-                            proxy: (root.draft-proxy-type == "none" || root.draft-proxy-hostport == "") ? ""
-                                 : root.draft-proxy-type == "http" ? "http://" + root.draft-proxy-hostport
-                                 : "socks5://" + root.draft-proxy-hostport,
-                            group: root.draft-group,
-                            serial-port: root.draft-serial-port,
-                            baud-rate: root.draft-baud.to-float(),
-                            data-bits: root.draft-data-bits.to-float(),
-                            stop-bits: root.draft-stop-bits.to-float(),
-                            parity: root.draft-parity,
-                            flow-control: root.draft-flow,
-                            encoding: root.draft-encoding,
-                            vt100-drawing: root.draft-vt100-drawing,
-                            disable-shell-integration: root.draft-disable-shell-integration,
-                            note: root.draft-note,
-                            jump-session-id: (root.draft-jump-index > 0 && root.draft-jump-index < root.jump-ids.length)
-                                ? root.jump-ids[root.draft-jump-index] : "",
-                        });
-                    }
+                    disabled: root.is-preview;
+                    clicked => { root.try-submit(); }
                 }
             }
         }
         }
-        }
+
     }
 }

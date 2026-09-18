@@ -5,8 +5,17 @@
 import os, shutil, subprocess, zipfile, sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 本仓库无 MSVC，交叉编译产物在 gnu target 下（不是 target/release/）
-EXE = os.path.join(REPO, "target", "x86_64-pc-windows-gnu", "release", "meatshell.exe")
+# 产物位置取决于是否传了 --target：
+#   cargo build --release                        → target/release/
+#   cargo build --release --target <gnu triple>  → target/<triple>/release/
+# 本仓库两条路都走过，所以两个候选都看，取**修改时间最新**的那个，
+# 避免拿到上一次另一种命令留下的陈旧 exe（踩过：包里打进了昨天的旧产物）。
+EXE_CANDIDATES = [
+    os.path.join(REPO, "target", "release", "meatshell.exe"),
+    os.path.join(REPO, "target", "x86_64-pc-windows-gnu", "release", "meatshell.exe"),
+]
+_existing = [p for p in EXE_CANDIDATES if os.path.isfile(p)]
+EXE = max(_existing, key=os.path.getmtime) if _existing else EXE_CANDIDATES[0]
 LLVM_MINGW_BIN = r"C:\llvm-mingw\bin"
 # (#pkg-toolchain-detect 2026-09-04) 原常量保留为首个候选：本机 C:\llvm-mingw
 # 已不存在，真正完成 x86_64-pc-windows-gnu 链接的是 MSYS2 的 mingw64（cargo 从

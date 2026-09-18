@@ -8,6 +8,19 @@ pub(super) fn blank_forward_draft() -> PortFwd {
         bind_port: "".into(),
         host: "".into(),
         host_port: "".into(),
+        open: true,
+    }
+}
+
+pub(super) fn sample_forward_draft() -> PortFwd {
+    PortFwd {
+        kind: "local".into(),
+        name: "".into(),
+        bind_addr: "127.0.0.1".into(),
+        bind_port: "8080".into(),
+        host: "db.internal".into(),
+        host_port: "5432".into(),
+        open: true,
     }
 }
 
@@ -29,6 +42,7 @@ pub(super) fn forward_drafts(forwards: &[crate::config::PortForward]) -> Vec<Por
             } else {
                 forward.host_port.to_string().into()
             },
+            open: false,
         })
         .collect()
 }

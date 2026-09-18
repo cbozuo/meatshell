@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>meatshell · 新建会话（高保真 v4 · 操作丝滑）</title>
+<style>
+/* ---------- Tokens（对齐 ui/theme.slint） ---------- */
+:root[data-theme="dark"]{
+  --page:#0f1116; --win:#1b1d23; --bar:#2a2d35; --term:#0e0f13;
+  --panel:#22252d; --panel-hi:#282b34; --field:#191b21; --field-2:#1d2027;
+  --line:#31353e; --line-2:#3f444f;
+  --text:#e9ebf1; --text-2:#aab0bd; --text-3:#8b92a1;
+  --accent:#4a90e2; --accent-hi:#5ea0ec; --accent-ink:#fff; --accent-soft:rgba(74,144,226,.16);
+  --danger:#e5484d; --success:#3fbf8f; --warning:#e2a84a;
+  --shadow:0 22px 60px -20px #000000d9; --elev:0 2px 10px -4px #000000aa;
+  --scrim-rgb:12,13,17;                /* 遮罩底色（暗） */
+  --scrim-a:.18;                       /* 方案 A：低 alpha 纯色遮罩（无模糊） */
+  --panel-rgb:34,37,45;                /* 面板底色 rgb：供「滚动渐隐」渐变使用（不用 transparent，避免混色发灰） */
+  /* 选中态 = 强调色「淡染」（不是灰、也不是实心）：既明确是"选中"，又不与实心主按钮同级 */
+  --chip:color-mix(in srgb, var(--accent) 22%, transparent);
+}
+:root[data-theme="light"]{
+  --page:#eceef2; --win:#f5f5f7; --bar:#eaeaef; --term:#fafafa;
+  --panel:#ffffff; --panel-hi:#f6f7f9; --field:#f4f5f8; --field-2:#eef0f4;
+  --line:#dcdce3; --line-2:#c7c7cc;
+  --text:#1c1e22; --text-2:#4a4e58; --text-3:#6b7280;
+  --accent:#0071e3; --accent-hi:#1a80ec; --accent-ink:#fff; --accent-soft:rgba(0,113,227,.12);
+  --danger:#d93a3f; --success:#128a5e; --warning:#b8781a;
+  --shadow:0 22px 60px -22px #00000040; --elev:0 2px 10px -4px #0000001f;
+  --scrim-rgb:244,245,248;             /* 遮罩底色（亮） */
+  --scrim-a:.22;                       /* 方案 A：低 alpha 纯色遮罩（无模糊） */
+  --panel-rgb:255,255,255;
+  --chip:color-mix(in srgb, var(--accent) 14%, transparent);   /* 亮色淡染比例更低，避免发闷 */
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--page);color:var(--text);-webkit-font-smoothing:antialiased;
+  font:13px/1.55 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+.mono{font-family:ui-monospace,"SF Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+
+/* ---------- 舞台 ---------- */
+.stage{padding:26px;display:flex;justify-content:center}
+/* 版本角标：仅用于原型辨版，不属于设计稿 */
+.buildtag{position:fixed;left:14px;bottom:12px;z-index:999;pointer-events:none;
+  font-size:11px;color:var(--text-3);opacity:.75}
+
+/* ---------- 模拟主窗口 ---------- */
+.window{position:relative;width:100%;max-width:1060px;border-radius:14px;overflow:hidden;background:var(--win);
+  border:1px solid var(--line);box-shadow:var(--shadow);transition:height .28s cubic-bezier(.22,1,.36,1)}
+.win-bar{height:40px;display:flex;align-items:center;gap:3px;padding:4px 8px;background:var(--bar)}
+.wtab{height:32px;display:flex;align-items:center;padding:0 12px;border-radius:6px;color:var(--text-2);font-size:12px;white-space:nowrap}
+.wtab.on{background:var(--term);color:var(--text)}
+.wtab .x{margin-left:8px;color:var(--text-3);font-size:13px}
+.wnew{margin-left:auto;height:28px;display:inline-flex;align-items:center;gap:6px;padding:0 11px;border-radius:7px;
+  border:1px solid var(--line-2);background:transparent;color:var(--text-2);font:inherit;font-size:12px;cursor:pointer;transition:.14s}
+.wnew:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.win-main{display:flex;min-height:420px}
+.win-side{width:186px;flex:0 0 auto;border-right:1px solid var(--line);padding:10px 8px;display:flex;flex-direction:column;gap:1px}
+.ws-cap{font-size:10.5px;letter-spacing:.08em;color:var(--text-3);padding:4px 8px 9px}
+.ws-row{display:flex;align-items:center;gap:9px;height:28px;padding:0 8px;border-radius:6px;color:var(--text-3);font-size:12px;white-space:nowrap}
+.ws-row.on{background:var(--term);color:var(--text-2)}
+.ws-ico{width:14px;height:14px;border-radius:4px;background:var(--field-2);flex:0 0 auto}
+.win-term{flex:1 1 auto;min-width:0;padding:14px 18px;font-family:ui-monospace,Consolas,monospace;
+  font-size:12px;line-height:1.85;color:var(--text-2);background:var(--term);overflow:hidden}
+.win-term .dim{color:var(--text-3)}
+.cur{display:inline-block;width:7px;height:13px;background:var(--text-2);vertical-align:-2px;animation:blink 1.05s steps(1) infinite}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* ---------- 弹层：居中 · 固定宽 · 高自适应 · 超高内部滚动 ---------- */
+/* 弹层遮罩：透明毛玻璃（轻染色 + 强模糊 + 微饱和），点它**不关闭**弹窗（只能 ✕ / 取消 / Esc 关） */
+/* (#scrim-planA 2026-09-15) Slint 无「元素级 backdrop blur」→ 定为方案 A：低 alpha 纯色遮罩（去模糊）。
+   原型与代码保持同源，即"代码能 1:1 做到"的形态；日后 Slint 支持 blur 再把滤镜加回。 */
+.overlay{position:absolute;inset:0;background:rgba(var(--scrim-rgb),var(--scrim-a));opacity:0;pointer-events:none;transition:opacity .22s ease}
+.overlay.open{opacity:1;pointer-events:auto}
+.overlay .center{position:absolute;inset:16px;display:flex;align-items:center;justify-content:center}
+.dialog{display:flex;flex-direction:column;width:600px;max-width:100%;max-height:100%;
+  background:var(--panel);border:1px solid var(--line-2);border-radius:16px;box-shadow:var(--shadow);overflow:hidden;
+  transform:translateY(8px) scale(.985);transition:transform .22s cubic-bezier(.22,1,.36,1)}
+.overlay.open .dialog{transform:none}
+
+/* (#head-slim 2026-09-17) 头部原上下 padding 16px → 整条 78px 显得厚。收窄到 12px 后仍有 61px。
+   (#head-oneline 2026-09-17) 实测这 61px 里 24px 是内距、36px 是「标题+副标题两行」——
+   偏高主因是行数，不是内距。改为「单行」：标题与副标题同一基线并排，副标题退为行内说明。
+   → 头部 61px 降到 49px（-20%），且标题仍是最强视觉，「配置一个 SSH 连接」仍在，只是不再独占一行。
+   左内距保持 20px，与表单内容左缘（实测同为 x=352）对齐；副标题可省略号截断，不会挤到右侧关闭按钮。 */
+.dlg-head{display:flex;align-items:center;gap:10px;padding:10px 16px 10px 20px;border-bottom:1px solid var(--line)}
+.glyph{width:28px;height:28px;flex:0 0 auto;border-radius:8px;display:grid;place-items:center;color:var(--accent);background:var(--accent-soft)}
+.glyph svg{width:15px;height:15px}
+.dlg-head .titles{flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:9px}
+.dlg-head h2{margin:0;font-size:15px;line-height:1.3;font-weight:500;letter-spacing:-.01em;flex:0 0 auto}
+.dlg-head .sub{margin:0;color:var(--text-3);font-size:11.5px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;min-width:0}
+.iconbtn{width:28px;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;color:var(--text-3);cursor:pointer;display:grid;place-items:center;transition:.14s}
+.iconbtn:hover{background:#e81123;color:#fff}
+.iconbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.dlg-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:16px 20px 16px;scrollbar-gutter:stable;
+  /* (#scroll-fade 2026-09-15) 滚动渐隐：前两层 local 随内容滚动(用于盖住阴影)，
+     后两层 scroll 钉在容器上(阴影本体) —— 只有「该方向还有内容」时才露出来；
+     纯 CSS 实现，无需 JS 监听 scroll。 */
+  background:
+    linear-gradient(rgba(var(--panel-rgb),1) 30%, rgba(var(--panel-rgb),0)) top / 100% 30px no-repeat local,
+    linear-gradient(rgba(var(--panel-rgb),0), rgba(var(--panel-rgb),1) 70%) bottom / 100% 30px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(0,0,0,.20), rgba(0,0,0,0)) top / 100% 15px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(0,0,0,.20), rgba(0,0,0,0)) bottom / 100% 15px no-repeat scroll;
+}
+.dlg-body::-webkit-scrollbar{width:10px}
+.dlg-body::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:99px;border:3px solid var(--panel)}
+.dlg-body::-webkit-scrollbar-thumb:hover{background:var(--text-3)}
+.sec-stage{position:relative}
+.secwrap{animation:enter .26s cubic-bezier(.22,1,.36,1)}
+@keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.sec{margin:0}
+/* (#tight-rhythm 2026-09-17) 整体间距收紧：区块间隔 40→28px（留白从 ~57px 降到 ~41px），
+   字段间隔 13→10px，标签→控件 6→5px，多列 14→12px，body 内距 18/20→16/16，页脚 14→12px。
+   统一到「4px 网格」后节奏更整，弹窗更紧凑利落。 */
+.sec + .sec{border-top:1px solid var(--line);margin-top:14px;padding-top:14px}
+.sec:last-child{margin-bottom:0}
+
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+.field:last-child{margin-bottom:0}
+.field > label,.field > .lab{font-size:12px;color:var(--text-2)}
+.field > label .opt,.field > .lab .opt{color:var(--text-3);font-size:11px}
+.row{display:grid;gap:12px}
+.row.mb{margin-bottom:10px}
+
+.control{width:100%;height:38px;padding:0 12px;border-radius:9px;background:var(--field);border:1px solid var(--line);
+  color:var(--text);font:inherit;font-size:13px;outline:none;transition:border-color .14s,box-shadow .14s,background .14s}
+.control::placeholder{color:var(--text-3)}
+.control:hover{border-color:var(--line-2)}
+/* (#focus-uniform 2026-09-17) 聚焦 = 1px 强调色描边 + 外圈均匀淡晕（四边等宽）。
+   去掉旧的「左侧 2px 强调色竖条」——它叠在 1px 边框上，让左边看起来比右边粗。
+   仍不改标签颜色、不用实心强调色（实心只留给「创建」）。 */
+.control:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:var(--field-2)}
+textarea.control{height:auto;min-height:110px;padding:10px 12px;resize:vertical;line-height:1.6}
+textarea.keyarea{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.control.err{border-color:var(--danger);box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 18%,transparent)}
+.help{font-size:11.5px;color:var(--text-3);line-height:1.5}
+.help a{color:var(--accent);text-decoration:none}
+.help a:hover{text-decoration:underline}
+.inwrap{position:relative;display:flex}
+.inwrap .control{padding-right:42px}
+.inset{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--text-3);cursor:pointer;display:grid;place-items:center;transition:.14s}
+/* (#inset-hover 2026-09-17) 字段内嵌按钮（分组 ▾、密码眼睛）hover 太不明显：
+   底色 --field-2(#1d2027) 与输入框 --field(#191b21) 每通道只差 ~4 → 看不出来。
+   改为「中性色淡染 + 内描边 + 图标提亮」，和「清空 ×」的 hover 增强保持同一套语言。 */
+.inset:hover{background:color-mix(in srgb,var(--text) 15%,transparent);color:var(--text);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 24%,transparent)}
+/* (#clear-hover 2026-09-17) 清空 × 的 hover 要一眼可见：--field-2(#1d2027) 与输入框底色
+   --field(#191b21) 几乎同色，原先 hover 看不出反馈 → 改用「中性色淡染 + 内描边 + 图标提亮」。 */
+.clearbtn:hover{background:color-mix(in srgb,var(--text) 16%,transparent);color:var(--text);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 26%,transparent)}
+/* 有值时 hover/聚焦才出现的清除按钮 */
+.inwrap .clearbtn{opacity:0}
+.field:hover .inwrap .clearbtn,.field:focus-within .inwrap .clearbtn{opacity:1}
+.inwrap:has(input:placeholder-shown) .clearbtn{display:none}
+/* (#no-label-recolor 2026-09-15) 聚焦时不改标签颜色：输入框本身已有主色描边，
+   标签再变色显得吵。标签始终保持次级灰。 */
+.pickrow{display:flex;gap:8px;align-items:center}
+.pickrow .control{flex:1 1 auto}
+.pickbtn{height:38px;padding:0 14px;border-radius:9px;border:1px solid var(--line-2);background:var(--field);color:var(--text-2);font:inherit;font-size:12.5px;cursor:pointer;transition:.14s;white-space:nowrap}
+.pickbtn:hover{border-color:var(--text-3);color:var(--text)}
+.pickbtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* 注：本变体不再有「协议标签轨道 + 更多」胶囊控件（改为字段级「连接协议」下拉）。 */
+
+/* 分段控件：胶囊 + 滑动指示器 */
+/* (#seg-frame 2026-09-17) 未选中的功能按钮必须有可见边框：此前按钮 border:0 + 透明底，
+   和轨道底色(--field)融为一体，看不出"这是个可点的按钮"。选中态由 .thumb 的强调色
+   描边承担 → 把选中按钮自身描边置透明，避免出现双重描边。 */
+/* (#seg-single-frame 2026-09-17) 但"每段各自描边 + 外框 + 滑块内描边"叠成了三层描边，
+   近距离看发糊、也和大外框容器（.item-box / .adv-btn）撞脸。
+   收敛为**单一外框**：外框画"这是一组"，滑块画"选了哪个"，段内不再描边。
+   未选中段的"可点"改由 hover 的浅底 + 文字提亮表达（与 .pop .item 同一套语言）。 */
+.seg{position:relative;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;padding:3px;border-radius:10px;background:var(--field);border:1px solid var(--line)}
+/* 选中态 = 浮起的中性小块（不是强调色实心）→ 与主按钮拉开层级 */
+.seg .thumb{position:absolute;top:3px;bottom:3px;left:3px;border-radius:7px;background:var(--chip);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+  transition:transform .28s cubic-bezier(.22,1,.36,1),width .28s cubic-bezier(.22,1,.36,1),opacity .16s}
+.seg button{position:relative;z-index:1;height:30px;border:1px solid transparent;background:transparent;color:var(--text-2);font:inherit;font-size:12.5px;border-radius:7px;cursor:pointer;transition:color .18s,background .18s,transform .12s;white-space:nowrap;touch-action:manipulation}
+.seg button:hover{color:var(--text);background:color-mix(in srgb,var(--text) 8%,transparent)}
+.seg button:active{transform:scale(.97)}
+.seg button[aria-checked="true"]{color:var(--accent)}
+.seg:focus-within{border-color:var(--line-2)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.segopt-t{height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line);background:var(--field);
+  color:var(--text-2);font:inherit;font-size:12.5px;cursor:pointer;transition:.14s;white-space:nowrap}
+.segopt-t:hover{color:var(--text);border-color:var(--line-2)}
+/* 开关型小胶囊：用「淡染」而非实心强调色，避免与主按钮同重 */
+.segopt-t[aria-pressed="true"]{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}
+.segopt-t:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+
+/* 复选框 */
+.cbx-row{display:flex;align-items:flex-start;gap:9px;cursor:pointer}
+.cbx{position:relative;width:18px;height:18px;flex:0 0 auto;margin-top:1px;border-radius:5px;border:1px solid var(--line-2);
+  background:transparent;transition:.14s;cursor:pointer;display:grid;place-items:center;color:#fff}
+.cbx:hover{border-color:var(--accent)}
+.cbx.on{background:var(--accent);border-color:var(--accent)}
+.cbx:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cbx-lbl{font-size:12.5px;color:var(--text);line-height:1.5}
+
+/* 高级开关 */
+.adv-btn{display:flex;align-items:center;gap:8px;width:100%;height:38px;padding:0 12px;border-radius:9px;border:1px solid var(--line);
+  background:var(--field);color:var(--text-2);font:inherit;font-size:12.5px;cursor:pointer;text-align:left;transition:.14s}
+.adv-btn:hover{border-color:var(--line-2);color:var(--text)}
+.adv-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.adv-btn .chev{margin-left:auto;color:var(--text-3);transition:transform .24s cubic-bezier(.22,1,.36,1)}
+.adv-btn[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.collapse{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.22,1,.36,1)}
+.collapse.open{grid-template-rows:1fr}
+.collapse > .inner{overflow:hidden}
+.adv-inner{padding-top:12px}
+
+/* ---------- 可折叠行（端口转发 / 登录触发器） ---------- */
+.item-box{border:1px solid var(--line);border-radius:11px;background:var(--field);overflow:hidden;
+  transition:border-color .16s,background .16s}
+.item-box:hover{border-color:var(--line-2)}
+.item-box.open{background:var(--field)}
+.item-box + .item-box{margin-top:8px}
+.item-box[data-new]{animation:rowIn .32s cubic-bezier(.22,1,.36,1)}
+@keyframes rowIn{from{opacity:0;transform:translateY(-8px) scale(.985)}to{opacity:1;transform:none}}
+.item-box.is-leaving{overflow:hidden;opacity:0;transform:translateY(-6px);margin:0;padding:0;border-width:0}
+.item-head{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer;user-select:none}
+.item-head:hover{background:var(--field-2)}
+.item-k{flex:0 0 auto;font-family:ui-monospace,Consolas,monospace;font-size:11px;font-weight:500;color:var(--accent);
+  background:var(--accent-soft);border-radius:6px;padding:2px 7px}
+.item-sum{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--text-2)}
+.item-sum.empty{color:var(--text-3)}
+.item-head .chev{flex:0 0 auto;color:var(--text-3);transition:transform .22s cubic-bezier(.22,1,.36,1)}
+.item-box.open .item-head .chev{transform:rotate(90deg)}
+.item-body{padding:0 11px 12px;display:flex;flex-direction:column;gap:9px}
+.del{width:28px;height:28px;flex:0 0 auto;border:0;border-radius:7px;background:transparent;color:var(--text-3);cursor:pointer;display:grid;place-items:center;transition:.14s}
+.del:hover{background:color-mix(in srgb,var(--danger) 18%,transparent);color:var(--danger)}
+.del:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mini{height:34px;padding:0 10px;border-radius:8px;background:var(--panel);border:1px solid var(--line);color:var(--text);font:inherit;font-size:12.5px;outline:none;width:100%}
+.mini::placeholder{color:var(--text-3)}
+.mini:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.lab-row{display:flex;align-items:center;gap:10px}
+.lab-row .lab{flex:1 1 auto;font-size:12px;color:var(--text-2)}
+.addmini{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:7px;border:1px solid transparent;
+  background:transparent;color:var(--text-3);font:inherit;font-size:12px;cursor:pointer;transition:.14s;white-space:nowrap}
+.addmini:hover{color:var(--accent);background:var(--accent-soft)}
+.addmini:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.empty-add{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;height:42px;margin-top:2px;
+  border:1px dashed var(--line-2);border-radius:10px;background:transparent;color:var(--text-3);
+  font:inherit;font-size:12.5px;cursor:pointer;transition:.16s}
+.empty-add:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.empty-add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.empty-tip{font-size:11.5px;color:var(--text-3);line-height:1.6;margin-top:2px}
+.empty-tip a{color:var(--accent);text-decoration:none;font-family:ui-monospace,Consolas,monospace}
+.empty-tip a:hover{text-decoration:underline}
+
+/* 弹层（协议更多 / 分组 / 跳板机 / 输入即下拉） */
+.pop{position:fixed;z-index:600;max-height:280px;overflow:auto;padding:5px;background:var(--panel);
+  border:1px solid var(--line-2);border-radius:11px;box-shadow:var(--shadow)}
+.pop[hidden]{display:none}
+.pop .grp{font-size:10.5px;letter-spacing:.08em;color:var(--text-3);text-transform:uppercase;padding:8px 9px 4px}
+.pop .item{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:8px;cursor:pointer;font-size:12.5px;color:var(--text)}
+.pop .item:hover,.pop .item.hover{background:var(--field-2)}
+.pop .item[aria-selected="true"]{background:var(--accent-soft)}
+.pop .item svg{width:15px;height:15px;color:var(--text-2);flex:0 0 auto}
+.pop .item .nm{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop .item .nm.mono{font-family:ui-monospace,Consolas,monospace}
+.pop .item .cdot{width:8px;height:8px;border-radius:4px;flex:0 0 auto}
+.pop .item .cnt{color:var(--text-3);font-size:11px}
+/* (#badge-col 2026-09-17) 右侧徽标列：固定宽度 + 居中 → 「即将 / 预览」纵向成列，
+   且与触发器（.select）内同款徽标右缘对齐。此前 .soon 是 flex 自由项，
+   选中行多出一个勾（+14px 宽 +9px 间距）会把徽标整体挤左 23px → 参差不齐。 */
+.pop .item .soon,.pop .item .prev{font-size:9.5px;border-radius:99px;padding:0 6px;line-height:15px;
+  flex:0 0 auto;min-width:34px;text-align:center;box-sizing:border-box}
+.pop .item .soon{color:var(--warning);border:1px solid color-mix(in srgb,var(--warning) 45%,transparent)}
+.pop .item .prev{color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent)}
+
+/* 「连接协议」下拉（列表选择器）：当前项打勾 */
+/* 勾选槽位「常驻」且定宽：未选中行留空占位 → 选中时不再挤动左侧徽标（见 protoListHTML）。 */
+.pop .item[data-p] .ck{flex:0 0 14px;color:var(--accent);display:grid;place-items:center}
+.pop .item[data-p] .ck svg{width:14px;height:14px;color:var(--accent)}
+
+.select{display:flex;align-items:center;gap:9px;width:100%;height:38px;padding:0 14px 0 12px;border-radius:9px;background:var(--field);
+  border:1px solid var(--line);color:var(--text);font:inherit;font-size:13px;cursor:pointer;text-align:left;transition:.14s}
+.select:hover{border-color:var(--line-2)}
+/* (#select-focus 2026-09-17) 下拉框「点击」要有和输入框一样的聚焦效果：
+   .control 用 :focus（鼠标点击也生效），.select 原先是 :focus-visible（仅键盘 Tab 生效）
+   → 鼠标点下拉框没有反馈。统一改用 :focus，并在弹层展开期间用 aria-expanded 保持高亮。 */
+.select:focus,.select[aria-expanded="true"]{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:var(--field-2)}
+.select .v{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.select .v.ph{color:var(--text-3)}
+.select .chev{color:var(--text-3);flex:0 0 auto;transition:color .14s}
+/* 下拉框 hover：箭头跟着提亮，让「可点开」更明确（展开/聚焦时用 aria-expanded 保持）。 */
+.select:hover .chev,.select[aria-expanded="true"] .chev{color:var(--text-2)}
+.select .ic{width:15px;height:15px;flex:0 0 auto;color:var(--text-2)}
+.select .cnt{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--field-2);color:var(--text-3);
+  font-size:11px;line-height:18px;text-align:center;font-variant-numeric:tabular-nums}
+/* 触发器内徽标与列表徽标同宽同列（min-width 34px 居中），保证「预览」压在「即将」那一列上。 */
+.select .soon{font-size:9.5px;color:var(--warning);border:1px solid color-mix(in srgb,var(--warning) 45%,transparent);border-radius:99px;padding:0 6px;line-height:15px;flex:0 0 auto;min-width:34px;text-align:center;box-sizing:border-box}
+.select .prev{font-size:9.5px;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent);border-radius:99px;padding:0 6px;line-height:15px;flex:0 0 auto;min-width:34px;text-align:center;box-sizing:border-box}
+.combo{position:relative;display:flex;align-items:center}
+.combo .cdot{position:absolute;right:36px;width:8px;height:8px;border-radius:4px;pointer-events:none}
+/* 分组框：点右侧 ▾ 展开弹层时，整个输入框也进入聚焦态（与直接点击输入框一致）。 */
+.combo:has(.inset[aria-expanded="true"]) .control{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:var(--field-2)}
+.reserved{display:flex;gap:11px;align-items:flex-start;padding:12px 13px;border:1px solid var(--line);border-radius:11px;background:var(--field)}
+.reserved .rk{flex:0 0 auto;font-size:11px;font-weight:500;color:var(--accent);background:var(--accent-soft);border-radius:7px;padding:4px 8px;letter-spacing:.04em}
+.reserved b{display:block;font-size:12.5px;font-weight:500;color:var(--text);margin-bottom:3px}
+
+/* ---------- 页脚（左组与内容左缘对齐：padding-left 20 = body padding） ---------- */
+.dlg-foot{display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--line);background:var(--panel-hi)}
+.btn{height:38px;padding:0 16px;border-radius:9px;border:1px solid transparent;font:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.14s;white-space:nowrap}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.ghost{background:transparent;border-color:var(--line-2);color:var(--text-2)}
+.btn.ghost:hover{color:var(--text);border-color:var(--text-3);background:var(--field-2)}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{background:var(--accent-hi)}
+.btn.primary:active{filter:brightness(1.05)}
+.btn.ghost:active{background:var(--field-2)}
+.spinner{width:13px;height:13px;border:2px solid color-mix(in srgb,currentColor 30%,transparent);border-top-color:currentColor;border-radius:50%;animation:sp .7s linear infinite;display:inline-block;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.testres{font-size:12px;display:inline-flex;align-items:center;gap:6px;color:var(--text-3);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.testres.ok{color:var(--success)} .testres.no{color:var(--danger)}
+.testres.link{cursor:pointer}
+.testres.link:hover span{text-decoration:underline}
+.spacer{flex:1}
+@media (max-width:660px){ .stage{padding:12px} .dialog{width:100%} }
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div class="window" id="win" style="height:780px">
+    <div class="win-bar">
+      <div class="wtab on">prod-web-01 <span class="x">×</span></div>
+      <div class="wtab">dev-local <span class="x">×</span></div>
+      <button class="wnew" id="openBtn">＋ 新建会话</button>
+    </div>
+    <div class="win-main">
+      <aside class="win-side">
+        <div class="ws-cap">快速连接</div>
+        <div class="ws-row"><span class="ws-ico"></span>prod-web-01</div>
+        <div class="ws-row"><span class="ws-ico"></span>staging-api</div>
+        <div class="ws-row on"><span class="ws-ico"></span>dev-local</div>
+        <div class="ws-row"><span class="ws-ico"></span>db-tunnel</div>
+        <div class="ws-row"><span class="ws-ico"></span>本地终端</div>
+      </aside>
+      <div class="win-term">
+        <div><span class="dim">$</span> ssh prod-web-01</div>
+        <div class="dim">Welcome to Ubuntu 24.04.1 LTS (GNU/Linux 6.8.0-45-generic x86_64)</div>
+        <div class="dim"> * Documentation:  https://help.ubuntu.com</div>
+        <div class="dim"> * Management:     https://landscape.canonical.com</div>
+        <div class="dim">Last login: Mon Sep 15 17:58:12 2026 from 10.0.0.9</div>
+        <div><span class="dim">$</span> docker ps</div>
+        <div>CONTAINER ID   IMAGE          STATUS        NAMES</div>
+        <div>a1b2c3d4e5f6   api:2026.09    Up 3 days     api-1</div>
+        <div>9f8e7d6c5b4a   redis:7.2      Up 3 days     cache</div>
+        <div><span class="dim">$</span> <span class="cur"></span></div>
+      </div>
+    </div>
+
+    <div class="overlay open" id="overlay">
+      <div class="center" id="center">
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlgTitle" id="dialog">
+          <header class="dlg-head">
+            <span class="glyph" id="glyph" aria-hidden="true"></span>
+            <div class="titles">
+              <h2 id="dlgTitle">新建会话</h2>
+              <p class="sub" id="dlgSub">配置一个 SSH 连接</p>
+            </div>
+            <button class="iconbtn" id="closeBtn" aria-label="关闭">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </header>
+
+          <div class="dlg-body" id="body">
+            <div id="sections" class="sec-stage"></div>
+          </div>
+
+          <footer class="dlg-foot">
+            <button class="btn ghost" id="testBtn">测试连接</button>
+            <span class="testres" id="testRes" aria-live="polite"></span>
+            <span class="spacer"></span>
+            <button class="btn ghost" id="cancelBtn">取消</button>
+            <button class="btn primary" id="createBtn">创建</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   数据（对齐 session_dialog.slint；串口枚举值用于「输入即下拉」）
+   ============================================================ */
+const ICON = {
+  ssh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="M6.5 9l2.5 2.5L6.5 14M11 15h5"/></svg>',
+  serial:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="7" width="19" height="10" rx="2"/><path d="M6.5 7V4.5M12 7V4.5M17.5 7V4.5M6.5 17v2.5M12 17v2.5M17.5 17v2.5"/></svg>',
+  telnet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="M2.5 9h19"/></svg>',
+  rdp:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M9 20.5h6M12 17v3.5"/></svg>',
+  folder:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 2h11v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1Z"/></svg>',
+  box:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg>',
+};
+const REAL_PROTOS = [
+  {id:'ssh', label:'SSH', icon:'ssh', cat:'远程登录', sub:'配置一个 SSH 连接'},
+  {id:'serial', label:'Serial', icon:'serial', cat:'本地', sub:'配置一个本地串口（Serial）连接'},
+  {id:'telnet', label:'Telnet', icon:'telnet', cat:'远程登录', sub:'配置一个 Telnet 连接'},
+  // (#rdp-soon 2026-09-17) RDP 与 VNC 一样尚未实现（isReal 只含 ssh/serial/telnet），
+  // 补上 soon 标记，让「即将」在列表与触发按钮上保持一致。
+  {id:'rdp', label:'RDP', icon:'rdp', cat:'远程桌面', sub:'配置一个远程桌面连接', soon:true},
+  {id:'vnc', label:'VNC', icon:'rdp', cat:'远程桌面', sub:'配置一个 VNC 连接', soon:true},   // 尚未实现：可「预览」布局
+];
+const EXTRA_PROTOS = [
+  {id:'mosh', label:'Mosh', icon:'ssh', cat:'远程登录', sub:'配置一个 Mosh 连接'},
+  {id:'sftp', label:'SFTP', icon:'folder', cat:'文件传输', sub:'配置文件传输会话'},
+  {id:'ftp', label:'FTP', icon:'folder', cat:'文件传输', sub:'配置一个 FTP 连接'},
+  {id:'docker', label:'Docker exec', icon:'box', cat:'容器', sub:'进入一个运行中的容器'},
+];
+const GROUPS = [
+  {n:'prod', c:'#f87171', count:3},
+  {n:'staging', c:'#22d3ee', count:2},
+  {n:'dev', c:'#4ade80', count:5},
+  {n:'db', c:'#fbbf24', count:1},
+];
+const JUMPS = ['无（直接连接）','web-gateway · 10.0.0.1','bastion-prod · 10.0.0.9'];
+const ENCODINGS = ['UTF-8','GBK','Big5','Shift_JIS','EUC-KR','Windows-1252'];
+
+/* (#form-reset 2026-09-17) 表单默认值收敛到一处工厂函数：
+   新建 / 创建成功后按它重置，保证「默认长什么样」只有一份真源，重置不会漏字段。 */
+const DEFAULT_D = () => ({
+  name:'', group:'', note:'', host:'', port:'22', user:'', auth:'password', password:'',
+  keyMode:'file', keyPath:'', keyInline:'', encoding:'UTF-8', vt100:false,
+  proxyType:'none', proxyHostport:'', jumpIndex:0, disShellInt:false,
+  serialPort:'', baud:'115200', dataBits:'8', stopBits:'1', parity:'none', flow:'none' });
+
+const state = {
+  kind:'ssh', advanced:false, editing:false, showPass:false, hostMissing:false, serialMissing:false,
+  protoMode:'real', newRow:null, preview:null,
+  d: DEFAULT_D(),
+  forwards:[],   // (#all-collapsed 2026-09-15) 初始不预置行：所有可展开处默认折叠
+  triggers:[],   //  展开「高级」后先看到「+ 添加」空态；点添加才出现新行（新行默认展开便于填写）
+};
+
+/* 重置为「全新会话」：清掉上一次的填写 / 选择 / 展开 / 预览等一切残留。
+   只清状态、不动 DOM —— 调用方随后自行 renderHead() + renderBody() 重绘。
+   保留 protoMode（内置/更多 是「列表怎么显示」，不是某一次会话的数据）。 */
+function resetForm(){
+  state.kind='ssh'; state.advanced=false; state.editing=false; state.showPass=false;
+  state.hostMissing=false; state.serialMissing=false; state.newRow=null; state.preview=null;
+  state.d = DEFAULT_D();
+  state.forwards = []; state.triggers = [];
+  setStatus('','');
+}
+const listProtos = () => state.protoMode==='many' ? REAL_PROTOS.concat(EXTRA_PROTOS) : REAL_PROTOS;
+const byId = id => listProtos().find(p=>p.id===id);
+const D = () => state.d;
+const isReal = () => ['ssh','serial','telnet'].includes(state.kind);
+
+/* ============================================================
+   小工具 + 字段构造
+   ============================================================ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const hint = t => `<span class="help">${t}</span>`;
+const ICON_OK='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>';
+const ICON_ERR='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>';
+const ICON_TEST='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 6L14 6l2.5 6H21"/></svg>';
+const ICON_PLUS='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>';
+const ICON_X='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const ICON_GRIP='<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
+const ICON_EYE='<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>';
+const ICON_CHEV='<svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>';
+let statusFocus='';
+function setStatus(kind,text,focusKey){
+  const el=$('#testRes'); if(!el) return;
+  el.className='testres'+(kind==='ok'?' ok':kind==='no'?' no':'')+(focusKey?' link':'');
+  el.innerHTML=(kind==='no'?ICON_ERR:kind==='ok'?ICON_OK:'')+(text?`<span>${esc(text)}</span>`:'');
+  statusFocus=focusKey||'';
+}
+function fInput(k,label,ph,o={}){
+  const type = o.password ? (state.showPass?'text':'password') : 'text';
+  const act = o.password
+    ? `<button type="button" class="inset" data-eye="1" aria-label="${state.showPass?'隐藏':'显示'}密码">
+        ${state.showPass
+          ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 9 4.5 9 7 0 .9-.7 2.2-2 3.3M6.2 6.2C3.9 7.7 3 9.7 3 12c0 2.5 4 7 9 7 1.4 0 2.7-.3 3.8-.8"/></svg>'
+          : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12s3.5-7 9-7 9 7 9 7-3.5 7-9 7-9-7-9-7Z"/><circle cx="12" cy="12" r="3"/></svg>'}
+      </button>`
+    : `<button type="button" class="inset clearbtn" data-clear="${k}" aria-label="清空" tabindex="-1">${ICON_X}</button>`;
+  const hh = o.hintId ? `<span class="help" id="${o.hintId}">${o.hintHTML||''}</span>` : (o.hint?hint(o.hint):'');
+  return `<div class="field"><label for="f-${k}">${label}${o.opt?' <span class="opt">（可选）</span>':''}</label>
+    <div class="inwrap">
+      <input class="control ${o.mono?'mono':''} ${o.err?'err':''}" id="f-${k}" data-k="${k}" type="${type}" placeholder="${esc(ph)}" value="${esc(D()[k])}" ${o.password?'autocomplete="off"':''}>
+      ${act}
+    </div>${hh}</div>`;
+}
+function fArea(k,label,ph,o={}){
+  return `<div class="field"><label for="f-${k}">${label}</label>
+    <textarea class="control ${o.key?'keyarea':''}" id="f-${k}" data-k="${k}" placeholder="${esc(ph)}">${esc(D()[k])}</textarea>
+    ${o.hint?hint(o.hint):''}</div>`;
+}
+function fSeg(k,label,opts,o={}){
+  return `<div class="field"><span class="lab">${label}</span>
+    <div class="seg" data-seg="${k}" role="radiogroup" aria-label="${label}" style="grid-template-columns:repeat(${opts.length},1fr)"><span class="thumb"></span>
+      ${opts.map(x=>`<button type="button" data-v="${esc(x.v)}" aria-checked="${D()[k]===x.v}">${x.label}</button>`).join('')}
+    </div>${o.hint?hint(o.hint):''}</div>`;
+}
+/* 统一的下拉字段：自定义按钮 + 弹层（#jumpSel / #encSel 同款）。
+   (#select-unify 2026-09-17) 终端字符集原先用原生 <select>，暗色下由系统绘制，
+   圆角/配色/hover 都与「跳板机」的 .select 按钮不一致 → 换成同一套控件。 */
+function selectField(id,label,valueHTML,ph,hintHTML,dataSel){
+  return `<div class="field"><span class="lab">${label}</span>
+    <button type="button" class="select" id="${id}"${dataSel?` data-sel="${dataSel}"`:''} aria-haspopup="listbox" aria-expanded="false">
+      <span class="v ${ph?'ph':''}">${valueHTML}</span>
+      <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>${hintHTML||''}</div>`;
+}
+/* (#sel-registry 2026-09-17) 短列表字段的通用注册表：值 → 显示名。
+   「终端字符集」与串口的 数据位/停止位/校验位/流控 全部走同一套「下拉框」控件，
+   不再用分段按钮 —— 视觉与交互统一，短字段还能并成一行。 */
+const SEL_FIELDS = {
+  encoding: { label:'终端字符集', items:ENCODINGS.map(v=>[v,v]), hint:'远端使用 GB2312 或 GBK 输出时请选择 GBK。' },
+  dataBits: { label:'数据位', items:[['7','7'],['8','8']] },
+  stopBits: { label:'停止位', items:[['1','1'],['2','2']] },
+  parity:   { label:'校验位', items:[['none','无'],['odd','奇'],['even','偶']] },
+  flow:     { label:'流控',   items:[['none','无'],['hardware','硬件'],['software','软件']] },
+};
+function selLabel(key){
+  const f = SEL_FIELDS[key];
+  return (f.items.find(([v])=>v===D()[key])||[])[1] || D()[key] || '';
+}
+function selField(key){
+  const f = SEL_FIELDS[key];
+  return selectField('sel-'+key, f.label, esc(selLabel(key)), false, f.hint?hint(f.hint):'', key);
+}
+function fCheck(k,label,h){
+  const on = !!D()[k];
+  return `<div class="field">
+    <div class="cbx-row" data-cbx="${k}" role="checkbox" aria-checked="${on}" tabindex="0">
+      <span class="cbx ${on?'on':''}">${on?'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 4L19 7"/></svg>':''}</span>
+      <span class="cbx-lbl">${label}</span>
+    </div>${h?hint(h):''}</div>`;
+}
+const ROW = (cols,inner) => `<div class="row mb" style="grid-template-columns:${cols}">${inner}</div>`;
+
+/* ============================================================
+   分区：连接到哪 → 命名与归类 → 身份认证 → 高级
+   ============================================================ */
+/* 连接协议 + 主机(/串口号) + 端口(/波特率) 同行：三者同属「连到哪」；
+   放一行既省高度，也让“协议决定主机字段语义”这层关系一眼可见。 */
+const CONNECT_COLS = '1.25fr 1.5fr 0.8fr';
+function targetSection(){
+  const k = state.kind;
+  let h = '';
+  if(k !== 'serial'){
+    h += ROW(CONNECT_COLS,
+      protoSelector() +
+      fInput('host','主机 / IP','192.168.1.10',{mono:1, err: state.hostMissing && D().host===''}) +
+      fInput('port','端口',k==='telnet'?'23':'22',{mono:1}));
+  } else {
+    h += ROW(CONNECT_COLS,
+      protoSelector() +
+      fInput('serialPort','串口号','COM3  /  /dev/ttyUSB0',{mono:1, err: state.serialMissing && D().serialPort===''}) +
+      fInput('baud','波特率','115200',{mono:1}));
+    // (#serial-dropdowns 2026-09-17) 数据位/停止位/校验位/流控 由分段按钮改下拉框：
+    // 与「连接协议 / 终端字符集」同一套控件；四个短字段并成一行，更紧凑也更一致。
+    h += ROW('1fr 1fr 1fr 1fr',
+      selField('dataBits') + selField('stopBits') + selField('parity') + selField('flow'));
+  }
+  return `<section class="sec">${h}</section>`;
+}
+function identitySection(){
+  // 名称 + 分组 同行（都是简短的“标识”信息）；备注整行在下。
+  let h = ROW('1fr 1fr',
+    fInput('name','名称',namePlaceholder(),{opt:1, hintId:'nameHint', hintHTML:nameHintHTML()}) +
+    groupField());
+  h += fInput('note','备注','例如：仅内网可访问 · 维护窗口 周五 22:00',{opt:1});
+  return `<section class="sec">${h}</section>`;
+}
+function authSection(){
+  if(state.kind !== 'ssh') return '';
+  let h = '';
+  // (#auth-order 2026-09-17) 「认证方式」提到「用户名」之前：先选认证方式，再填凭据 ——
+  // 谁决定「下面出现哪些字段」谁在前，读起来才顺。
+  h += fSeg('auth','认证方式',[{v:'password',label:'密码'},{v:'keyboard-interactive',label:'键盘交互'},{v:'key',label:'私钥'}]);
+  const a = D().auth;
+  if(a==='password' || a==='keyboard-interactive'){
+    // (#auth-row 2026-09-17) 「用户名」与「密码」并成一行：两者都是短字段，
+    // 同行后认证区从 3 行降到 2 行，视线也不用在上下行之间来回跳。
+    h += ROW('1fr 1fr',
+      fInput('user','用户名','留空则连接时询问',{mono:1}) +
+      fInput('password', a==='keyboard-interactive'?'密码 / 首个回答':'密码', state.editing?'留空则保留当前密码':'••••••••', {password:1}));
+    if(a==='keyboard-interactive') h += hint('登录时服务器会提示；MFA / OTP 会再次询问。');
+  }
+  if(a==='key'){
+    // 私钥认证：凭据是「密钥 + 口令」，用户名单独一行在前。
+    h += fInput('user','用户名','留空则连接时询问',{mono:1});
+    h += fSeg('keyMode','私钥',[{v:'file',label:'私钥文件'},{v:'inline',label:'粘贴私钥'}]);
+    if(D().keyMode==='file'){
+      h += `<div class="field"><label for="f-keyPath">私钥文件</label>
+        <div class="pickrow"><input class="control mono" id="f-keyPath" data-k="keyPath" placeholder="/home/you/.ssh/id_ed25519" value="${esc(D().keyPath)}">
+        <button type="button" class="pickbtn" id="browseBtn">浏览…</button></div>
+        ${hint('选择私钥本身（不是 .pub 公钥）')}</div>`;
+    } else {
+      h += fArea('keyInline','私钥内容','-----BEGIN OPENSSH PRIVATE KEY-----',{key:1,hint:'私钥内容保存前会加密。'});
+    }
+    h += fInput('passphrase','私钥口令', state.editing?'留空则保留当前口令':'若私钥未加密则留空',{password:1});
+  }
+  return `<section class="sec">${h}</section>`;
+}
+function proxyField(){
+  const t = D().proxyType;
+  let h = fSeg('proxyType','代理（可选）',[{v:'none',label:'无'},{v:'socks5',label:'SOCKS5'},{v:'http',label:'HTTP'}]);
+  if(t!=='none') h += fInput('proxyHostport','代理地址','127.0.0.1:1080',{mono:1});
+  h += hint(t==='none' ? '不使用代理 — 使用 $ALL_PROXY 或直接连接' : '格式：host:port（带认证：user:pass@host:port）');
+  return h;
+}
+function jumpField(){
+  const i = state.d.jumpIndex;
+  return selectField('jumpSel','跳板机（可选）', esc(JUMPS[i]), i<=0,
+    hint('通过另一个已保存的 SSH 会话作为跳板机来连接。'));
+}
+/* ---- 端口转发：可折叠行 + 摘要 ---- */
+const FWK = {local:'-L', remote:'-R', dynamic:'-D'};
+function fwSummary(f){
+  if(!(f.name||f.bindAddr||f.bindPort||f.host||f.hostPort)) return '新建转发';
+  const k = FWK[f.kind]||'-L';
+  const bind = `${f.bindAddr||'…'}${f.bindPort?':'+f.bindPort:''}`;
+  const pre = f.name ? f.name+' · ' : '';
+  if(f.kind==='dynamic') return `${pre}${k} ${bind}`;
+  return `${pre}${k} ${bind} → ${(f.host||'…')}${f.hostPort?':'+f.hostPort:''}`;
+}
+function forwardField(){
+  const has = state.forwards.length>0;
+  const rows = state.forwards.map((f,i)=>`
+    <div class="item-box ${f.open?'open':''}" ${state.newRow==='fw:'+i?'data-new':''}>
+      <div class="item-head" data-fwhead="${i}" role="button" tabindex="0" aria-expanded="${f.open}">
+        <span class="item-k">${FWK[f.kind]||'-L'}</span>
+        <span class="item-sum ${f.name||f.bindAddr||f.bindPort||f.host?'':'empty'}">${esc(fwSummary(f))}</span>
+        <button type="button" class="del" data-delfw="${i}" aria-label="删除转发">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        ${ICON_CHEV}
+      </div>
+      ${f.open?`<div class="item-body">
+        <div class="seg" data-fwk="${i}"><span class="thumb"></span>
+          ${[['local','本地 -L'],['remote','远程 -R'],['dynamic','动态 -D']].map(([v,l])=>`<button type="button" data-v="${v}" aria-checked="${f.kind===v}">${l}</button>`).join('')}
+        </div>
+        <input class="mini" data-fw="${i}" data-fk="name" placeholder="名称（可选）" value="${esc(f.name)}">
+        <div class="duo">
+          <input class="mini mono" data-fw="${i}" data-fk="bindAddr" placeholder="监听地址 127.0.0.1" value="${esc(f.bindAddr)}">
+          <input class="mini mono" data-fw="${i}" data-fk="bindPort" placeholder="监听端口" value="${esc(f.bindPort)}">
+        </div>
+        ${f.kind!=='dynamic' ? `<div class="duo">
+          <input class="mini mono" data-fw="${i}" data-fk="host" placeholder="目标主机" value="${esc(f.host)}">
+          <input class="mini mono" data-fw="${i}" data-fk="hostPort" placeholder="目标端口" value="${esc(f.hostPort)}">
+        </div>`:''}
+      </div>`:''}
+    </div>`).join('');
+  const empty = `<button type="button" class="empty-add" id="addFw">${ICON_PLUS}添加端口转发</button>
+    <div class="empty-tip">常用于从本地访问内网服务（数据库、VNC、Web 后台等）。例如
+      <a href="#" data-sample-fw>-L 8080 → db.internal:5432</a></div>`;
+  return `<div class="field">
+    <div class="lab-row"><span class="lab">端口转发</span>
+      ${has?`<button type="button" class="addmini" id="addFw">${ICON_PLUS}添加</button>`:''}</div>
+    ${has?rows:empty}
+    ${has?hint('-L：本地端口 → 从服务器侧访问目标；-R：服务器端口 → 从本机侧访问目标；-D：本地 SOCKS5 代理'):''}</div>`;
+}
+/* ---- 登录触发器：可折叠行 + 摘要 ---- */
+function trgSummary(t){
+  const e=(t.expect||'').trim(), r=(t.response||'').trim();
+  if(!e && !r) return '';
+  return `${e?`「${e}」`:''}${e&&r?' → ':''}${r?`回复「${r}」`:''}`;
+}
+function triggerField(){
+  const has = state.triggers.length>0;
+  const rows = state.triggers.map((t,i)=>{
+    const s=trgSummary(t);
+    return `
+    <div class="item-box ${t.open?'open':''}" ${state.newRow==='trg:'+i?'data-new':''}>
+      <div class="item-head" data-trghead="${i}" role="button" tabindex="0" aria-expanded="${t.open}">
+        <span class="item-k">触发</span>
+        <span class="item-sum ${s?'':'empty'}">${esc(s||'新建触发器')}</span>
+        <button type="button" class="del" data-deltrg="${i}" aria-label="删除触发器">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        ${ICON_CHEV}
+      </div>
+      ${t.open?`<div class="item-body">
+        <input class="mini" data-trg="${i}" data-tk="expect" placeholder="期望输出（出现即触发）" value="${esc(t.expect)}">
+        <input class="mini" data-trg="${i}" data-tk="response" placeholder="回复内容（留空则保留已保存的值）" value="${esc(t.response)}">
+        <div class="bitsrow" style="display:flex;gap:8px">
+          <button type="button" class="segopt-t" data-toggle-trg="${i}" data-tf="sendEnter" aria-pressed="${t.sendEnter}">发送 Enter</button>
+          <button type="button" class="segopt-t" data-toggle-trg="${i}" data-tf="repeat" aria-pressed="${t.repeat}">重复触发</button>
+        </div>
+      </div>`:''}
+    </div>`;}).join('');
+  const empty = `<button type="button" class="empty-add" id="addTrg">${ICON_PLUS}添加触发器</button>
+    <div class="empty-tip">出现指定文本时自动应答（如自动输入密码、跳过首次确认）。例如
+      <a href="#" data-sample-trg>「password:」 → 自动发送保存的密码</a></div>`;
+  return `<div class="field">
+    <div class="lab-row"><span class="lab">登录触发器</span>
+      ${has?`<button type="button" class="addmini" id="addTrg">${ICON_PLUS}添加</button>`:''}</div>
+    ${has?rows:empty}
+    ${has?hint('出现期望文本时自动发送回复。回复内容会加密保存。'):''}</div>`;
+}
+function advancedSection(){
+  const k = state.kind;
+  // (#adv-uniform 2026-09-17) Serial 原先在 advanced=true 时**只渲染内容、不渲染 toggle 按钮**，
+  // 于是从 SSH（已展开）切过来就出现「高级字段露在外面、却没有可点的收起按钮」的卡死态。
+  // 改为所有协议统一形态：按钮 + 折叠容器；inner 只负责"展开后放什么"。
+  let inner = '';
+  if(state.advanced){
+    if(k==='serial'){
+      inner += fCheck('vt100','启用 VT100 线框绘制（即使 UTF-8 模式）','服务器在 UTF-8 模式下仍通过 ESC(0 或 SO/SI 切换字符集时（如 top、mc 的边框），正确显示线框图形。');
+    } else {
+      if(k==='ssh') inner += selField('encoding');
+      inner += fCheck('vt100','启用 VT100 线框绘制（即使 UTF-8 模式）','服务器在 UTF-8 模式下仍通过 ESC(0 或 SO/SI 切换字符集时（如 top、mc 的边框），正确显示线框图形。');
+      inner += proxyField();
+      if(k==='ssh') inner += jumpField();
+      if(k==='ssh'){
+        inner += fCheck('disShellInt','禁用 shell 集成（Windows / pwsh 服务端）','Windows 服务端请勾选：跳过假定 POSIX shell 的 cwd 跟随注入与资源监控，否则它们会把 shell 弄坏。');
+        inner += forwardField();
+        inner += triggerField();
+      }
+    }
+  }
+  return `<section class="sec">
+    <button type="button" class="adv-btn" id="advBtn" aria-expanded="${state.advanced}">
+      <span>${state.advanced?'隐藏高级选项':'显示高级选项'}</span>
+      <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+    <div class="collapse ${state.advanced?'open':''}"><div class="inner"><div class="adv-inner">${inner}</div></div></div>
+  </section>`;
+}
+function groupHintHTML(val){
+  val = (val||'').trim();
+  if(!val) return '可从现有分组中选择，或直接输入新名称';
+  const g = GROUPS.find(x=>x.n===val);
+  return g
+    ? `<span class="cdot" style="background:${g.c};display:inline-block;vertical-align:-1px"></span> 已有分组「${esc(g.n)}」· ${g.count} 台`
+    : `将新建分组「${esc(val)}」`;
+}
+/* 名称提示随协议变化：Serial 没有主机，改用串口号 */
+function namePlaceholder(){ return state.kind==='serial' ? '留空则用串口号命名' : '留空则用主机地址命名'; }
+function nameHintHTML(){
+  const d=D();
+  if((d.name||'').trim()) return '';
+  const serial = state.kind==='serial';
+  const src = String(serial ? (d.serialPort||'') : (d.host||'')).trim();
+  if(!src) return '';
+  return `将使用${serial?'串口号':'主机地址'}命名为「${esc(src)}」`;
+}
+function groupField(){
+  const v = (D().group||'').trim(), g = GROUPS.find(x=>x.n===v);
+  return `<div class="field"><span class="lab">分组 <span class="opt">（可选）</span></span>
+    <div class="combo">
+      <input class="control" id="f-group" data-k="group" placeholder="例如：生产环境 / 测试环境" value="${esc(D().group)}" style="padding-right:${g?'46px':'38px'}">
+      <span class="cdot" id="groupDot" style="display:${g?'':'none'};background:${g?g.c:'transparent'}"></span>
+      <button type="button" class="inset" id="groupDrop" aria-label="选择分组" aria-haspopup="listbox" aria-expanded="false">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </div>
+    <span class="help" id="groupHint">${groupHintHTML(D().group)}</span></div>`;
+}
+/* 「连接协议」下拉：图标 + 名称（+「即将」/「预览」标签）+ 箭头。
+   面板 = 轻量「列表选择器」：按分类分组、当前项打勾、未实现项标「即将」。
+   **这是重新设计的独立控件** —— 不复刻旧的「更多」标签栏面板：本变体已无标签栏，
+   不再需要“固定哪些协议 / 拖拽排序”那一套；选完即收起。 */
+function protoSelector(){
+  const p = byId(state.kind) || listProtos()[0];
+  const prev = !!(state.preview && state.preview===state.kind);
+  const tag = p.soon ? (prev?'<span class="prev">预览</span>':'<span class="soon">即将</span>') : '';
+  return `<div class="field"><span class="lab">连接协议</span>
+    <button type="button" class="select" id="protoSel" aria-haspopup="listbox" aria-expanded="false" title="切换连接协议">
+      ${ic(p.icon)}<span class="v">${esc(p.label)}</span>${tag}
+      <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button></div>`;
+}
+function protoListHTML(){
+  const all = listProtos();
+  const cats = [...new Set(all.map(p=>p.cat))];
+  return cats.map(c=>`<div class="grp">${c}</div>` + all.filter(p=>p.cat===c).map(p=>{
+    const sel = p.id===state.kind;
+    const prev = !!(state.preview && state.preview===p.id);
+    // (#badge-col 2026-09-17) 徽标文案与触发器保持一致：未实现的标「即将」，正在预览的标「预览」；
+    // 勾选槽位「始终渲染」（未选中留空）→ 徽标不被勾挤动，整列右缘对齐。
+    const tag = p.soon ? (prev?'<span class="prev">预览</span>':'<span class="soon">即将</span>') : '';
+    return `<div class="item" role="option" data-p="${p.id}" aria-selected="${sel}">
+      ${ic(p.icon)}<span class="nm">${p.label}</span>
+      ${tag}<span class="ck">${sel?ICON_OK:''}</span>
+    </div>`;
+  }).join('')).join('');
+}
+/* 未实现的协议（RDP / VNC）：布局预留 + 通用字段占位 */
+function genericBody(){
+  const p = byId(state.kind) || {label:'连接'};
+  const previewing = state.preview===state.kind;
+  const port = state.kind==='rdp' ? '3389' : (state.kind==='vnc' ? '5900' : '22');
+  const hostPh = state.kind==='rdp' ? '192.168.1.20' : (state.kind==='vnc' ? '192.168.1.30' : '192.168.1.10');
+  const userPh = state.kind==='rdp' ? 'Administrator' : '';
+  const extra = state.kind==='vnc' ? '专属选项（颜色深度、只读 / 共享、剪贴板等）待定'
+                                   : '专属选项（分辨率、剪贴板 / 驱动器重定向、网关等）待定';
+  return `<section class="sec"><div class="reserved">
+      <span class="rk">${p.label}</span>
+      <div><b>${p.label} 连接 · ${previewing?'布局预览':'布局预留'}</b>
+      <div class="help">${extra}；以下为通用连接信息占位，后续按真实字段替换。</div></div>
+    </div></section>`
+    + `<section class="sec">${ROW(CONNECT_COLS, protoSelector() + fInput('host','主机 / IP', hostPh,{mono:1,err:state.hostMissing&&D().host===''}) + fInput('port','端口', port,{mono:1}))}</section>`
+    + `<section class="sec">${fInput('user','用户名', userPh,{mono:1}) + fInput('password','密码','••••••••',{password:1})}</section>`;
+}
+
+/* ============================================================
+   渲染
+   ============================================================ */
+const ic = name => ICON[name].replace('<svg','<svg class="ic"');
+/* 本变体没有协议标签轨道：「连接协议」是字段级的列表选择器（protoSelector）。 */
+function renderHead(){
+  const p = byId(state.kind) || REAL_PROTOS[0];
+  const previewing = !!(state.preview && state.preview===state.kind);
+  $('#glyph').innerHTML = ICON[p.icon];
+  $('#dlgSub').textContent = state.editing ? ('编辑「'+p.label+'」连接') : ((p.sub || '配置会话') + (previewing?'（预览 · 尚未实现）':''));
+  $('#dlgTitle').textContent = state.editing ? '编辑会话' : '新建会话';
+  $('#createBtn').textContent = state.editing ? '保存' : '创建';
+  $('#createBtn').disabled = previewing;                    // 预览态不可创建
+  $('#createBtn').title = previewing ? (p.label+' 尚未实现，仅预览布局') : '';
+}
+function sectionsHTML(){
+  // 名称/分组/备注 = 所有协议共用的「标识」信息 → 置顶；
+  // 紧接一行 = 「连接协议 + 主机/串口 + 端口/波特率」（同属“连到哪”）；
+  // 最后才是各协议专属字段。
+  let h = identitySection();
+  h += isReal() ? (targetSection() + authSection() + advancedSection()) : genericBody();
+  return `<div class="secwrap">${h}</div>`;
+}
+function thumbKey(c){ return c.id || c.dataset.seg || (c.dataset.fwk!=null ? 'fwk:'+c.dataset.fwk : ''); }
+function captureThumbs(){
+  const map = new Map();
+  document.querySelectorAll('.seg').forEach(c=>{               // 仅 .seg：本变体已无协议标签轨道
+    const th=c.querySelector('.thumb'); const key=thumbKey(c);
+    if(!th || !key) return;
+    map.set(key, {w:th.style.width, x:th.style.transform});
+  });
+  return map;
+}
+function restoreThumbs(map){
+  document.querySelectorAll('.seg').forEach(c=>{
+    const th=c.querySelector('.thumb');
+    const on=c.querySelector('[aria-checked="true"]');
+    if(!th || !on) return;
+    const prev = map.get(thumbKey(c));
+    th.style.transition='none';
+    if(prev && prev.w){ th.style.width=prev.w; th.style.transform=prev.x; }
+    else { th.style.width=on.offsetWidth+'px'; th.style.transform=`translateX(${on.offsetLeft-3}px)`; }
+    th.getBoundingClientRect();
+    th.style.transition='';
+  });
+}
+function renderBody(){
+  const host = $('#sections');
+  const html = sectionsHTML();
+  const old = host.firstElementChild;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const thumbs = captureThumbs();
+  if(!old || reduce){
+    host.innerHTML = html;
+    restoreThumbs(thumbs);
+    return;
+  }
+  const from = old.getBoundingClientRect().height;
+  host.style.height = from+'px';
+  host.style.overflow = 'hidden';
+  host.innerHTML = html;
+  restoreThumbs(thumbs);
+  const next = host.firstElementChild;
+  const to = next ? next.getBoundingClientRect().height : from;
+  host.getBoundingClientRect();
+  host.style.transition = 'height .32s cubic-bezier(.22,1,.36,1)';
+  host.style.height = to+'px';
+  let done = false;
+  const finish = ()=>{
+    if(done) return; done = true;
+    host.style.height = ''; host.style.overflow = ''; host.style.transition = '';
+    host.removeEventListener('transitionend', finish);
+  };
+  host.addEventListener('transitionend', finish);
+  setTimeout(finish, 400);
+  requestAnimationFrame(()=>placeThumbs());                    // 旧滑块位置 → 新选中位，真滑动
+}
+function placeThumbs(opts){
+  const instant = !!(opts && opts.instant);
+  const apply = ()=>{
+    document.querySelectorAll('.seg').forEach(c=>{
+      const th=c.querySelector('.thumb'); if(!th) return;
+      const on=c.querySelector('[aria-checked="true"]');
+      if(!on){ th.style.width='0px'; return; }
+      if(instant) th.style.transition='none';
+      th.style.width=on.offsetWidth+'px';
+      th.style.transform=`translateX(${on.offsetLeft-3}px)`;
+      if(instant){ th.getBoundingClientRect(); th.style.transition=''; }
+    });
+  };
+  if(instant) apply(); else requestAnimationFrame(apply);
+}
+function leaveItem(box, done){
+  if(!box){ done(); return; }
+  const h = box.getBoundingClientRect().height;
+  box.style.maxHeight = h+'px';
+  box.style.transition = 'opacity .18s ease, transform .18s ease, max-height .26s cubic-bezier(.22,1,.36,1), margin .26s, border-width .26s';
+  box.getBoundingClientRect();
+  box.classList.add('is-leaving');
+  box.style.maxHeight = '0px';
+  setTimeout(done, 260);
+}
+const LAYOUT_SEGS = new Set(['auth','keyMode','proxyType']);   // 改值会增删下方字段，必须重建
+function applySegClick(btn){
+  const c = btn.closest('[data-seg],[data-fwk]'); if(!c) return false;
+  const v = btn.dataset.v;
+  if(c.dataset.fwk!=null){
+    state.forwards[+c.dataset.fwk].kind = v;
+    c.querySelectorAll('button').forEach(b=>b.setAttribute('aria-checked', String(b.dataset.v===v)));
+    placeThumbs();
+    renderBody();
+    return true;
+  }
+  const k = c.dataset.seg;
+  D()[k] = v;
+  c.querySelectorAll('button').forEach(b=>b.setAttribute('aria-checked', String(b.dataset.v===v)));
+  placeThumbs();
+  if(LAYOUT_SEGS.has(k)) renderBody();
+  return true;
+}
+function clearNewRowSoon(){ const t=state.newRow; setTimeout(()=>{ if(state.newRow===t) state.newRow=null; }, 460); }
+function addForward(seed){
+  state.forwards.forEach(x=>x.open=false);
+  state.forwards.push(Object.assign({kind:'local',name:'',bindAddr:'',bindPort:'',host:'',hostPort:'',open:true}, seed||{}));
+  state.newRow='fw:'+(state.forwards.length-1); renderBody(); clearNewRowSoon();
+}
+function addTrigger(seed){
+  state.triggers.forEach(x=>x.open=false);
+  state.triggers.push(Object.assign({expect:'',response:'',sendEnter:true,repeat:false,open:true}, seed||{}));
+  state.newRow='trg:'+(state.triggers.length-1); renderBody(); clearNewRowSoon();
+}
+
+/* ============================================================
+   交互
+   ============================================================ */
+const bodyEl = $('#body');
+function setKind(k){
+  const d=D();
+  const DEFS={ssh:'22',telnet:'23',rdp:'3389',vnc:'5900'};
+  if(['22','23','3389','5900'].includes(d.port) && DEFS[k]) d.port=DEFS[k];
+  if(k!==state.preview) state.preview=null;              // 离开预览协议 → 退出预览
+  // (#adv-reset-on-kind 2026-09-17) 切换协议 → 高级区收起。
+  // 理由：高级区内容随协议整块替换（SSH 7 项 / Telnet 2 项 / Serial 1 项），
+  // 若保持展开，面板上写着「隐藏高级选项」、里面字段却已被静默换掉 —— 状态与所见不一致。
+  // 数据不丢（已填值仍在），代价只是一次点击；也让弹窗默认保持紧凑。
+  if(k !== state.kind) state.advanced = false;
+  state.kind=k; state.hostMissing=false; state.serialMissing=false;
+  setStatus('','');
+  renderHead(); renderBody();
+}
+/* 预览尚未实现的协议（如 VNC）：仅切到“布局预览”态，不写入任何固定列表。
+   新版下拉是「列表选择器」，选完即收起 —— 不再需要面板内的“预览中”提示来反馈。 */
+function previewProto(id){
+  state.preview=id;
+  setKind(id);
+}
+/* 字段值变化后的联动（输入 / 清除共用） */
+function onFieldChanged(kk, el){
+  const v = String(D()[kk]==null?'':D()[kk]);
+  const t = v.trim();
+  if(kk==='host' && t){ state.hostMissing=false; if(el) el.classList.remove('err'); }
+  if(kk==='serialPort' && t){ state.serialMissing=false; if(el) el.classList.remove('err'); }
+  if(kk==='group'){
+    const gg=GROUPS.find(x=>x.n===t);
+    const dot=document.getElementById('groupDot');
+    if(dot && el){ if(gg){ dot.style.display=''; dot.style.background=gg.c; el.style.paddingRight='46px'; }
+                   else { dot.style.display='none'; el.style.paddingRight='38px'; } }
+    const gh=document.getElementById('groupHint'); if(gh) gh.innerHTML=groupHintHTML(v);
+  }
+  if(statusFocus===kk && t) setStatus('','');
+  if(kk==='name' || kk==='host' || kk==='serialPort'){ const n=document.getElementById('nameHint'); if(n) n.innerHTML=nameHintHTML(); }
+}
+bodyEl.addEventListener('input',e=>{
+  const el=e.target.closest('[data-k]');
+  if(el){ const kk=el.dataset.k; D()[kk]=el.value; onFieldChanged(kk, el); return; }
+  const fw=e.target.closest('[data-fw]');
+  if(fw && e.target.dataset.fk){ state.forwards[+fw.dataset.fw][e.target.dataset.fk]=e.target.value; return; }
+  const tg=e.target.closest('[data-trg]');
+  if(tg && e.target.dataset.tk){ state.triggers[+tg.dataset.trg][e.target.dataset.tk]=e.target.value; return; }
+});
+/* (#select-unify 2026-09-17) 原生 <select> 已全部替换为 .select 按钮 + 弹层，change 监听已废弃。 */
+bodyEl.addEventListener('click',e=>{
+  const cb=e.target.closest('[data-cbx]');
+  if(cb){ const k=cb.dataset.cbx; D()[k]=!D()[k]; renderBody(); return; }
+  if(e.target.closest('[data-eye]')){ state.showPass=!state.showPass; renderBody(); return; }
+  const cl=e.target.closest('[data-clear]');
+  if(cl){ const k=cl.dataset.clear; D()[k]=''; const inp=document.getElementById('f-'+k);
+    if(inp){ inp.value=''; inp.classList.remove('err'); inp.focus(); } onFieldChanged(k, inp); return; }
+  const delFw=e.target.closest('[data-delfw]');
+  if(delFw){ e.stopPropagation(); const i=+delFw.dataset.delfw; const box=delFw.closest('.item-box');
+    leaveItem(box, ()=>{ state.forwards.splice(i,1); renderBody(); }); return; }
+  const delTrg=e.target.closest('[data-deltrg]');
+  if(delTrg){ e.stopPropagation(); const i=+delTrg.dataset.deltrg; const box=delTrg.closest('.item-box');
+    leaveItem(box, ()=>{ state.triggers.splice(i,1); renderBody(); }); return; }
+  const fh=e.target.closest('[data-fwhead]');
+  if(fh){ const i=+fh.dataset.fwhead; state.forwards[i].open=!state.forwards[i].open; renderBody(); return; }
+  const th=e.target.closest('[data-trghead]');
+  if(th){ const i=+th.dataset.trghead; state.triggers[i].open=!state.triggers[i].open; renderBody(); return; }
+  if(e.target.closest('#addFw')){ addForward(); return; }
+  if(e.target.closest('#addTrg')){ addTrigger(); return; }
+  if(e.target.closest('[data-sample-fw]')){ e.preventDefault(); addForward({bindAddr:'127.0.0.1',bindPort:'8080',host:'db.internal',hostPort:'5432'}); return; }
+  if(e.target.closest('[data-sample-trg]')){ e.preventDefault(); addTrigger({expect:'password:',response:''}); return; }
+  const sp=e.target.closest('[data-seg] button, [data-fwk] button');
+  if(sp){ applySegClick(sp); return; }
+  const tt=e.target.closest('[data-toggle-trg]');
+  if(tt){ const t=state.triggers[+tt.dataset.toggleTrg]; t[tt.dataset.tf]=!t[tt.dataset.tf]; renderBody(); return; }
+  if(e.target.closest('#advBtn')){ state.advanced=!state.advanced; renderBody(); return; }
+  if(e.target.closest('#protoSel')){ (pop.hidden||popMode!=='proto') ? openPop('proto') : closePop(); return; }
+  if(e.target.closest('#groupDrop')){ (pop.hidden||popMode!=='group') ? openPop('group') : closePop(); return; }
+  if(e.target.closest('#jumpSel')){ (pop.hidden||popMode!=='jump') ? openPop('jump') : closePop(); return; }
+  const sf=e.target.closest('.select[data-sel]');
+  if(sf){
+    const kk=sf.dataset.sel;
+    if(pop.hidden || popMode!=='sel' || popSel!==kk){ popSel=kk; openPop('sel'); }
+    else closePop();
+    return;
+  }
+});
+bodyEl.addEventListener('keydown',e=>{
+  const cb=e.target.closest('[data-cbx]');
+  if(cb && (e.key===' '||e.key==='Enter')){ e.preventDefault(); D()[cb.dataset.cbx]=!D()[cb.dataset.cbx]; renderBody(); return; }
+  const hd=e.target.closest('[data-fwhead],[data-trghead]');
+  if(hd && (e.key===' '||e.key==='Enter')){ e.preventDefault(); hd.click(); return; }
+  /* 回车提交：普通输入框内、弹层未开、且不在折叠行里 */
+  if(e.key==='Enter' && pop.hidden){
+    const inp=e.target.closest('input');
+    if(inp && !inp.closest('.item-box')){ e.preventDefault(); $('#createBtn').click(); }
+  }
+});
+/* (#no-hover-slide 2026-09-17) 已移除「悬浮预览」：选中块不再跟着鼠标滑到悬停项上，
+   .thumb 只停在实际选中的那一项，只有点击切换（applySegClick → placeThumbs）时才滑动。 */
+
+/* ---- 弹层 ---- */
+let popMode='group', popSel='', popTriggerSel='';
+const pop=document.createElement('div'); pop.className='pop'; pop.hidden=true; document.body.appendChild(pop);
+/* 选中后把焦点交还触发控件：.select 用 :focus 显示聚焦环（与输入框一致），
+   renderBody() 重建 DOM 会丢焦点 → 这里补一次 focus，让描边像输入框一样保持。 */
+function refocusTrigger(){
+  if(!popTriggerSel) return;
+  const el=$(popTriggerSel); if(!el) return;
+  try{ el.focus({preventScroll:true}); }catch(_){ el.focus(); }
+}
+function openPop(mode){
+  popMode=mode;
+  pop.className = 'pop';
+  const trigger = mode==='proto' ? $('#protoSel')
+    : mode==='group' ? $('#groupDrop')
+    : mode==='sel'   ? $('.select[data-sel="'+popSel+'"]')
+    : $('#jumpSel');
+  /* 分组框的「触发控件」是它内部的输入框（聚焦的是 .control，而非 ▾ 按钮）。 */
+  popTriggerSel = mode==='proto' ? '#protoSel'
+    : mode==='group' ? '#f-group'
+    : mode==='sel'   ? '.select[data-sel="'+popSel+'"]'
+    : '#jumpSel';
+  if(!trigger) return;
+  const r = (trigger.closest('.combo')||trigger).getBoundingClientRect();
+  if(mode==='proto'){
+    pop.innerHTML = protoListHTML();
+  } else if(mode==='group'){
+    pop.innerHTML = GROUPS.map(g=>`<div class="item" role="option" data-g="${esc(g.n)}" aria-selected="${D().group===g.n}">
+      <span class="cdot" style="background:${g.c}"></span><span class="nm">${esc(g.n)}</span><span class="cnt">${g.count} 台</span></div>`).join('');
+  } else if(mode==='sel'){
+    const f = SEL_FIELDS[popSel];
+    pop.innerHTML = f.items.map(([v,l])=>`<div class="item" role="option" data-v="${esc(v)}" aria-selected="${D()[popSel]===v}"><span class="nm">${esc(l)}</span></div>`).join('');
+  } else {
+    pop.innerHTML = JUMPS.map((j,i)=>`<div class="item" role="option" data-j="${i}" aria-selected="${D().jumpIndex===i}"><span class="nm">${esc(j)}</span></div>`).join('');
+  }
+  // (#pop-width 2026-09-17) 弹层宽度 = 触发按钮宽度（含「连接协议」）→ 与选择框左右对齐。
+  pop.style.left=r.left+'px'; pop.style.width=r.width+'px'; pop.style.top=(r.bottom+6)+'px';
+  if(mode==='proto'){ pop.style.right='auto'; }
+  pop.hidden=false; trigger.setAttribute('aria-expanded','true');
+}
+function closePop(){ pop.hidden=true;
+  ['#protoSel','#groupDrop','#jumpSel'].forEach(s=>{ const el=$(s); if(el) el.setAttribute('aria-expanded','false'); });
+  document.querySelectorAll('.select[data-sel]').forEach(el=>el.setAttribute('aria-expanded','false')); }
+function refreshProto(){
+  renderHead(); renderBody();
+  if(!pop.hidden && popMode==='proto') pop.innerHTML = protoListHTML();
+}
+pop.addEventListener('click',e=>{
+  if(popMode==='proto'){
+    const row=e.target.closest('.item[data-p]');
+    if(!row) return;
+    const p=byId(row.dataset.p); if(!p) return;
+    if(p.soon) previewProto(p.id); else setKind(p.id);   // 未实现协议 → 进入预览态
+    closePop(); refocusTrigger();
+    return;
+  }
+  const it=e.target.closest('.item'); if(!it) return;
+  if(popMode==='group'){ D().group=it.dataset.g; closePop(); renderBody(); refocusTrigger(); }
+  else if(popMode==='sel'){ D()[popSel]=it.dataset.v; closePop(); renderBody(); refocusTrigger(); }
+  else { D().jumpIndex=+it.dataset.j; closePop(); renderBody(); refocusTrigger(); }
+});
+/* 列表选择器无拖拽排序：旧的 pinrow dragstart / dragover / dragend 三段处理器已移除。 */
+document.addEventListener('click',e=>{
+  if(pop.hidden) return;
+  if(!e.target.closest('.pop') && !e.target.closest('.combo') && !e.target.closest('#protoSel') && !e.target.closest('#jumpSel') && !e.target.closest('.select[data-sel]')) closePop();
+});
+document.addEventListener('scroll',()=>closePop(),true);
+window.addEventListener('resize',()=>{ closePop(); placeThumbs(); });
+
+/* ---- 测试连接 / 创建 ---- */
+$('#testBtn').addEventListener('click',()=>{
+  const k=state.kind, d=D();
+  if(k!=='serial' && d.host===''){ state.hostMissing=true; renderBody(); setStatus('no','请先填写主机 / IP 地址','host'); return; }
+  if(k==='serial' && d.serialPort===''){ state.serialMissing=true; renderBody(); setStatus('no','请先填写串口号','serialPort'); return; }
+  state.hostMissing=false; state.serialMissing=false;
+  const btn=$('#testBtn'); btn.disabled=true; btn.innerHTML='<span class="spinner"></span>测试中';
+  setStatus('','');
+  setTimeout(()=>{ btn.disabled=false; btn.innerHTML=ICON_TEST+'测试连接';
+    setStatus('ok','连接成功 · 128 ms');
+  }, 900);
+});
+$('#createBtn').addEventListener('click',()=>{
+  const k=state.kind, d=D();
+  if(k!=='serial' && d.host===''){ state.hostMissing=true; renderBody();
+    setStatus('no','请先填写主机 / IP 地址','host');
+    const f=document.getElementById('f-host'); if(f){ f.focus(); f.scrollIntoView({block:'center',behavior:'smooth'}); }
+    return; }
+  state.hostMissing=false;
+  const b=$('#createBtn'); b.disabled=true; b.innerHTML='<span class="spinner"></span>'+(state.editing?'保存中':'创建中');
+  // (#form-reset 2026-09-17) 创建/保存成功 → 先复位表单再关闭：
+  // 下一次新建拿到空白表单，不会把上一条连接的信息当成本次初值。
+  setTimeout(()=>{ b.disabled=false; resetForm(); renderHead(); renderBody(); closeDialog(); }, 700);
+});
+$('#testRes').addEventListener('click',()=>{
+  if(!statusFocus) return;
+  const f=document.getElementById('f-'+statusFocus);
+  if(f){ f.focus(); f.scrollIntoView({block:'center',behavior:'smooth'}); }
+});
+
+/* ---- 开关 ---- */
+/* (#form-reset 2026-09-17) 打开时按「新建 / 编辑」决定表单初值：
+   新建 → 重置为空白（「新建会话」应是一张干净的表单，不能带上一条的填写）；
+   编辑 → 保留既有数据（原型暂无数据层，state.d 就是那条被编辑的记录）。
+   关闭本身不动数据（关闭只是可见性），真正的复位点在「打开(新建)」与「创建成功」。 */
+function openDialog(){
+  if(!state.editing){ resetForm(); renderHead(); renderBody(); }
+  $('#overlay').classList.add('open');
+  setTimeout(()=>{ const i=bodyEl.querySelector('input'); if(i) i.focus(); },60);
+}
+function closeDialog(){ closePop(); $('#overlay').classList.remove('open'); }
+$('#openBtn').addEventListener('click',openDialog);
+$('#closeBtn').addEventListener('click',closeDialog);
+$('#cancelBtn').addEventListener('click',closeDialog);
+/* (#modal-no-outside-close 2026-09-15) 点击遮罩/窗外**不关闭**弹窗：
+   表单内容多，误点窗外就丢失填写代价太大。关闭只走 ✕ / 取消 / Esc。 */
+document.addEventListener('keydown',e=>{
+  if(!$('#overlay').classList.contains('open')) return;
+  if(e.key==='Escape'){ e.preventDefault(); pop.hidden?closeDialog():closePop(); return; }
+  if(e.key==='Tab'){ const fs=[...$('#dialog').querySelectorAll('input,textarea,select,button,[tabindex="0"]')].filter(x=>!x.disabled&&x.offsetParent!==null);
+    if(!fs.length) return; const first=fs[0], last=fs[fs.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();} }
+});
+
+/* (#no-demo-controls 2026-09-15) 已移除演示用滑杆/开关：主题(暗)、模式(新建)、
+   协议模式(内置)、窗口高度 780px、遮罩 0%/5px 全部固化为默认，成品预览不再暴露这些控件。 */
+
+/* ---- 初始化 ---- */
+$('#testBtn').innerHTML = ICON_TEST+'测试连接';
+renderHead(); renderBody();
+window.addEventListener('load',placeThumbs);
+if(document.fonts && document.fonts.ready) document.fonts.ready.then(()=>placeThumbs());   /* 字体加载后重算选中块宽度 */
+</script>
+<div class="buildtag">原型 v17 · 2026-09-17 · 头部单行化（61→49px）</div>
+</body>
+</html>

@@ -1,9 +1,8 @@
 use super::super::*;
 
 #[test]
-fn confirmed_exit_never_reopens_close_prompt() {
-    assert!(should_block_close(false, true));
-    assert!(!should_block_close(false, false));
-    assert!(!should_block_close(true, true));
-    assert!(!should_block_close(true, false));
+fn close_button_asks_even_without_live_sessions() {
+    assert_eq!(decide_close("ask"), CloseDecision::Ask);
+    assert_eq!(decide_close("tray"), CloseDecision::Tray);
+    assert_eq!(decide_close("exit"), CloseDecision::Exit);
 }

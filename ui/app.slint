@@ -120,6 +120,13 @@ export struct GroupSwatch {
     swatch: color,
 }
 
+// (#close-behavior) 关闭确认卡第③段的一行:会话名 + 主机。
+// 名称与主机分列,主机右对齐并省略 —— 长 host 不会挤坏名称列。
+export struct CloseSessionRow {
+    name: string,
+    host: string,
+}
+
 // (#group-color-field 2026-09-14) 「分组颜色」字段 —— **一套控件,三处复用心**:
 // ① 组头右键菜单的取色面板 ② 新建分组对话框 ③ 编辑分组对话框。此前色板/hex 在
 // 取色面板里写过一遍,再往两个对话框里各抄一遍就会三份实现各自演化,故抽组件。
@@ -1092,9 +1099,21 @@ export component AppWindow inherits Window {
     in-out property <bool> confirm-close-open: false;
     callback confirm-close-yes();                  // quit the app for real
     in-out property <bool> terminal-restore-cover: false;
+    // (#close-behavior) 关闭按钮行为:设置界面「界面 › 窗口」与关闭确认卡
+    // 共用这一份状态。取值 "ask"(每次询问) / "tray"(最小化到托盘) /
+    // "exit"(直接完全退出)。Rust 负责读写配置并持久化。
+    in-out property <string> close-behavior: "ask";
+    // 确认卡第③段的会话清单(仅 ask 档、且确有活动会话时非空)。
+    in property <[CloseSessionRow]> close-sessions;
+    callback set-close-behavior(string);
+    // 确认卡上点了某张卡片。参数是 "tray" / "exit";用户勾了「记住我的选择」
+    // 时带 ",remember" 后缀,Rust 顺带把偏好写进配置。
+    callback close-confirmed(string);
+    // 确认卡上的「记住我的选择，下次不再提示」。勾选后点卡片会在
+    // close-confirmed 的参数里带 ",remember" 后缀,由 Rust 持久化。
+    in-out property <bool> close-remember: false;
     // Host-key confirmation (#109-5). Rust opens this when a server presents an
     // unknown / changed host key; the user's answer flows back via the callbacks
-    // and Rust closes the dialog.
     in-out property <bool> hostkey-prompt-open: false;
     in-out property <bool> hostkey-changed: false; // true = key differs from stored
     in-out property <string> hostkey-title;
@@ -1320,6 +1339,8 @@ export component AppWindow inherits Window {
     callback add-trigger();
     callback update-trigger(int /* index */, TriggerDraft);
     callback delete-trigger(int /* index */);
+    callback add-sample-forward();
+    callback add-sample-trigger();
 
     callback tab-selected(string);
     callback tab-closed(string);
@@ -5638,23 +5659,26 @@ export component AppWindow inherits Window {
         }
     }
 
-    // --- Confirm-before-close dialog (#88) --------------------------------
+    // --- Confirm-before-close dialog (#88 / #close-behavior) --------------
+    // 四段式:头部(标题 + ×)/ 关闭行为卡片 / 活动会话清单 / 底部(只留「取消」)。
+    // 卡片本身就是操作按钮(点哪张就执行哪个),故底部不再放「关闭」主按钮 ——
+    // 破坏性预警改由「完全退出」卡片的 hover 变红承担。
+    //
+    // 注:设计稿的毛玻璃(Slint 无元素级 backdrop-filter,1.16 的
+    // i-slint-core/compiler/renderer 里均无该能力)这里用不透明的
+    // Theme.popup-bg 近似 —— 观感接近,但身后内容不会被真正模糊。
     if root.confirm-close-open : Rectangle {
         width: parent.width;
         height: parent.height;
         background: #00000088;
         TouchArea { clicked => { root.confirm-close-open = false; } }
-        // Grab the keyboard so the terminal beneath stops receiving input, and
-        // make the dialog operable without the mouse: Enter/Space close, Esc
-        // cancels (so X → Space closes, X → Esc backs out) (#140-3).
+        // 抓键盘:让下面的终端停止收键位;Esc 取消(卡片改为点选式后,
+        // 不再有 Enter/Space 直接确认的动作)。
         FocusScope {
             init => { self.focus(); }
             key-pressed(e) => {
                 if (e.text == Key.Escape) {
                     root.confirm-close-open = false;
-                    accept
-                } else if (e.text == Key.Return || e.text == " ") {
-                    root.confirm-close-yes();
                     accept
                 } else {
                     accept   // modal: swallow everything else
@@ -5662,43 +5686,356 @@ export component AppWindow inherits Window {
             }
         }
 
-        Rectangle {
+        card := Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: 340px;
-            height: 168px;
+            width: 440px;
+            height: close-body.preferred-height;
             background: Theme.popup-bg;
-            border-radius: Theme.radius-md;
+            border-radius: Theme.radius-lg;
             border-width: 1px;
             border-color: Theme.border-strong;
             drop-shadow-blur: 24px;
             drop-shadow-color: #000000a0;
             TouchArea {}
 
-            VerticalLayout {
-                padding: 18px;
-                spacing: 12px;
-                Text {
-                    text: root.lang-en ? "Close meatshell?" : "确定关闭 meatshell?";
-                    color: Theme.text-primary; font-size: Theme.fs-lg; font-weight: 700;
+            close-body := VerticalLayout {
+                spacing: 0;
+
+                // ---- ① 头部:标题 + ×(取消) ----
+                // (#close-dialog-lines 2026-09-18) 各段**固定整数高度**:
+                // 弹框垂直居中 + 1.25 UI 缩放会让 1px 分隔线落在不同亚像素相位,
+                // 一条清晰一条发糊(用户实测"上下两条横线粗细不一致")。段高恒定
+                // 后,两条线的 y 只差整数 → 同相位 → 粗细观感一致。
+                VerticalLayout {
+                    height: 74px;
+                    padding-left: 18px;
+                    padding-right: 12px;
+                    padding-top: 14px;
+                    padding-bottom: 14px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Text {
+                            text: root.lang-en ? "Close main window" : "关闭主窗口";
+                            color: Theme.text-primary;
+                            font-size: Theme.fs-lg;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        close-x := Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            border-radius: Theme.radius-sm;
+                            background: close-x-ta.has-hover ? Theme.close-red : transparent;
+                            animate background { duration: 120ms; }
+                            close-x-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.confirm-close-open = false; }
+                            }
+                            Text {
+                                text: "\u{E5CD}";
+                                font-family: "Material Icons";
+                                font-size: Theme.fs-sm;
+                                color: close-x-ta.has-hover ? white : Theme.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    Text {
+                        text: root.close-sessions.length == 0
+                            ? (root.lang-en
+                                ? "No active sessions. Choose what closing should do."
+                                : "当前没有活动会话，请选择关闭后的行为。")
+                            : (root.lang-en
+                                ? "There " + (root.close-sessions.length == 1 ? "is" : "are")
+                                    + " " + root.close-sessions.length + " active session"
+                                    + (root.close-sessions.length == 1 ? "" : "s")
+                                    + ", choose what closing should do."
+                                : "当前有 " + root.close-sessions.length + " 个活动会话，请选择关闭后的行为。");
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-sm;
+                        wrap: word-wrap;
+                    }
                 }
-                Text {
-                    text: root.lang-en
-                        ? "There are active sessions. Closing will disconnect them."
-                        : "当前有活动会话,关闭将断开它们。";
-                    color: Theme.text-secondary; font-size: Theme.fs-sm; wrap: word-wrap;
+                Rectangle { height: 1px; background: Theme.border-subtle; }
+
+                // ---- ② 关闭行为:卡片即操作 ----
+                VerticalLayout {
+                    // (#close-dialog-lines) 固定段高,见头部注释。
+                    height: 134px;
+                    padding-left: 18px; padding-right: 18px;
+                    padding-top: 14px; padding-bottom: 14px;
+                    spacing: 12px;
+                    // 「记住我的选择」必须在卡片上方:卡片点击即执行,勾选要来得及。
+                    HorizontalLayout {
+                        spacing: 8px;
+                        close-rem := Rectangle {
+                            width: 14px;
+                            height: 14px;
+                            border-radius: 3px;
+                            border-width: 1px;
+                            border-color: root.close-remember ? Theme.accent : Theme.border-strong;
+                            background: root.close-remember ? Theme.accent : transparent;
+                            ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.close-remember = !root.close-remember; }
+                            }
+                            Text {
+                                text: "\u{E5CA}";
+                                font-family: "Material Icons";
+                                font-size: 11px;
+                                color: white;
+                                visible: root.close-remember;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        Text {
+                            text: root.lang-en
+                                ? "Remember my choice, don't ask again"
+                                : "记住我的选择，下次不再提示";
+                            color: Theme.text-secondary;
+                            font-size: Theme.fs-sm;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    close-actions := HorizontalLayout {
+                        spacing: 10px;
+
+                        // 最小化到托盘 ── 非破坏性:hover 走 accent
+                        tray-card := Rectangle {
+                            horizontal-stretch: 1;
+                            height: 74px;
+                            border-radius: Theme.radius-md;
+                            border-width: 1px;
+                            border-color: tray-ta.has-hover ? Theme.accent : Theme.border-subtle;
+                            background: tray-ta.has-hover ? Theme.chip : Theme.bg-root;
+                            animate background, border-color { duration: 120ms; }
+                            tray-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.close-confirmed(
+                                        root.close-remember ? "tray,remember" : "tray");
+                                    root.confirm-close-open = false;
+                                }
+                            }
+                            // 设置里把「最小化到托盘」选成默认时,给个角标
+                            if root.close-behavior == "tray" : Rectangle {
+                                x: parent.width - self.width - 6px;
+                                y: 6px;
+                                width: 30px; height: 15px;
+                                border-radius: 3px;
+                                background: Theme.chip;
+                                Text {
+                                    text: root.lang-en ? "default" : "默认";
+                                    color: Theme.accent;
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 6px;
+                                Text {
+                                    text: "\u{E8B8}";
+                                    font-family: "Material Icons";
+                                    font-size: 20px;
+                                    color: tray-ta.has-hover ? Theme.accent : Theme.text-secondary;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: root.lang-en ? "Minimize to tray" : "最小化到托盘";
+                                    color: Theme.text-primary;
+                                    font-size: Theme.fs-sm;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: root.lang-en ? "Keeps running" : "保持后台运行";
+                                    color: Theme.text-muted;
+                                    font-size: Theme.fs-xs;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        // 完全退出 ── 破坏性:hover 变红(去掉主按钮后的预警承担者)
+                        exit-card := Rectangle {
+                            horizontal-stretch: 1;
+                            height: 74px;
+                            border-radius: Theme.radius-md;
+                            border-width: 1px;
+                            border-color: exit-ta.has-hover ? Theme.close-red : Theme.border-subtle;
+                            background: exit-ta.has-hover
+                                ? Theme.close-red.with-alpha(0.14) : Theme.bg-root;
+                            animate background, border-color { duration: 120ms; }
+                            exit-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.close-confirmed(
+                                        root.close-remember ? "exit,remember" : "exit");
+                                    root.confirm-close-open = false;
+                                }
+                            }
+                            if root.close-behavior == "exit" : Rectangle {
+                                x: parent.width - self.width - 6px;
+                                y: 6px;
+                                width: 30px; height: 15px;
+                                border-radius: 3px;
+                                background: Theme.chip;
+                                Text {
+                                    text: root.lang-en ? "default" : "默认";
+                                    color: Theme.accent;
+                                    font-size: 9px;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 6px;
+                                Text {
+                                    text: "\u{E8D5}";
+                                    font-family: "Material Icons";
+                                    font-size: 20px;
+                                    color: exit-ta.has-hover ? Theme.close-red : Theme.text-secondary;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: root.lang-en ? "Quit completely" : "完全退出";
+                                    color: Theme.text-primary;
+                                    font-size: Theme.fs-sm;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: root.lang-en ? "Disconnects all" : "断开所有连接";
+                                    color: Theme.text-muted;
+                                    font-size: Theme.fs-xs;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+                    }
                 }
-                Rectangle { vertical-stretch: 1; }
+                // ---- ③ 活动会话:无会话时整段隐藏 ----
+                if root.close-sessions.length > 0 : VerticalLayout {
+                    Rectangle { height: 1px; background: Theme.border-subtle; }
+                    VerticalLayout {
+                        padding-left: 18px; padding-right: 18px;
+                        padding-top: 14px; padding-bottom: 14px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text {
+                                text: root.lang-en ? "Active sessions" : "活动会话";
+                                color: Theme.text-secondary;
+                                font-size: Theme.fs-xs;
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                width: 22px; height: 15px;
+                                border-radius: 8px;
+                                background: Theme.bg-elevated;
+                                Text {
+                                    text: root.close-sessions.length;
+                                    color: Theme.text-muted;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Text {
+                                text: root.close-sessions.length > 4
+                                    ? (root.lang-en ? "scroll for all" : "滚动查看全部")
+                                    : "";
+                                color: Theme.text-muted;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                                horizontal-alignment: right;
+                            }
+                        }
+                        // 超过约 4 行(4×27px)时容器内滚动,不撑高卡片
+                        Rectangle {
+                            height: min(4 * 27px, root.close-sessions.length * 27px);
+                            border-radius: Theme.radius-sm;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            background: Theme.bg-root;
+                            clip: true;
+                            sess-scroll := ScrollView {
+                                x: 1px; y: 1px;
+                                width: parent.width - 2px;
+                                height: parent.height - 2px;
+                                viewport-width: self.visible-width;
+                                viewport-height: max(self.visible-height,
+                                                     root.close-sessions.length * 27px);
+                                VerticalLayout {
+                                    width: sess-scroll.visible-width;
+                                    for row in root.close-sessions : Rectangle {
+                                        height: 27px;
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            spacing: 8px;
+                                            Rectangle {
+                                                width: 7px; height: 7px;
+                                                border-radius: 4px;
+                                                background: Theme.success;
+                                                // 圆点在行内垂直居中由父级 HL 的 alignment 负责
+                                            }
+                                            Text {
+                                                text: row.name;
+                                                color: Theme.text-primary;
+                                                font-size: Theme.fs-sm;
+                                                font-weight: 600;
+                                                vertical-alignment: center;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: row.host;
+                                                color: Theme.text-muted;
+                                                font-family: Theme.font-mono;
+                                                font-size: Theme.fs-xs;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                                horizontal-alignment: right;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // ---- ④ 底部:只留「取消」 ----
+                Rectangle { height: 1px; background: Theme.border-subtle; }
                 HorizontalLayout {
-                    alignment: end;
+                    // (#close-dialog-lines) 固定段高,见头部注释。
+                    height: 62px;
+                    padding-left: 18px; padding-right: 18px;
+                    padding-top: 14px; padding-bottom: 14px;
                     spacing: 8px;
+                    Text {
+                        text: root.lang-en ? "Esc  cancel" : "Esc  取消";
+                        color: Theme.text-muted;
+                        font-size: Theme.fs-xs;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
                     GhostButton {
                         text: root.lang-en ? "Cancel" : "取消";
                         clicked => { root.confirm-close-open = false; }
-                    }
-                    PrimaryButton {
-                        text: root.lang-en ? "Close" : "关闭";
-                        clicked => { root.confirm-close-yes(); }
                     }
                 }
             }
@@ -6061,6 +6398,8 @@ export component AppWindow inherits Window {
         add-trigger => { root.add-trigger(); }
         update-trigger(i, trigger) => { root.update-trigger(i, trigger); }
         delete-trigger(i) => { root.delete-trigger(i); }
+        add-sample-forward => { root.add-sample-forward(); }
+        add-sample-trigger => { root.add-sample-trigger(); }
     }
 
     // --- Delete confirmation (#28) ----------------------------------------
@@ -6469,6 +6808,9 @@ export component AppWindow inherits Window {
                     term-font-family: root.term-font-family;
                     term-font-size: root.term-font-size;
                     terminal-line-spacing <=> root.terminal-line-spacing;
+                    // (#close-behavior) 设置 › 窗口 的「关闭按钮行为」双向绑定。
+                    close-behavior <=> root.close-behavior;
+                    set-close-behavior(v) => { root.set-close-behavior(v); }
                     term-font-bold: root.term-font-bold;
                     term-cursor-style <=> root.term-cursor-style;
                     term-cursor-color-hex <=> root.term-cursor-color-hex;

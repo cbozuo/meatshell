@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>meatshell · 主界面右上角关闭按钮 高保真 v1</title>
+<style>
+  /* ===================================================================
+     设计令牌 —— 全部取自 ui/theme.slint（暗色 :root / 亮色 [data-theme=light]）。
+     不写近似色：每个变量都能在 theme.slint 找到同名来源。
+     =================================================================== */
+  :root {
+    /* --- 面 --- */
+    --bg-root:#1b1d23; --bg-panel:#23262d; --bg-panel-alt:#2a2d35;
+    --bg-elevated:#30333c; --bg-hover:#373a44; --bg-active:#3f4350;
+    /* --- 线 --- */
+    --border-subtle:#3a3d46; --border-strong:#4a4e59;
+    /* --- 字 --- */
+    --text-1:#e6e8ee; --text-2:#b4b9c4; --text-3:#9196a3;
+    /* --- 强调 / 语义 --- */
+    --accent:#4a90e2; --accent-soft:rgba(74,144,226,.16);
+    --danger:#e25c5c; --success:#4ec9b0; --warning:#e2a84a;
+    /* --- 终端 / 标签 (#tab-flush: tab-active-bg == term-bg) --- */
+    --tab-bar:#2a2d35; --tab-active:#0e0f13; --term-bg:#0e0f13; --term-fg:#d4d4d4;
+    /* --- 本稿新增：关闭键语义红（建议入 theme.slint，见规格表） --- */
+    --close-red:#e81123; --close-red-press:#c50f1f;
+    --scrim:rgba(12,13,17,.32);
+    /* 毛玻璃卡(#glass-card):半透明面 + backdrop-filter 真模糊。
+       注:Slint 1.16 无 backdrop-filter(已在依赖源码核实),
+       真实应用只能以 Theme.bg-panel-strong + scrim 近似 —— 见规格表。 */
+    --glass:rgba(35,38,45,.72);
+    --glass-edge:rgba(255,255,255,.10);
+    --glass-top:rgba(255,255,255,.07);
+    --glass-top:rgba(255,255,255,.07);
+    --glass-inner:rgba(27,29,35,.55);   /* 玻璃卡内部面(bg-root 半透明版) */
+    --glass-line:rgba(255,255,255,.09); /* 玻璃上的分隔线(比 border-subtle 轻) */
+    --radius-sm:4px; --radius-md:6px; --radius-lg:10px;
+    --titlebar-h:38px;      /* ui/app.slint:1604 —— 沉浸式标题栏 */
+    --winbtn-w:46px;        /* ui/app.slint:307  —— WinBtn width */
+    --win-corner:8px;       /* Win11 DWM 圆角,src/app/window.rs:47 */
+  }
+  [data-theme="light"] {
+    --bg-root:#f5f5f7; --bg-panel:#ffffff; --bg-panel-alt:#f2f2f7;
+    --bg-elevated:#e8e8ed; --bg-hover:#e0e0e6; --bg-active:#d8d8de;
+    --border-subtle:#e2e2e8; --border-strong:#c7c7cc;
+    --text-1:#1d1d1f; --text-2:#45454a; --text-3:#606066;
+    --accent:#0071e3; --accent-soft:rgba(0,113,227,.12);
+    --danger:#ff3b30; --success:#34c759; --warning:#ff9f0a;
+    --tab-bar:#eaeaef; --tab-active:#fafafa; --term-bg:#fafafa; --term-fg:#2d2d2f;
+    --close-red:#c42b1c; --close-red-press:#a52216;
+    --scrim:rgba(244,245,248,.36);
+    --glass:rgba(255,255,255,.72);
+    --glass-edge:rgba(255,255,255,.55);
+    --glass-top:rgba(255,255,255,.55);
+    --glass-inner:rgba(245,245,247,.55);
+    --glass-line:rgba(0,0,0,.07);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+    font-size:13px; color:var(--text-1);
+    background:radial-gradient(1100px 560px at 50% 0%, rgba(74,144,226,.07), transparent 62%), #0a0b0e;
+    padding:26px 28px 56px; transition:background .2s;
+  }
+  .page { max-width:1420px; margin:0 auto; }
+
+  /* ---------------------------------------------------------------- 页头 */
+  .head { display:flex; align-items:flex-end; gap:14px; margin-bottom:4px; }
+  h1 { font-size:20px; font-weight:700; letter-spacing:.2px; }
+  .vtag { font-size:11px; font-weight:700; color:var(--accent);
+    background:var(--accent-soft); border-radius:5px; padding:3px 8px; letter-spacing:.4px; }
+  .sub { color:var(--text-3); font-size:12px; line-height:1.7; margin:7px 0 18px; max-width:1000px; }
+  .sub code { font-family:Consolas,"Meatshell Mono",monospace; font-size:11.5px;
+    color:var(--text-2); background:var(--bg-panel); border:1px solid var(--border-subtle);
+    border-radius:4px; padding:1px 5px; }
+  kbd { font-family:inherit; font-size:11px; color:var(--text-2);
+    background:var(--bg-elevated); border:1px solid var(--border-subtle);
+    border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
+
+  /* ------------------------------------------------------- 工具条(演示开关) */
+  .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:14px; }
+  .seg { display:flex; align-items:center; gap:2px; padding:3px; border-radius:10px;
+    background:var(--bg-panel); border:1px solid var(--border-subtle); }
+  .seg > span { font-size:11px; color:var(--text-3); padding:0 8px 0 6px; }
+  .seg button {
+    height:28px; padding:0 12px; border:0; border-radius:7px; cursor:pointer;
+    background:transparent; color:var(--text-2); font-family:inherit; font-size:12px;
+    transition:background .12s, color .12s;
+  }
+  .seg button:hover { background:var(--bg-hover); color:var(--text-1); }
+  .seg button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .spacer { flex:1; }
+
+  /* ==================================================================
+     主窗口舞台 —— 1280×720,结构对齐真实 AppWindow
+     ================================================================== */
+  /* 舞台:窗口保持真实 1280×720(像素级规格稿 —— 46/38/8 必须是真的),
+     面板窄于 1280 时舞台横向可滚,而不是整体缩小到看不清。
+     与仓库既有原型(ui-refresh-v3.html / topbar-activitybar-mockup.html)
+     同一惯例。 */
+  .stage { position:relative; overflow-x:auto; overflow-y:hidden; }
+  .win-wrap { position:relative; display:flex; justify-content:center;
+    min-width:1280px; }
+  /* 窄面板下放大镜/检查器改为纵向堆叠,避免横向挤压 */
+  @media (max-width: 1080px) {
+    .row { grid-template-columns:minmax(0,1fr) !important; }
+  }
+  .win {
+    position:relative; width:1280px; height:720px; flex:none;
+    background:var(--bg-root); border:1px solid var(--border-strong);
+    border-radius:var(--win-corner); overflow:hidden;
+    box-shadow:0 26px 70px rgba(0,0,0,.55);
+    display:flex; flex-direction:column;
+    transition:opacity 160ms cubic-bezier(.4,0,.2,1), transform 160ms cubic-bezier(.4,0,.2,1);
+  }
+  .win[data-win="closing"] { opacity:0; transform:scale(.985); }
+  .win[data-win="closed"]  { opacity:0; transform:scale(.985); pointer-events:none; }
+
+  /* ------------------------------------------------ 沉浸式标题栏 38px */
+  .titlebar {
+    height:var(--titlebar-h); flex:none; background:var(--bg-panel);
+    display:flex; align-items:center; position:relative;
+  }
+  /* 左侧:DBeaver 式「图标 + 文字」工具组(TopbarBtn) */
+  .tb-group { display:flex; align-items:center; gap:0; height:100%; padding-left:0; }
+  .tb-btn {
+    height:100%; flex:none; border:0; background:transparent; cursor:pointer;
+    display:flex; align-items:center; gap:6px; padding:0 10px 0 8px;
+    color:var(--text-2); font-family:inherit; font-size:12px;
+    border-radius:var(--radius-sm); transition:background .12s, color .12s;
+  }
+  .tb-btn:hover { background:var(--bg-hover); color:var(--text-1); }
+  .tb-btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
+  .tb-btn svg { width:16px; height:16px; flex:none; }
+  /* 中间:可拖拽区(双击最大化) */
+  .tb-drag { flex:1; height:100%; cursor:default; }
+  /* 右侧:窗口三键 —— #winbtn-seamless:零间距,高亮带连成一条 */
+  .winctl { display:flex; align-items:center; height:100%; gap:0; }
+  .wbtn {
+    width:var(--winbtn-w); height:100%; flex:none; border:0; cursor:pointer;
+    background:transparent; color:var(--text-2);
+    display:flex; align-items:center; justify-content:center;
+    transition:background 120ms cubic-bezier(.33,0,0,1), color 100ms linear;
+  }
+  .wbtn svg { width:16px; height:16px; transition:transform 90ms cubic-bezier(.4,0,.2,1); }
+  .wbtn:hover { background:var(--bg-hover); color:var(--text-1); }
+  .wbtn:active { background:var(--bg-active); }
+  /* 关闭键 —— danger:true 的专属 hover 红 */
+  .wbtn.danger:hover { background:var(--close-red); color:#fff; }
+  .wbtn.danger:active { background:var(--close-red-press); color:#fff; }
+  .wbtn.danger:active svg { transform:scale(.94); }
+  /* focus-visible:仅键盘触发。外环会被窗口 8px 圆角裁掉,故用内嵌环。 */
+  .wbtn:focus { outline:none; }
+  .wbtn:focus-visible {
+    outline:none; box-shadow:inset 0 0 0 2px rgba(74,144,226,.55);
+    color:var(--text-1);
+  }
+  .wbtn.danger:focus-visible { background:var(--close-red); color:#fff;
+    box-shadow:inset 0 0 0 2px rgba(255,255,255,.72); }
+
+  /* ------------------------------------------------------------ 标签行 */
+  .tabstrip {
+    height:40px; flex:none; background:var(--tab-bar);
+    display:flex; align-items:flex-end; gap:3px; padding:4px 4px 0 6px;
+  }
+  .tab {
+    position:relative; height:36px; min-width:130px; padding:0 10px 0 13px;
+    border-radius:7px 7px 0 0; display:flex; align-items:center; gap:8px;
+    font-size:12.5px; color:var(--text-2); background:var(--bg-elevated);
+  }
+  .tab.on { background:var(--tab-active); color:var(--text-1); }
+  .tab .vbar { position:absolute; left:4px; top:7px; bottom:7px; width:3px;
+    border-radius:2px; background:var(--text-2); opacity:.5; }
+  .tab .x { width:18px; height:18px; margin-left:auto; border-radius:4px;
+    display:flex; align-items:center; justify-content:center; color:var(--text-3); font-size:13px; }
+  .tab .x:hover { background:var(--bg-hover); color:var(--text-1); }
+
+  /* ---------------------------------------------------- 终端区 + 状态栏 */
+  .term {
+    flex:1; min-height:0; background:var(--term-bg); color:var(--term-fg);
+    font-family:Consolas,"Meatshell Mono","Courier New",monospace;
+    font-size:13px; line-height:1.75; padding:16px 18px; overflow:hidden;
+  }
+  .term .p1 { color:var(--success); } .term .p2 { color:#7aa7e8; }
+  .term .dim { color:var(--text-3); }
+  .statusbar {
+    height:24px; flex:none; background:var(--bg-panel);
+    border-top:1px solid var(--border-subtle);
+    display:flex; align-items:center; gap:14px; padding:0 12px;
+    font-size:11px; color:var(--text-3);
+  }
+  .statusbar .dot { width:7px; height:7px; border-radius:50%; background:var(--success); }
+
+  /* ==================================================================
+     关闭确认卡 —— 窗口正中 + 透明毛玻璃(#glass-card)
+     ================================================================== */
+  .scrim {
+    position:absolute; inset:0; background:var(--scrim);
+    -webkit-backdrop-filter:blur(2px);
+    backdrop-filter:blur(2px);
+    opacity:0; pointer-events:none; transition:opacity 120ms linear;
+  }
+  .scrim.show { opacity:1; pointer-events:auto; }
+  /* 确认卡:窗口正中心 + 透明毛玻璃(#glass-card)。
+     HTML 侧用真 backdrop-filter 模糊身后的终端/标签;Slint 无此能力,
+     真实应用需以 Theme.bg-panel-strong(半透明霜化面) + scrim 近似。 */
+  .confirm {
+    position:absolute; left:50%; top:50%; width:440px;
+    background:var(--glass);
+    -webkit-backdrop-filter:blur(20px) saturate(1.6);
+    backdrop-filter:blur(20px) saturate(1.6);
+    border:1px solid var(--glass-edge); border-radius:var(--radius-lg);
+    box-shadow:0 24px 64px rgba(0,0,0,.55), inset 0 1px 0 var(--glass-top);
+    overflow:hidden;
+    /* 居中 + 入场:中心为原点,只做淡入 + 轻微放大 */
+    transform:translate(-50%, -50%) scale(.96);
+    opacity:0; pointer-events:none;
+    transition:transform 190ms cubic-bezier(.16,1,.3,1), opacity 150ms linear;
+  }
+  .confirm.show { transform:translate(-50%, -50%) scale(1); opacity:1; pointer-events:auto; }
+  /* 头部:标题 + 取消(×)—— × 与窗口关闭键同款红 hover */
+  .cf-head { display:flex; align-items:center; gap:10px; }
+  .cf-head h2 { flex:1; min-width:0; margin-bottom:0; }
+  .cf-x {
+    width:26px; height:26px; flex:none; border:0; cursor:pointer;
+    border-radius:var(--radius-sm); background:transparent; color:var(--text-3);
+    display:flex; align-items:center; justify-content:center;
+    transition:background 120ms cubic-bezier(.33,0,0,1), color 100ms linear;
+  }
+  .cf-x:hover { background:var(--close-red); color:#fff; }
+  .cf-x:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .cf-x svg { width:13px; height:13px; }
+  /* 横线分隔:每段自带内边距,段与段之间一条 subtle 线(#close-dividers) */
+  .cf-sec { padding:14px 18px; }
+  .cf-sec + .cf-sec { border-top:1px solid var(--glass-line); }
+  .confirm h2 { font-size:15px; font-weight:700; }
+  .confirm .lead { font-size:12px; color:var(--text-2); line-height:1.65; }
+  .confirm .lead b { color:var(--text-1); font-weight:600; }
+
+  /* 头部:标题 + 取消(×)—— 头部本身是一行,说明文字在它下面 */
+  .cf-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+
+  /* --- 关闭行为:卡片即操作(点哪张就是哪个行为) --- */
+  .close-actions { display:flex; gap:10px; }
+  .act-card {
+    flex:1; min-width:0; padding:12px 8px 10px; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+    background:var(--glass-inner); border:1px solid var(--glass-line);
+    border-radius:var(--radius-md); color:var(--text-2);
+    font-family:inherit; font-size:12.5px;
+    transition:background 120ms, border-color 120ms, color 120ms;
+  }
+  .act-card svg { width:22px; height:22px; flex:none; }
+  .act-card .act-name { font-weight:600; color:var(--text-1); }
+  .act-card .act-sub { font-size:11px; color:var(--text-3); margin-top:-4px; }
+  .act-card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  /* 非破坏性:hover 走 accent */
+  .act-card:hover { border-color:var(--accent); background:var(--accent-soft); color:var(--text-1); }
+  .act-card:hover svg { color:var(--accent); }
+  /* 破坏性:hover 走红 —— 去掉确认按钮后,危险预警由 hover 承担 */
+  .act-card.danger:hover { border-color:var(--close-red); background:rgba(232,17,35,.14); color:var(--text-1); }
+  .act-card.danger:hover svg { color:var(--close-red); }
+
+  /* 「记住我的选择」必须在卡片上方:卡片点击即执行,勾选要来得及 */
+  .remember {
+    display:flex; align-items:center; gap:8px; margin-bottom:12px;
+    font-size:12px; color:var(--text-2); cursor:pointer; user-select:none;
+  }
+  .remember input { width:14px; height:14px; margin:0; flex:none;
+    accent-color:var(--accent); cursor:pointer; }
+  .remember:hover { color:var(--text-1); }
+
+  /* --- 会话列表:超过 4 行内部滚动(#close-session-overflow) --- */
+  .sess-head { display:flex; align-items:center; margin-bottom:8px; }
+  .sess-head .t { font-size:11.5px; color:var(--text-2); }
+  .sess-head .cnt { margin-left:6px; font-size:10.5px; font-weight:600;
+    color:var(--text-2); background:var(--glass-line); border-radius:8px; padding:1px 7px; }
+  .sess-head .hint { margin-left:auto; font-size:10.5px; color:var(--text-3); }
+  .sess-list {
+    border:1px solid var(--glass-line); border-radius:var(--radius-sm);
+    background:var(--glass-inner); overflow-y:auto; max-height:132px;
+  }
+  .sess-list::-webkit-scrollbar { width:8px; }
+  .sess-list::-webkit-scrollbar-thumb { background:var(--border-strong);
+    border-radius:4px; border:2px solid transparent; background-clip:padding-box; }
+  .sess-row { display:flex; align-items:center; gap:8px; padding:7px 10px; font-size:12px; }
+  .sess-row + .sess-row { border-top:1px solid var(--glass-line); }
+  .sess-row .nm { color:var(--text-1); font-weight:600; max-width:150px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sess-row .hs { margin-left:auto; color:var(--text-3); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis;
+    font-family:Consolas,"Meatshell Mono",monospace; font-size:11px; }
+
+  /* --- 底部:只保留「取消」 --- */
+  .cf-foot { display:flex; align-items:center; gap:8px; }
+  .cf-foot .kbdhint { font-size:11px; color:var(--text-3); flex:1; }
+  /* GhostButton / PrimaryButton —— 造型对齐 ui/widgets.slint */
+  .btn {
+    height:30px; min-width:80px; padding:0 14px; border-radius:var(--radius-sm);
+    font-family:inherit; font-size:13px; cursor:pointer;
+    display:inline-flex; align-items:center; justify-content:center;
+    transition:background 120ms, border-color 120ms, color 120ms;
+  }
+  .btn.ghost { background:var(--bg-panel); color:var(--text-1);
+    border:1px solid var(--border-subtle); }
+  .btn.ghost:hover { background:var(--bg-hover); border-color:var(--border-strong); }
+  .btn.ghost:active { background:var(--bg-active); }
+  .btn.primary { background:var(--accent); color:#fff; border:1px solid transparent; font-weight:600; }
+  .btn.primary:hover { filter:brightness(1.1); }
+  .btn.primary:active { filter:brightness(.92); }
+  .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* ------------------------------------------- 「窗口已关闭」占位 + 重播 */
+  .closed-note {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:12px;
+    opacity:0; pointer-events:none; transition:opacity 200ms linear 60ms;
+  }
+  .closed-note.show { opacity:1; pointer-events:auto; }
+  /* 占位框与真实窗口等尺寸、同位置(居中于舞台) */
+  .closed-note .box {
+    width:1280px; height:720px; position:absolute; top:0; left:50%;
+    transform:translateX(-50%);
+    border:1px dashed var(--border-strong); border-radius:var(--win-corner);
+    background:var(--bg-root);
+  }
+  .closed-note .inner { position:relative; text-align:center; }
+  .closed-note h3 { font-size:15px; font-weight:600; margin-bottom:6px; }
+  .closed-note p { font-size:12px; color:var(--text-3); margin-bottom:14px; }
+  .closed-note .btn { margin:0 auto; }
+
+  /* ==================================================================
+     放大镜 + 状态检查器
+     ================================================================== */
+  .row { display:grid; grid-template-columns:minmax(0,720px) minmax(0,1fr); gap:16px;
+    margin-top:20px; align-items:start; }
+  .card {
+    background:var(--bg-panel); border:1px solid var(--border-subtle);
+    border-radius:var(--radius-lg); padding:16px;
+  }
+  .card > h3 { font-size:13.5px; font-weight:600; margin-bottom:4px; }
+  .card > .cap { font-size:11.5px; color:var(--text-3); line-height:1.6; margin-bottom:16px; }
+  .card > .cap code { font-family:Consolas,monospace; color:var(--text-2); }
+
+  /* 3× 放大:源区域 = 标题栏最右 138×38(三键整体),放大 3 倍 → 414×114 */
+  .loupe-outer { position:relative; display:flex; flex-wrap:wrap; align-items:flex-start;
+    gap:14px 16px; padding:14px 0 60px 30px; }
+  .loupe {
+    position:relative; width:414px; height:114px; flex:none;
+    position:relative; width:414px; height:114px; flex:none;
+    border:1px solid var(--border-strong); border-radius:var(--radius-sm);
+    background:var(--bg-panel); overflow:hidden;
+    box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);
+  }
+  .loupe .zone { position:absolute; top:0; height:100%; }
+  .loupe .zone.other { left:0; width:276px;
+    display:flex; align-items:center; justify-content:center; }
+  .loupe .lz-btn { width:138px; height:114px; display:flex; align-items:center;
+    justify-content:center; color:var(--text-2); }
+  .loupe .lz-btn + .lz-btn { border-left:1px dashed var(--border-subtle); }
+  .loupe .lz-btn svg { width:48px; height:48px; }
+  .loupe .lclose {
+    position:absolute; left:276px; top:0; width:138px; height:114px;
+    display:flex; align-items:center; justify-content:center;
+    color:var(--text-2); background:transparent;
+    border-left:1px dashed var(--border-subtle);
+    transition:background 120ms cubic-bezier(.33,0,0,1), color 100ms linear;
+  }
+  .loupe .lclose svg { width:48px; height:48px; transition:transform 90ms cubic-bezier(.4,0,.2,1); }
+  .loupe[data-s="hover"] .lclose { background:var(--close-red); color:#fff; }
+  .loupe[data-s="press"] .lclose { background:var(--close-red-press); color:#fff; }
+  .loupe[data-s="press"] .lclose svg { transform:scale(.94); }
+  .loupe[data-s="focus"] .lclose { box-shadow:inset 0 0 0 6px rgba(74,144,226,.55); color:var(--text-1); }
+  /* 窗口圆角参照:8px 放大 3× → 24px(与关闭键右上角贴合) */
+  .loupe .corner {
+    position:absolute; right:0; top:0; width:24px; height:24px;
+    border-top-right-radius:24px; border-top:2px solid var(--warning);
+    border-right:2px solid var(--warning); opacity:.9; pointer-events:none;
+  }
+  /* 右侧注释栏(独立成列,不与放大区域重叠) */
+  .annos { display:flex; flex-direction:column; gap:7px; padding-top:2px; }
+  .annos .chip { position:static; }
+  /* 尺寸标注线 */
+  .dim { position:absolute; font-size:10.5px; color:var(--text-3); white-space:nowrap; }
+  .dim i { position:absolute; background:var(--border-strong); }
+  .dim.h i { left:0; right:0; height:1px; top:0; }
+  .dim.h::before, .dim.h::after { content:""; position:absolute; top:-3px; width:1px; height:7px;
+    background:var(--border-strong); }
+  .dim.h::before { left:0; } .dim.h::after { right:0; }
+  .dim.h > span { position:absolute; top:4px; left:50%; transform:translateX(-50%); }
+  .dim.v i { top:0; bottom:0; width:1px; left:0; }
+  .dim.v::before, .dim.v::after { content:""; position:absolute; left:-3px; height:1px; width:7px;
+    background:var(--border-strong); }
+  .dim.v::before { top:0; } .dim.v::after { bottom:0; }
+  .dim.v > span { position:absolute; top:50%; left:6px; transform:translateY(-50%); }
+  .chip {
+    position:absolute; font-size:10.5px; padding:2px 7px; border-radius:5px;
+    background:var(--bg-elevated); border:1px solid var(--border-subtle); color:var(--text-2);
+    white-space:nowrap;
+  }
+  .chip.warn { color:var(--warning); border-color:var(--warning); background:transparent; }
+
+  /* --------------------------------------------------------- 状态检查器 */
+  .insp { display:flex; flex-direction:column; gap:9px; }
+  .insp .line { display:flex; align-items:center; gap:10px; font-size:12px;
+    padding:8px 10px; border-radius:var(--radius-sm); background:var(--bg-root);
+    border:1px solid var(--border-subtle); }
+  .insp .lbl { color:var(--text-3); width:96px; flex:none; font-size:11px; }
+  .insp .val { color:var(--text-1); font-family:Consolas,"Meatshell Mono",monospace; font-size:11.5px; }
+  .insp .val.hot { color:var(--accent); }
+  .insp .val.red { color:var(--close-red); }
+  .insp .sep { height:1px; background:var(--border-subtle); margin:5px 0 2px; }
+  .insp h4 { font-size:11px; font-weight:600; color:var(--text-3);
+    letter-spacing:.6px; text-transform:uppercase; }
+  .insp ul { list-style:none; display:flex; flex-direction:column; gap:6px; }
+  .insp li { font-size:11.5px; color:var(--text-2); line-height:1.55;
+    padding-left:14px; position:relative; }
+  .insp li::before { content:"·"; position:absolute; left:4px; color:var(--accent); font-weight:700; }
+  .insp li code { font-family:Consolas,monospace; font-size:11px;
+    color:var(--text-1); background:var(--bg-root); border:1px solid var(--border-subtle);
+    border-radius:3px; padding:0 4px; }
+
+  /* --------------------------------------------------------- 规格映射表 */
+  h2.sec { font-size:15px; font-weight:600; margin:34px 0 6px;
+    padding-left:10px; border-left:3px solid var(--accent); }
+  .sec-sub { font-size:11.5px; color:var(--text-3); margin:0 0 12px 13px; line-height:1.6; }
+  table { width:100%; border-collapse:collapse; font-size:12px;
+    background:var(--bg-panel); border:1px solid var(--border-subtle);
+    border-radius:var(--radius-md); overflow:hidden; }
+  th, td { text-align:left; padding:8px 11px; border-bottom:1px solid var(--border-subtle);
+    vertical-align:top; line-height:1.55; }
+  th { font-size:11px; font-weight:600; color:var(--text-3); letter-spacing:.4px;
+    text-transform:uppercase; background:var(--bg-panel-alt); }
+  tr:last-child td { border-bottom:0; }
+  td code { font-family:Consolas,"Meatshell Mono",monospace; font-size:11px; color:var(--text-1); }
+  td .src { font-family:Consolas,monospace; font-size:11px; color:var(--text-3); white-space:nowrap; }
+  .sw { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  .sw i { width:12px; height:12px; border-radius:3px; border:1px solid rgba(255,255,255,.16); }
+  .new { display:inline-block; font-size:10px; font-weight:700; color:var(--accent);
+    background:var(--accent-soft); border-radius:4px; padding:1px 5px; margin-left:5px; }
+  .note { margin-top:16px; padding:12px 14px; border-radius:var(--radius-md);
+    background:var(--bg-panel); border:1px solid var(--border-subtle);
+    border-left:3px solid var(--warning); font-size:12px; color:var(--text-2); line-height:1.7; }
+  .note b { color:var(--text-1); }
+  .note code { font-family:Consolas,monospace; font-size:11px;
+    background:var(--bg-root); border:1px solid var(--border-subtle); border-radius:3px; padding:0 4px; }
+
+  /* ==================================================================
+     设置界面(Interface settings)—— 复刻 ui/interface_panel.slint
+     左侧 168px 导航 + 右侧 SettingRow(label 13px / desc 11px + 控件槽)
+     本稿只实到「界面 › 窗口」这一页,用于承载「关闭按钮行为」的联动设置。
+     ================================================================== */
+  .iface {
+    position:absolute; inset:0; display:none;
+    align-items:center; justify-content:center; z-index:5;
+  }
+  .iface.show { display:flex; }
+  .iface-card {
+    width:640px; height:460px; display:flex; overflow:hidden;
+    background:var(--glass);
+    -webkit-backdrop-filter:blur(20px) saturate(1.6);
+    backdrop-filter:blur(20px) saturate(1.6);
+    border:1px solid var(--glass-edge); border-radius:var(--radius-lg);
+    box-shadow:0 24px 64px rgba(0,0,0,.55), inset 0 1px 0 var(--glass-top);
+  }
+  /* --- 左导航 --- */
+  .iface-nav {
+    width:168px; flex:none; border-right:1px solid var(--glass-line);
+    padding:10px 8px; display:flex; flex-direction:column; gap:1px;
+    overflow-y:auto;
+  }
+  .iface-nav .it {
+    height:28px; display:flex; align-items:center; padding:0 10px;
+    border-radius:var(--radius-sm); font-size:12.5px; color:var(--text-2);
+    cursor:pointer; background:transparent; border:0; text-align:left;
+    font-family:inherit; width:100%;
+  }
+  .iface-nav .it:hover { background:var(--glass-inner); color:var(--text-1); }
+  .iface-nav .it.on { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  /* --- 右内容 --- */
+  .iface-body { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .iface-head {
+    height:46px; flex:none; display:flex; align-items:center; gap:10px;
+    padding:0 10px 0 18px; border-bottom:1px solid var(--glass-line);
+  }
+  .iface-head h3 { flex:1; font-size:14px; font-weight:600; }
+  .iface-scroll { flex:1; min-height:0; overflow-y:auto; padding:0 18px 12px; }
+  .iface-scroll::-webkit-scrollbar { width:9px; }
+  .iface-scroll::-webkit-scrollbar-thumb { background:var(--border-strong);
+    border-radius:5px; border:2px solid transparent; background-clip:padding-box; }
+  .sec-h { font-size:11px; font-weight:700; color:var(--text-3);
+    letter-spacing:.5px; height:26px; display:flex; align-items:center; }
+
+  /* --- SettingRow:label + desc 左,控件右,下 1px 线 --- */
+  .srow {
+    display:flex; align-items:center; gap:14px; padding:9px 0;
+    border-bottom:1px solid var(--glass-line);
+  }
+  .srow:last-child { border-bottom:0; }
+  .srow .txt { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .srow .txt .l { font-size:13px; color:var(--text-1); }
+  .srow .txt .d { font-size:11px; color:var(--text-3); line-height:1.5; }
+  .srow .ctl { flex:none; display:flex; align-items:center; }
+
+  /* --- 下拉(select)—— 形状对齐界面里的控件宽高 --- */
+  /* 刻意不给 .dd 设 position —— 否则它会成为下面 .dd-menu 的定位祖先,
+     菜单就不是相对 .iface 定位了(caret 锚定在 .dd > button 上,无需 .dd)。 */
+  .dd > button {
+    min-width:132px; height:28px; padding:0 30px 0 11px;
+    background:var(--glass-inner); color:var(--text-1);
+    border:1px solid var(--glass-line); border-radius:var(--radius-sm);
+    font-family:inherit; font-size:12.5px; cursor:pointer;
+    display:flex; align-items:center; gap:8px; position:relative;
+    transition:border-color 120ms, background 120ms;
+  }
+  .dd > button:hover { border-color:var(--border-strong); }
+  .dd > button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .dd > button .caret {
+    position:absolute; right:9px; top:50%; transform:translateY(-50%);
+    color:var(--text-3); font-size:9px; line-height:1;
+  }
+  .dd.open > button { border-color:var(--accent); }
+  /* 选项面板:absolute + 相对于 .iface 定位。
+     不能用 fixed —— .iface-card 上的 backdrop-filter 会为 fixed 子孙
+     创建包含块,坐标基准会变成卡片而非视口。
+     .iface 自身是 position:absolute,故 absolute 菜单的包含块在
+     .iface-scroll 之外,不会被它的 overflow:auto 裁掉。坐标由 JS 计算。 */
+  .dd-menu {
+    position:absolute; padding:4px; display:none; z-index:60;
+    background:var(--glass);
+    -webkit-backdrop-filter:blur(20px) saturate(1.6);
+    backdrop-filter:blur(20px) saturate(1.6);
+    border:1px solid var(--glass-edge); border-radius:var(--radius-md);
+    box-shadow:0 14px 34px rgba(0,0,0,.5);
+  }
+  .dd.open .dd-menu { display:block; }
+  .dd-menu button {
+    width:100%; height:28px; padding:0 9px; border:0; border-radius:var(--radius-sm);
+    background:transparent; color:var(--text-2); font-family:inherit;
+    font-size:12.5px; cursor:pointer; text-align:left;
+    display:flex; align-items:center; gap:8px; white-space:nowrap;
+  }
+  .dd-menu button:hover { background:var(--glass-inner); color:var(--text-1); }
+  .dd-menu button[aria-selected="true"] { color:var(--accent); }
+  .dd-menu button .tick { margin-left:auto; font-size:11px; color:var(--accent); }
+  /* 危险项(「直接完全退出」)在菜单里也带红点,和确认卡一致 */
+  .dd-menu button.danger[aria-selected="true"] { color:var(--close-red); }
+  .dd-menu button.danger[aria-selected="true"] .tick { color:var(--close-red); }
+  .dd-menu button .warn-dot {
+    width:5px; height:5px; border-radius:50%; background:var(--close-red); flex:none;
+  }
+  /* 联动提示:设置改了之后,确认卡上对应项会短暂高亮 */
+  @keyframes flash {
+    0%,100% { box-shadow:none; }
+    35% { box-shadow:0 0 0 3px var(--accent-soft); }
+  }
+  .act-card.flash { animation:flash 900ms ease 2; }
+  /* 被设为默认行为的卡片:带一枚「默认」角标(设置界面选了它) */
+  .act-card.is-default::after {
+    content:"默认"; position:absolute; top:6px; right:6px;
+    font-size:9.5px; line-height:1; padding:2px 5px; border-radius:3px;
+    background:var(--accent-soft); color:var(--accent); font-weight:700;
+  }
+  .dd.flash > button { animation:flash 900ms ease 2; }
+  /* 既有设置行的假控件(只呈现外观,不参与交互) */
+  .fake-sw { width:36px; height:20px; border-radius:10px; background:var(--glass-line);
+    position:relative; display:inline-block; }
+  .fake-sw::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+    border-radius:50%; background:var(--text-3); transition:left 140ms; }
+  .fake-sw.on { background:var(--accent); }
+  .fake-sw.on::after { left:18px; background:#fff; }
+  .fake-step { height:28px; min-width:76px; padding:0 10px; border-radius:var(--radius-sm);
+    background:var(--glass-inner); border:1px solid var(--glass-line);
+    display:inline-flex; align-items:center; justify-content:center;
+    font-size:12.5px; color:var(--text-1); font-family:Consolas,monospace; }
+  .dd.flash > button { animation:flash 900ms ease 2; }
+</style>
+</head>
+<body data-theme="dark">
+<div class="page">
+
+  <div class="head">
+    <h1>主界面右上角 · 关闭按钮</h1>
+    <span class="vtag">高保真 v1</span>
+  </div>
+  <p class="sub">
+    聚焦范围：沉浸式标题栏（Windows / Linux，<code>custom-titlebar = true</code>）右上角窗口三键中的
+    <b>关闭键</b>。鼠标与键盘都能走通全部状态，并覆盖「有活动会话 → 关闭确认」整条链路。
+    macOS 走原生红绿灯按钮，不在本稿内。<br>
+    几何与色值全部取自 <code>ui/app.slint</code>（<code>WinBtn</code> / 标题栏）与
+    <code>ui/theme.slint</code>：键 <code>46×38</code>、图标 <code>16px</code>、三键零间距、
+    窗口圆角 <code>8px</code>。窗口按真实 1280×720 搭建，面板窄时可横向滚动
+    （已默认滚到右端，先给你看关闭键）。<br>
+    确认卡位于<b>窗口正中</b>、采用<b>透明毛玻璃</b>（<code>backdrop-filter: blur(20px)</code>），
+    标题为「关闭主窗口」、右上角 <code>×</code> 取消。页末给出逐项实施映射。
+  </p>
+
+  <div class="toolbar">
+    <div class="seg">
+      <span>会话数</span>
+      <button class="sess-opt" data-n="3"  aria-pressed="true">×3</button>
+      <button class="sess-opt" data-n="12" aria-pressed="false">×12（演示溢出）</button>
+      <button class="sess-opt" data-n="0"  aria-pressed="false">无会话</button>
+    </div>
+    <div class="seg">
+      <span>主题</span>
+      <button id="tDark"  aria-pressed="true">暗色</button>
+      <button id="tLight" aria-pressed="false">亮色</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg">
+      <span>入口</span>
+      <button id="tIface" title="打开设置界面（界面 › 窗口）">设置界面</button>
+      <button id="tTab" title="把焦点移到关闭键,体验键盘态">Tab 聚焦关闭键</button>
+    </div>
+  </div>
+
+  <!-- ================================ 主窗口 ================================ -->
+  <div class="stage" id="stage">
+  <div class="win-wrap">
+    <div class="win" id="win" data-win="open">
+
+      <!-- 沉浸式标题栏 -->
+      <div class="titlebar">
+        <div class="tb-group">
+          <button class="tb-btn" title="新建会话">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+                 stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+            新建会话
+          </button>
+          <button class="tb-btn" aria-pressed="true" title="命令栏">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1.8" y="3.2" width="12.4" height="9.6" rx="1.6"/>
+              <path d="M4.6 6.8l2 1.6-2 1.6M8.6 10.4h2.6"/></svg>
+            命令栏
+          </button>
+          <button class="tb-btn" title="会话同步">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3.4 6.2h9.2M10.4 4l2.2 2.2-2.2 2.2M12.6 9.8H3.4M5.6 12l-2.2-2.2L5.6 7.6"/></svg>
+            同步
+          </button>
+          <button class="tb-btn" title="主题">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                 stroke-linecap="round"><path d="M13 9.6A5.6 5.6 0 016.4 3a5.6 5.6 0 106.6 6.6z"/></svg>
+            主题
+          </button>
+          <button class="tb-btn" aria-pressed="true" title="传输管理">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5.2 12.6V3.4M3 5.6l2.2-2.2 2.2 2.2M10.8 3.4v9.2M13 10.4l-2.2 2.2-2.2-2.2"/></svg>
+            传输
+          </button>
+          <button class="tb-btn" title="更多">
+            <svg viewBox="0 0 16 16" fill="currentColor">
+              <circle cx="8" cy="3.4" r="1.5"/><circle cx="8" cy="8" r="1.5"/>
+              <circle cx="8" cy="12.6" r="1.5"/></svg>
+            更多
+          </button>
+        </div>
+
+        <div class="tb-drag"></div>
+
+        <!-- 窗口三键：#winbtn-seamless 零间距,高亮带连成一条 -->
+        <div class="winctl">
+          <button class="wbtn" id="bMin" title="最小化">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+              <path d="M3 8h10"/></svg>
+          </button>
+          <button class="wbtn" id="bMax" title="最大化">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+              <rect x="3.5" y="3.5" width="9" height="9"/></svg>
+          </button>
+          <button class="wbtn danger" id="bClose" title="关闭">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"
+                 stroke-linecap="round"><path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 标签行 -->
+      <div class="tabstrip">
+        <div class="tab on"><span class="vbar" style="background:#60a5fa"></span>202
+          <span class="x">✕</span></div>
+        <div class="tab"><span class="vbar" style="background:#34d399"></span>CMD
+          <span class="x">✕</span></div>
+        <div class="tab"><span class="vbar"></span>PowerShell
+          <span class="x">✕</span></div>
+      </div>
+
+      <!-- 终端 -->
+      <div class="term">
+        <div><span class="p1">root@202</span><span class="dim">:</span><span class="p2">~/deploy</span>$ systemctl status nginx</div>
+        <div class="dim">● nginx.service - A high performance web server</div>
+        <div class="dim">     Loaded: loaded (/lib/systemd/system/nginx.service; enabled)</div>
+        <div class="dim">     Active: <span style="color:var(--success)">active (running)</span> since Thu 2026-09-17 08:41:02 CST</div>
+        <div><span class="p1">root@202</span><span class="dim">:</span><span class="p2">~/deploy</span>$ </div>
+      </div>
+
+      <div class="statusbar">
+        <span class="dot"></span><span>已连接 3 个会话</span>
+        <span>会话同步 · 关</span><span>UTF-8</span>
+        <span style="margin-left:auto">meatshell v0.7.3</span>
+      </div>
+
+      <!-- 关闭确认 —— 窗口正中 + 毛玻璃,取消(×)在头部 -->
+      <div class="scrim" id="scrim"></div>
+      <div class="confirm" id="confirm" role="dialog" aria-modal="true"
+           aria-labelledby="cTitle">
+        <!-- ① 头部:标题「关闭主窗口」+ 取消(×);下面一行说明 -->
+        <div class="cf-sec">
+          <div class="cf-head">
+            <h2 id="cTitle">关闭主窗口</h2>
+            <button class="cf-x" id="cX" type="button" aria-label="取消"
+                    title="取消">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+                   stroke-linecap="round"><path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/></svg>
+            </button>
+          </div>
+          <p class="lead" id="cLead">当前有 <b id="leadCnt">3</b> 个活动会话，请选择关闭后的行为。</p>
+        </div>
+
+        <!-- ② 关闭行为:卡片即操作(点哪张就执行哪个) -->
+        <div class="cf-sec">
+          <label class="remember" for="remChk">
+            <input type="checkbox" id="remChk">
+            记住我的选择，下次不再提示
+          </label>
+          <div class="close-actions" aria-label="关闭后的行为">
+            <button class="act-card" id="actTray" data-act="tray"
+                    title="保持后台运行，不断开连接">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 4H5v14h14v-4"/><path d="M14 4h6v6"/>
+                <path d="M20 4l-7.5 7.5"/></svg>
+              <span class="act-name">最小化到托盘</span>
+              <span class="act-sub">保持后台运行</span>
+            </button>
+            <button class="act-card danger" id="actExit" data-act="exit"
+                    title="断开所有连接并退出进程">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 4h4a2 2 0 012 2v12a2 2 0 01-2 2h-4"/>
+                <path d="M4 12h10"/><path d="M11 8.5l3.5 3.5-3.5 3.5"/></svg>
+              <span class="act-name">完全退出</span>
+              <span class="act-sub">断开所有连接</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- ③ 会话列表:无会话时整段隐藏;超过 4 行时内部滚动 -->
+        <div class="cf-sec" id="sessSec">
+          <div class="sess-head">
+            <span class="t">活动会话</span>
+            <span class="cnt" id="sessCnt">3</span>
+            <span class="hint" id="sessHint"></span>
+          </div>
+          <div class="sess-list" id="sessList"></div>
+        </div>
+
+        <!-- ④ 底部:只保留「取消」 -->
+        <div class="cf-sec cf-foot">
+          <span class="kbdhint"><kbd>Esc</kbd> 取消</span>
+          <button class="btn ghost" id="cCancel">取消</button>
+        </div>
+      </div>
+
+      <!-- ============ 设置界面(界面设置)—— 与关闭按钮行为联动 ============ -->
+      <div class="iface" id="iface">
+        <div class="scrim show" id="ifaceScrim"></div>
+        <div class="iface-card">
+          <!-- 左导航:复刻 interface_panel.slint 的 NavItem 列表 -->
+          <div class="iface-nav">
+            <button class="it">字体</button>
+            <button class="it">颜色</button>
+            <button class="it">光标</button>
+            <button class="it">输出高亮</button>
+            <button class="it">缩放</button>
+            <button class="it on">窗口</button>
+            <button class="it">文件传输</button>
+            <button class="it">壁纸</button>
+            <button class="it">MCP</button>
+            <button class="it">关于</button>
+          </div>
+          <!-- 右内容 -->
+          <div class="iface-body">
+            <div class="iface-head">
+              <h3>窗口</h3>
+              <button class="cf-x" id="ifaceX" type="button" aria-label="关闭设置" title="关闭">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+                     stroke-linecap="round"><path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/></svg>
+              </button>
+            </div>
+            <div class="iface-scroll">
+              <div class="sec-h">窗口</div>
+
+              <!-- ★ 本次新增:关闭按钮行为(与确认卡联动) -->
+              <div class="srow">
+                <div class="txt">
+                  <span class="l">关闭按钮行为</span>
+                  <span class="d">点击窗口关闭按钮时的行为</span>
+                </div>
+                <div class="ctl">
+                  <div class="dd" id="closeDd">
+                    <button type="button" id="closeDdBtn" aria-haspopup="listbox"
+                            aria-expanded="false">
+                      <span id="closeDdLabel">每次询问</span>
+                      <span class="caret">▾</span>
+                    </button>
+                    <div class="dd-menu" id="closeDdMenu" role="listbox"
+                         aria-label="关闭按钮行为">
+                      <button type="button" role="option" data-v="ask" aria-selected="true">
+                        每次询问 <span class="tick">✓</span>
+                      </button>
+                      <button type="button" role="option" data-v="tray" aria-selected="false">
+                        最小化到托盘 <span class="tick">✓</span>
+                      </button>
+                      <button type="button" role="option" data-v="exit,always"
+                              class="danger" aria-selected="false">
+                        <span class="warn-dot"></span>直接完全退出 <span class="tick">✓</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 以下为既有设置行,仅为呈现上下文(非本稿改动) -->
+              <div class="srow">
+                <div class="txt">
+                  <span class="l">欢迎页作为侧栏</span>
+                  <span class="d">把快速连接面板作为侧栏常驻，而不是整页显示。</span>
+                </div>
+                <div class="ctl"><span class="fake-sw on"></span></div>
+              </div>
+              <div class="srow">
+                <div class="txt">
+                  <span class="l">禅模式</span>
+                  <span class="d">隐藏所有面板，只保留终端，专注当前会话。</span>
+                </div>
+                <div class="ctl"><span class="fake-sw"></span></div>
+              </div>
+              <div class="srow">
+                <div class="txt">
+                  <span class="l">界面缩放</span>
+                  <span class="d">整体放大或缩小界面（不影响终端字号）。</span>
+                </div>
+                <div class="ctl"><span class="fake-step">100 %</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 关闭后占位 -->
+    <div class="closed-note" id="closedNote">
+      <div class="box"></div>
+      <div class="inner">
+        <h3 id="noteTitle">窗口已关闭</h3>
+        <p id="noteBody">无活动会话时，点关闭键走的是离场动画：160ms 淡出 + <code>scale(.985)</code>。</p>
+        <button class="btn primary" id="replay">重播</button>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- ====================== 放大镜 + 状态检查器 ====================== -->
+  <div class="row">
+    <div class="card">
+      <h3>3× 放大镜</h3>
+      <p class="cap">源区域 = 标题栏最右 <code>138×38</code>（三键整体），放大 3 倍 → <code>414×114</code>。<br>
+        三键零间距，高亮带连成一条；关闭键填充贴合窗口圆角。</p>
+
+      <div class="loupe-outer">
+        <div class="loupe" id="loupe" data-s="idle">
+          <!-- 最小化 / 最大化(放大后各 138px 宽,零间距) -->
+          <div class="zone other">
+            <div class="lz-btn">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+                <path d="M3 8h10"/></svg>
+            </div>
+            <div class="lz-btn">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+                <rect x="3.5" y="3.5" width="9" height="9"/></svg>
+            </div>
+          </div>
+          <!-- 关闭键:源 46×38 → 放大 138×114 -->
+          <div class="lclose">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"
+                 stroke-linecap="round"><path d="M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6"/></svg>
+          </div>
+          <!-- 窗口圆角 8px → 24px -->
+          <div class="corner"></div>
+        </div>
+
+        <div class="annos">
+          <span class="chip">键 46×38 px</span>
+          <span class="chip">图标 16px（×3 = 48px）</span>
+          <span class="chip">高亮带 138px = 46×3，零间距</span>
+          <span class="chip warn">窗口圆角 8px（×3 = 24px）</span>
+        </div>
+
+        <!-- 高度标注:源 38px → 114px -->
+        <div class="dim v" style="left:8px; top:14px; height:114px;">
+          <i></i><span>38px</span></div>
+        <!-- 键宽标注:源 46px → 138px(对齐关闭键左缘) -->
+        <div class="dim h" style="left:306px; top:134px; width:138px;">
+          <i></i><span>46px</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>状态检查器</h3>
+      <p class="cap">实时反映当前状态及其驱动来源。左侧字段即 <code>ui/app.slint</code> 中的属性 / 回调名。</p>
+      <div class="insp">
+        <div class="line"><span class="lbl">状态</span><span class="val hot" id="sState">idle</span></div>
+        <div class="line"><span class="lbl">背景</span><span class="val" id="sBg">transparent</span></div>
+        <div class="line"><span class="lbl">图标色</span><span class="val" id="sFg">Theme.text-secondary</span></div>
+        <div class="line"><span class="lbl">窗口</span><span class="val" id="sWin">open</span></div>
+        <div class="line"><span class="lbl">confirm-close-open</span><span class="val" id="sConfirm">false</span></div>
+        <div class="line"><span class="lbl">活动会话数</span><span class="val" id="sSess">3</span></div>
+        <div class="line"><span class="lbl">列表</span><span class="val" id="sListMode">完整显示</span></div>
+        <div class="line"><span class="lbl">执行的行为</span><span class="val hot" id="sAct">tray</span></div>
+        <div class="line"><span class="lbl">记住选择</span><span class="val" id="sRem">false</span></div>
+
+        <div class="sep"></div>
+        <h4>触发条件</h4>
+        <ul>
+          <li><code>ta.has-hover</code> → 底 <code>#e81123</code>、图标转白，120ms <code>cubic-bezier(.33,0,0,1)</code></li>
+          <li><code>ta.pressed</code> → 底 <code>#c50f1f</code>、图标 <code>scale(.94)</code>，松手 90ms 回弹</li>
+          <li><code>:focus-visible</code> → 2px accent 55% <b>内嵌</b>环（外环会被窗口 8px 圆角裁掉）</li>
+          <li><code>win-close()</code> → Rust <code>on_win_close</code>；有会话则 <code>confirm-close-open = true</code></li>
+          <li>确认卡 <code>Esc</code> 取消 / <code>Enter</code>·<code>Space</code> 确认（<code>#140-3</code> 既有行为）</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 规格与实施映射 ============================ -->
+  <h2 class="sec">规格与实施映射</h2>
+  <p class="sec-sub">定稿值与逐项 Slint 落点。本页只做原型，以下「建议」列供后续实现取用。</p>
+  <table>
+    <thead><tr><th style="width:190px">项</th><th style="width:300px">定稿值</th>
+      <th style="width:290px">现实现</th><th>Slint / Rust 落点</th></tr></thead>
+    <tbody>
+      <tr><td>关闭键尺寸</td>
+        <td><code>46 × 38px</code></td>
+        <td>同（高度绑 <code>parent.height</code>）</td>
+        <td class="src">ui/app.slint:307（width）、1709–1715（实例）</td></tr>
+      <tr><td>三键间距 / 高亮带</td>
+        <td>间距 <code>0</code>，整带 <code>138px</code></td>
+        <td>同</td>
+        <td class="src">ui/app.slint:1705（spacing: 0）</td></tr>
+      <tr><td>窗口圆角</td>
+        <td><code>8px</code></td>
+        <td>同（Win11 DWM）</td>
+        <td class="src">src/app/window.rs:47</td></tr>
+      <tr><td>图标</td>
+        <td><code>16px</code> 光学居中</td>
+        <td>同</td>
+        <td class="src">ui/app.slint:317–324</td></tr>
+      <tr><td>idle 图标色</td>
+        <td><span class="sw"><i style="background:#b4b9c4"></i><code>text-secondary</code></span></td>
+        <td>同</td><td class="src">ui/app.slint:320</td></tr>
+      <tr><td>hover 背景</td>
+        <td><span class="sw"><i style="background:#e81123"></i>暗 <code>#e81123</code></span> ·
+            <span class="sw"><i style="background:#c42b1c"></i>亮 <code>#c42b1c</code></span><span class="new">建议令牌</span></td>
+        <td>写死 <code>#e81123</code>，亮色下也是它</td>
+        <td class="src">ui/app.slint:311 → 建议改 <code>Theme.close-red</code></td></tr>
+      <tr><td>hover 图标色</td>
+        <td><code>white</code></td><td>同</td>
+        <td class="src">ui/app.slint:320</td></tr>
+      <tr><td>hover 过渡</td>
+        <td><code>120ms cubic-bezier(.33,0,0,1)</code></td>
+        <td><code>90ms</code> 线性</td>
+        <td class="src">ui/app.slint:312（animate background）</td></tr>
+      <tr><td>pressed 背景</td>
+        <td><span class="sw"><i style="background:#c50f1f"></i>暗 <code>#c50f1f</code></span> ·
+            <span class="sw"><i style="background:#a52216"></i>亮 <code>#a52216</code></span><span class="new">新增</span></td>
+        <td>无 pressed 态</td>
+        <td class="src">ui/app.slint:311（加 <code>ta.pressed</code> 分支）</td></tr>
+      <tr><td>pressed 图标</td>
+        <td><code>scale(.94)</code>，<code>90ms</code></td>
+        <td>无</td>
+        <td class="src">ui/app.slint:317（Text 外包一层可缩放容器）</td></tr>
+      <tr><td>键盘焦点环</td>
+        <td>2px accent 55%，<b>内嵌</b>（不裁切）<span class="new">新增</span></td>
+        <td>无</td>
+        <td class="src">ui/app.slint:313（WinBtn 内加 FocusScope + 内描边层）</td></tr>
+      <tr><td>确认卡几何</td>
+        <td><code>440px</code> 宽，<b>窗口正中</b>；<b>四段 + 3 条横线分隔</b>（头部 / 行为 / 会话 / 底部）<span class="new">本轮调整</span></td>
+        <td>现状 <code>340×168</code> 固定高、居中；本稿改为居中、高度随内容</td>
+        <td class="src">ui/app.slint:5647–5711（<code>height: 168px</code> 改内容自适应；<code>x/y</code> 居中公式已是现状）</td></tr>
+      <tr><td>确认卡头部</td>
+        <td>标题「<b>关闭主窗口</b>」+ 右上角 <code>×</code> 取消（hover 红，同关闭键语义）<span class="new">本轮调整</span></td>
+        <td>标题「确定关闭 meatshell?」，无 × 按钮</td>
+        <td class="src">ui/app.slint:5686–5689 → 标题文案改；新增 26×26 的 <code>×</code> TouchArea</td></tr>
+      <tr><td>确认卡入场</td>
+        <td>居中基准，<code>190ms cubic-bezier(.16,1,.3,1)</code>，
+            <code>scale(.96)</code> → 1 + 淡入<span class="new">本轮调整</span></td>
+        <td>静态出现（无过渡）</td>
+        <td class="src">ui/app.slint:5670（Rectangle 加 <code>animate transform/opacity</code>）</td></tr>
+      <tr><td><b>毛玻璃</b>（需注意）</td>
+        <td>HTML：<code>background: rgba(35,38,45,.72)</code> +
+            <code>backdrop-filter: blur(20px) saturate(1.6)</code>，遮罩再叠 <code>blur(2px)</code><span class="new">本轮调整</span></td>
+        <td>不透明 <code>Theme.popup-bg</code> + 纯色遮罩</td>
+        <td class="src"><b>Slint 1.16 无 <code>backdrop-filter</code></b>（已在
+            <code>i-slint-core / compiler / renderer</code> 源码核实「backdrop」零命中）。
+            真实应用只能取<b>近似</b>：<code>Theme.bg-panel-strong</code>（半透明霜化面，
+            <code>panel-alpha+0.20</code>）+ <code>Theme.modal-scrim</code>，可再加 1px 高光描边</td></tr>
+      <tr><td>遮罩</td>
+        <td>保留 <code>Theme.modal-scrim</code> 低 alpha，<code>120ms</code> 淡入，不再加 blur（Slint 不支持）<span class="new">本轮调整</span></td>
+        <td><code>#00000088</code> 无过渡（且未走令牌）</td>
+        <td class="src">ui/app.slint:5650 → 建议改 <code>Theme.modal-scrim</code></td></tr>
+      <tr><td>底部按钮</td>
+        <td><b>只保留「取消」</b>（<code>GhostButton</code>）；卡片本身即操作按钮<span class="new">本轮调整</span></td>
+        <td><code>GhostButton</code> 取消 + <code>PrimaryButton</code> 关闭</td>
+        <td class="src">ui/app.slint:5700–5707（删除 PrimaryButton 分支）</td></tr>
+      <tr><td>横线分隔</td>
+        <td>段与段之间 1px <code>Theme.border-subtle</code>；每段内边距 <code>14px 18px</code><span class="new">本轮调整</span></td>
+        <td>无线、整卡统一 padding</td>
+        <td class="src">ui/app.slint:5683（VerticalLayout 内每段加 Rectangle 1px 分隔线）</td></tr>
+      <tr><td>会话列表溢出</td>
+        <td>容器最高 <code>132px</code>（≈4 行），超出<b>容器内滚动</b>；表头显示<b>总数徽章</b> + 「滚动查看全部 N 个」<span class="new">本轮调整</span></td>
+        <td>无（固定 3 行示意，多会话会撑高卡片）</td>
+        <td class="src">ui/app.slint:5647（会话区包一层 ScrollView，<code>max-height</code> 由内容撑开改为固定）</td></tr>
+      <tr><td>确认卡文案</td>
+        <td>标题「关闭主窗口」+ 说明「请选择关闭后的行为：最小化到系统托盘可保持后台运行（如 SSH 会话），
+            完全退出会断开所有连接。」+ <b>会话清单</b>（名称 + 主机）<span class="new">本轮调整</span></td>
+        <td>标题「确定关闭 meatshell?」+ 一句泛化文案「当前有活动会话，关闭将断开它们。」</td>
+        <td class="src">ui/app.slint:5690；数据源 src/app.rs:3161（<code>close_handles</code> 已持有句柄）</td></tr>
+      <tr><td>键盘行为</td>
+        <td><code>Esc</code> 取消；卡片可 Tab / ←→ 聚焦，<code>Enter</code>·<code>Space</code> 执行</td>
+        <td><code>Esc</code> 取消 · <code>Enter</code>·<code>Space</code> 确认</td>
+        <td class="src">ui/app.slint:5655–5668（<code>#140-3</code>）；卡片各为独立 FocusScope</td></tr>
+      <tr><td>离场动画</td>
+        <td><code>160ms</code> 淡出 + <code>scale(.985)</code><span class="new">新增</span></td>
+        <td>无（直接 hide）</td>
+        <td class="src">src/app.rs:3176（<code>w.hide()</code> 前加动画或 opacity 过渡）</td></tr>
+      <tr><td>语义红三档</td>
+        <td><code>danger #e25c5c</code>（通用危险）· <code>close-red</code>（关闭键）· <code>close-red-pressed</code></td>
+        <td>关闭键 <code>#e81123</code> 与 <code>Theme.danger</code> 不同源；标签关闭键另有一处红</td>
+        <td class="src">ui/theme.slint:111；ui/tabs.slint:163</td></tr>
+      <tr><td>关闭行为卡片</td>
+        <td>两张带图标的卡片：<b>最小化到托盘</b>（副标题「保持后台运行」/ hover 走 accent）·
+            <b>完全退出</b>（副标题「断开所有连接」/ hover 走 <code>close-red</code>）<span class="new">新增</span></td>
+        <td>不存在</td>
+        <td class="src">ui/app.slint:5647 卡片内新增；行为落地在 src/app.rs:3158 <code>on_win_close</code></td></tr>
+      <tr><td>卡片即操作</td>
+        <td>点卡片<b>直接执行</b>，无二次确认；破坏性预警改由 hover 变红承担<span class="new">本轮调整</span></td>
+        <td>选择 → 再点主按钮确认</td>
+        <td class="src">ui/app.slint:5700–5707 移除 PrimaryButton 后，卡片 TouchArea 直连回调</td></tr>
+      <tr><td>「记住我的选择」</td>
+        <td>位于卡片<b>上方</b>（卡片即操作，勾选必须来得及）；写入配置后下次不再弹卡<span class="new">新增</span></td>
+      <tr><td><b>系统托盘</b>（阻塞项）</td>
+        <td>托盘图标 + 菜单 + 唤起/退出；跨平台（Win <code>Shell_NotifyIcon</code> / macOS <code>NSStatusItem</code> / Linux <code>StatusNotifierItem</code>）</td>
+        <td><b>代码中完全没有</b> —— grep <code>tray</code>/<code>托盘</code> 零命中</td>
+        <td class="src">新增依赖（如 <code>tray-icon</code> crate）+ <code>src/app/</code> 新模块；是本方案的<b>唯一后端阻塞项</b></td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>顺带记录一处文档偏差：</b><code>ui/app.slint:1706</code> 与该段注释写「height 补齐行高（43px）」，
+    但沉浸式标题栏实际是 <code>38px</code>（<code>ui/app.slint:1604</code>）。
+    本稿几何以 <code>38px</code> 为准，建议实现时一并订正该注释。
+    <br><br>
+    <b>落地状态（本轮已实现）：</b>本稿已落到真实代码，不再只是原型。
+    <br>
+    · <b>关闭行为</b>已加：<code>config_file.rs</code> 的新字段 + <code>config.rs</code> 的
+    <code>close_behavior()</code>/<code>set_close_behavior()</code>；设置面板
+    <code>interface_panel.slint</code> 新增「窗口」页与 <code>ComboBox</code>，与
+    <code>app.slint</code> 的确认卡双向绑定。
+    <br>
+    · <b>确认卡</b>已按本稿重写（四段式 / 卡片即操作 / 底部只留「取消」/ 会话清单可滚动）。
+    <br>
+    · <b>系统托盘已真实现</b>——原先判断「代码里没有托盘能力」是对的，但
+    <code>windows</code> crate 已在依赖里且启用了 <code>Win32_UI_Shell</code>，
+    只补三个 feature 即可用 <code>Shell_NotifyIconW</code> 落地，<b>未引入新 crate</b>
+    （<code>src/app/tray.rs</code>）。托盘图标<b>按需创建</b>：只有真的「最小化到托盘」
+    才会出现，没用到该功能时启动外观与改动前完全一致。
+    <br><br>
+    <b>毛玻璃在真实应用里打折（唯一的观感缺口）：</b>本稿的磨砂是 HTML
+    <code>backdrop-filter</code> 实现的<b>真模糊</b>，而 <b>Slint 1.16 没有该能力</b>
+    （已在 <code>i-slint-core / compiler / renderer</code> 源码核实「backdrop」零命中）。
+    落地的确认卡用不透明 <code>Theme.popup-bg</code> + <code>Theme.modal-scrim</code> 近似：
+    层级与阴影一致，但身后的终端内容不会被真正模糊。这是平台限制，不是实现取舍。
+    <br><br>
+    <b>去掉确认按钮后的取舍：</b>卡片「点哪张就执行哪个」之后，误点「完全退出」会
+    <b>立即断开全部 SSH 会话</b>，没有第二次确认。补偿手段：破坏性卡片 hover 变红
+    （<code>close-red</code>）承担预警，非破坏性的「最小化到托盘」排在左侧首位。
+    若更看重防误触，可改回「先选后确认」两步式——卡片样式两种都能复用。
+    <br><br>
+    <b>顺带记录一处文档偏差（未改）：</b><code>ui/app.slint</code> 的 <code>WinBtn</code>
+    附近注释写「height 补齐行高（43px）」，但沉浸式标题栏实际是 <code>38px</code>。
+    本稿与落地代码均以 <code>38px</code> 为准。
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+
+  // 会话数据源:×12 用于演示列表溢出
+  var ALL_SESSIONS = [
+    { name:"202",         host:"root@192.168.100.202:22" },
+    { name:"CMD",         host:"本地 CMD" },
+    { name:"PowerShell",  host:"本地 PowerShell" },
+    { name:"db-master",   host:"deploy@10.20.30.41:22" },
+    { name:"db-replica",  host:"deploy@10.20.30.42:22" },
+    { name:"web-01",      host:"root@172.16.8.11:22" },
+    { name:"web-02",      host:"root@172.16.8.12:22" },
+    { name:"cache-redis", host:"root@10.20.30.55:6379" },
+    { name:"mq-rabbit",   host:"admin@10.20.30.60:22" },
+    { name:"build-agent", host:"ci@172.16.9.30:22" },
+    { name:"backup-nas",  host:"nas@192.168.50.9:22" },
+    { name:"jump-host",   host:"ops@203.0.113.7:2222" }
+  ];
+
+  var S = {
+    state: "idle",      // idle | hover | press | focus
+    sessCount: 3,       // 活动会话数(0 = 无会话)
+    win: "open",        // open | closing | closed | tray
+    confirm: false,
+    act: "tray",           // tray | exit —— 最后执行的行为
+    remember: false,       // 「记住我的选择,下次不再提示」
+    closeBehavior: "ask"   // ask | tray | exit,always —— 联动「设置 › 关闭按钮行为」
+  };
+
+  var el = function (id) { return document.getElementById(id); };
+  var win = el("win"), scrim = el("scrim"), confirmEl = el("confirm");
+  var closedNote = el("closedNote"), loupe = el("loupe");
+  var bClose = el("bClose");
+  var actTray = el("actTray"), actExit = el("actExit");
+  var remChk = el("remChk");
+
+  /* ------------------------------------------------------------ 渲染 */
+  function render() {
+    win.dataset.win = S.win === "open" ? "open" : S.win;
+    // 托盘与完全退出都让窗口从舞台消失,由占位卡接管说明;
+    // 占位卡文案随结束方式变化(托盘 vs 退出)。
+    closedNote.classList.toggle("show", S.win === "closed" || S.win === "tray");
+    if (S.win === "tray") {
+      el("noteTitle").textContent = "已最小化到系统托盘";
+      el("noteBody").innerHTML = "进程仍在后台运行，SSH 会话保持连接。<br>"
+        + "托盘图标可重新唤起窗口；右键退出菜单才真正断开连接。";
+    } else if (S.win === "closed") {
+      el("noteTitle").textContent = "窗口已关闭";
+      el("noteBody").innerHTML = "所有会话已断开，进程退出。"
+        + (S.remember ? "<br>已勾选「记住我的选择」，下次关闭不再询问。"
+                      : "<br>无活动会话时点关闭键会直接走离场动画：160ms 淡出 + <code>scale(.985)</code>。");
+    }
+    // 确认卡
+    scrim.classList.toggle("show", S.confirm);
+    confirmEl.classList.toggle("show", S.confirm);
+
+    // 放大镜跟随关闭键状态
+    loupe.dataset.s = S.state;
+
+    // 检查器
+    var bg = "-", fg = "Theme.text-secondary";
+    if (S.state === "hover") { bg = "close-red (#e81123 / #c42b1c)"; fg = "white"; }
+    else if (S.state === "press") { bg = "close-red-pressed"; fg = "white"; }
+    else if (S.state === "focus") { bg = "transparent + accent 环"; fg = "Theme.text-primary"; }
+
+    el("sState").textContent = S.state;
+    el("sBg").textContent = bg;
+    el("sFg").textContent = fg;
+    el("sWin").textContent = S.win;
+    el("sConfirm").textContent = String(S.confirm);
+    el("sSess").textContent = String(S.sessCount);
+    el("sAct").textContent = S.act;
+    el("sRem").textContent = String(S.remember);
+    el("sListMode").textContent = S.sessCount > LIST_MAX_ROWS ? "容器内滚动" : "完整显示";
+    renderSessions();
+  }
+
+  /* 会话列表:最多显示 MAX 行,超出则容器内滚动(#close-session-overflow)。
+     名称/主机过长各自省略,end 对齐的那列仍能看出是哪台机器。 */
+  var LIST_MAX_ROWS = 4;
+  function renderSessions() {
+    var n = S.sessCount;
+    el("sessCnt").textContent = String(n);
+    el("sessHint").textContent = n > LIST_MAX_ROWS
+      ? "滚动查看全部 " + n + " 个" : "";
+    // 无会话时整段隐藏(含表头与 0 徽章)—— 没有内容可陈列
+    el("sessSec").style.display = n === 0 ? "none" : "";
+    var box = el("sessList");
+    box.innerHTML = "";
+    ALL_SESSIONS.slice(0, n).forEach(function (s) {
+      var row = document.createElement("div");
+      row.className = "sess-row";
+      var d = document.createElement("span"); d.className = "d";
+      var nm = document.createElement("span"); nm.className = "nm"; nm.textContent = s.name;
+      var hs = document.createElement("span"); hs.className = "hs"; hs.textContent = s.host;
+      row.appendChild(d); row.appendChild(nm); row.appendChild(hs);
+      box.appendChild(row);
+    });
+  }
+
+  /* ==================================================== 联动:关闭按钮行为
+     设置界面里的「关闭按钮行为」与关闭确认卡是同一份状态的两个视图:
+       ask        → 每次询问(默认):弹确认卡,卡片决定这次怎么做
+       exit,always→ 直接完全退出:点关闭键直接断开全部连接,不弹卡
+     任一侧改动都会同步另一侧(并让被联动的一侧短暂高亮)。 */
+  var CLOSE_OPTS = {
+    "ask":         "每次询问",
+    "tray":        "最小化到托盘",
+    "exit,always": "直接完全退出"
+  };
+  function setCloseBehavior(v, flashTarget) {
+    S.closeBehavior = CLOSE_OPTS[v] ? v : "ask";
+    // → 设置界面
+    el("closeDdLabel").textContent = CLOSE_OPTS[S.closeBehavior];
+    [].forEach.call(el("closeDdMenu").children, function (b) {
+      b.setAttribute("aria-selected", String(b.dataset.v === S.closeBehavior));
+    });
+    // → 确认卡:「每次询问」= 保持卡片;否则把对应卡片标为当前行为
+    var trayCard = el("actTray"), exitCard = el("actExit");
+    trayCard.classList.toggle("is-default", S.closeBehavior === "tray");
+    exitCard.classList.toggle("is-default", S.closeBehavior === "exit,always");
+    // 联动高亮:让用户看见"另一处也跟着变了"
+    if (flashTarget) {
+      var t = flashTarget === "card" ? (S.closeBehavior === "tray" ? trayCard : exitCard)
+                                     : el("closeDd");
+      t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash");
+    }
+    render();
+  }
+
+  /* ------------------------------------------------------- 关闭链路 */
+  function requestClose() {
+    if (S.win !== "open") { return; }
+    // src/app.rs:3161 —— should_block_close：有活动会话才拦
+    // 无会话:没什么可保活的,直接完全退出(不受残留的 S.act 影响)
+    if (S.sessCount === 0) { S.act = "exit"; confirmClose(); return; }
+    // 「每次询问」才弹卡;设了默认行为就直接执行(联动设置界面的选择)
+    if (S.closeBehavior !== "ask") {
+      S.act = S.closeBehavior === "exit,always" ? "exit" : "tray";
+      confirmClose(); return;
+    }
+    if (!S.remember) { S.confirm = true; render(); }
+    else { confirmClose(); }
+  }
+  // 确认后的分叉:「最小化到托盘」保留会话,「完全退出」断开连接。
+  function confirmClose() {
+    S.confirm = false;
+    if (S.act === "tray") { S.win = "tray"; render(); return; }
+    S.win = "closing";
+    render();
+    window.setTimeout(function () { S.win = "closed"; render(); }, 170);
+  }
+  function startExit() { confirmClose(); }
+
+  /* --------------------------------------------------------- 事件 */
+  // 关闭键三态（鼠标）
+  bClose.addEventListener("mouseenter", function () {
+    if (S.state !== "press") { S.state = "hover"; render(); }
+  });
+  bClose.addEventListener("mouseleave", function () {
+    S.state = document.activeElement === bClose ? "focus" : "idle"; render();
+  });
+  bClose.addEventListener("mousedown", function () { S.state = "press"; render(); });
+  bClose.addEventListener("mouseup",   function () {
+    S.state = bClose.matches(":hover") ? "hover" : "idle"; render();
+  });
+  // 键盘：<button> 天然支持 Enter / Space 触发 click
+  bClose.addEventListener("focus", function () {
+    if (bClose.matches(":focus-visible")) { S.state = "focus"; render(); }
+  });
+  bClose.addEventListener("blur", function () { S.state = "idle"; render(); });
+  bClose.addEventListener("click", function () {
+    if (S.win === "open") { requestClose(); }
+  });
+
+  // 确认卡:底部只剩「取消」;两张卡片本身就是操作按钮 —— 点哪张就执行哪个。
+  el("cCancel").addEventListener("click", cancelConfirm);
+  el("cX").addEventListener("click", cancelConfirm);
+  scrim.addEventListener("click", function () { S.confirm = false; render(); });
+
+  actTray.addEventListener("click", function () { pickAndGo("tray"); });
+  actExit.addEventListener("click", function () { pickAndGo("exit"); });
+  // 用户在确认卡上点某张卡片 → 反向同步设置界面的下拉(带联动高亮)
+  function pickAndGo(act) {
+    setCloseBehavior(act === "exit" ? "exit,always" : "tray", "dd");
+    S.act = act; confirmClose();
+  }
+
+  remChk.addEventListener("change", function () {
+    S.remember = remChk.checked; render();
+  });
+  // 左右方向键在两张卡片间移动(卡片即操作,方向键只移动焦点 + 空格/回车才执行)
+  [actTray, actExit].forEach(function (card, i) {
+    card.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        var next = i === 0 ? actExit : actTray;
+        next.focus();
+      }
+    });
+  });
+
+  // 全局键盘:Esc 取消(对齐 ui/app.slint:5655–5668)
+  document.addEventListener("keydown", function (e) {
+    if (!S.confirm) { return; }
+    if (e.key === "Escape") { e.preventDefault(); cancelConfirm(); }
+  });
+  function cancelConfirm() {
+    S.confirm = false; render(); bClose.focus();
+  }
+
+  // 重播
+  el("replay").addEventListener("click", function () {
+    S.win = "open"; S.confirm = false; S.state = "idle"; render();
+  });
+
+  // 会话数三档(×3 / ×12 演示溢出 / 无会话)
+  var sessOpts = [].slice.call(document.querySelectorAll(".sess-opt"));
+  sessOpts.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      S.sessCount = parseInt(btn.dataset.n, 10);
+      sessOpts.forEach(function (b) {
+        b.setAttribute("aria-pressed", String(b === btn));
+      });
+      render();
+    });
+  });
+
+  // 主题
+  function pair(onId, offId, setter) {
+    var on = el(onId), off = el(offId);
+    on.addEventListener("click", function () {
+      setter(true); on.setAttribute("aria-pressed", "true");
+      off.setAttribute("aria-pressed", "false");
+    });
+    off.addEventListener("click", function () {
+      setter(false); off.setAttribute("aria-pressed", "true");
+      on.setAttribute("aria-pressed", "false");
+    });
+  }
+  pair("tDark", "tLight", function (v) {
+    document.documentElement.dataset.theme = v ? "dark" : "light";
+    document.body.dataset.theme = v ? "dark" : "light";
+  });
+  el("tTab").addEventListener("click", function () { bClose.focus(); });
+
+  /* ---------------------------------- 设置界面 + 「关闭按钮行为」下拉联动 */
+  var iface = el("iface"), closeDd = el("closeDd");
+
+  function openIface(on) {
+    iface.classList.toggle("show", on);
+    // 打开设置时把行为下拉滚进视野,免得要手动找
+    if (on) {
+      var row = el("closeDd").closest(".srow");
+      if (row) { row.scrollIntoView({ block: "nearest" }); }
+    }
+  }
+  el("tIface").addEventListener("click", function () { openIface(!iface.classList.contains("show")); });
+  el("ifaceX").addEventListener("click", function () { openIface(false); });
+  el("ifaceScrim").addEventListener("click", function () { openIface(false); });
+
+  // 点开/收起下拉。
+  // 定位基准取菜单的 offsetParent:.iface-card 上的 backdrop-filter 会让它
+  // 成为包含块(连 position:fixed 子孙也受影响),所以不能假定基准是 .iface;
+  // 用 offsetParent 就自动对上,且不受 .iface-scroll 的 overflow 裁剪。
+  el("closeDdBtn").addEventListener("click", function (e) {
+    e.stopPropagation();
+    var open = !closeDd.classList.contains("open");
+    closeDd.classList.toggle("open", open);
+    el("closeDdBtn").setAttribute("aria-expanded", String(open));
+    if (!open) { return; }
+    var menu = el("closeDdMenu");
+    menu.style.minWidth = Math.round(el("closeDdBtn").getBoundingClientRect().width) + "px";
+    // 基准 = 菜单的 offsetParent;用 padding-box 的 getBoundingClientRect 对齐
+    var base = (menu.offsetParent || document.querySelector(".iface-card"))
+                 .getBoundingClientRect();
+    var b = el("closeDdBtn").getBoundingClientRect();
+    var mh = menu.offsetHeight || 96;
+    var mw = menu.offsetWidth || Math.round(b.width);
+    // 垂直:优先贴按钮下方;下方空间不够则翻到按钮上方
+    var top = b.bottom - base.top + 5;
+    if (b.bottom + 5 + mh > base.bottom) { top = b.top - base.top - 5 - mh; }
+    // 水平:右缘对齐按钮右缘,并夹紧在基准框内
+    var left = b.right - base.left - mw;
+    left = Math.max(6, Math.min(left, base.width - mw - 6));
+    menu.style.top = Math.round(top) + "px";
+    menu.style.left = Math.round(left) + "px";
+  });
+
+  // 选项:改设置 → 立即同步确认卡(带联动高亮)
+  [].forEach.call(el("closeDdMenu").children, function (opt) {
+    opt.addEventListener("click", function () {
+      setCloseBehavior(opt.dataset.v, "card");
+      closeDd.classList.remove("open");
+      el("closeDdBtn").setAttribute("aria-expanded", "false");
+      el("closeDdBtn").focus();
+    });
+  });
+
+  // 点空白收起下拉
+  document.addEventListener("click", function () {
+    closeDd.classList.remove("open");
+    el("closeDdBtn").setAttribute("aria-expanded", "false");
+  });
+
+  // Esc:先收下拉,再关设置界面
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") { return; }
+    if (closeDd.classList.contains("open")) {
+      closeDd.classList.remove("open");
+      el("closeDdBtn").setAttribute("aria-expanded", "false");
+      el("closeDdBtn").focus();
+      e.preventDefault(); e.stopPropagation();
+    } else if (iface.classList.contains("show")) {
+      openIface(false); e.preventDefault(); e.stopPropagation();
+    }
+  }, true);
+  // 窗口是真实的 1280×720;面板窄时舞台横向可滚。默认把视口滚到右端,
+  // 让右上角关闭键(本稿的主角)一进来就在视野里。
+  var stage = el("stage");
+  function centerOnClose() {
+    var max = stage.scrollWidth - stage.clientWidth;
+    if (max > 0) { stage.scrollLeft = max; }
+  }
+  centerOnClose();
+  window.addEventListener("resize", centerOnClose);
+  // 初始化:让设置下拉与确认卡从同一份状态出发(默认「每次询问」)
+  setCloseBehavior(S.closeBehavior, null);
+  render();
+})();
+</script>
+</body>
+</html>

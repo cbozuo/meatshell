@@ -6,6 +6,17 @@ pub(super) fn blank_trigger_draft() -> TriggerDraft {
         response: "".into(),
         append_enter: true,
         repeat: false,
+        open: true,
+    }
+}
+
+pub(super) fn sample_trigger_draft() -> TriggerDraft {
+    TriggerDraft {
+        expect: "password:".into(),
+        response: "".into(),
+        append_enter: true,
+        repeat: false,
+        open: true,
     }
 }
 
@@ -21,6 +32,7 @@ pub(super) fn trigger_drafts(triggers: &[crate::config::SessionTrigger]) -> Vec<
             response: "".into(),
             append_enter: trigger.append_enter,
             repeat: trigger.repeat,
+            open: false,
         })
         .collect()
 }

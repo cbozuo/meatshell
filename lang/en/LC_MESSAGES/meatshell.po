@@ -114,6 +114,9 @@ msgstr "Keyboard-interactive"
 msgid "Password / first answer"
 msgstr "Password / first answer"
 
+msgid "Password / first prompt"
+msgstr "Password / first prompt"
+
 msgid "Server prompts are shown during login; MFA / OTP prompts will ask again."
 msgstr "Server prompts are shown during login; MFA / OTP prompts will ask again."
 
@@ -313,6 +316,9 @@ msgid "Swap"
 msgstr "Swap"
 
 msgid "Local"
+msgstr "Local"
+
+msgid "On this machine"
 msgstr "Local"
 
 msgid "Path"
@@ -779,3 +785,162 @@ msgstr "{n}"
 
 msgid "{0} 台"
 msgstr "{0}"
+
+# v4 new-session dialog
+msgid "Previewing"
+msgstr "Previewing"
+
+msgid "Soon"
+msgstr "Soon"
+
+msgid "New forward"
+msgstr "New forward"
+
+msgid "New trigger"
+msgstr "New trigger"
+
+msgid "Trigger"
+msgstr "Trigger"
+
+msgid "Fire"
+msgstr "Trigger"
+
+msgid "Preview layout · not implemented yet"
+msgstr "Preview layout · not implemented yet"
+
+msgid "Preview"
+msgstr "Preview"
+
+msgid "Configure a local serial connection"
+msgstr "Configure a local serial connection"
+
+msgid "Configure a local serial (Serial) connection"
+msgstr "Configure a local serial (Serial) connection"
+
+msgid "Configure a Telnet connection"
+msgstr "Configure a Telnet connection"
+
+msgid "Configure a remote desktop connection"
+msgstr "Configure a remote desktop connection"
+
+msgid "Configure a VNC connection"
+msgstr "Configure a VNC connection"
+
+msgid "Configure an SSH connection"
+msgstr "Configure an SSH connection"
+
+msgid "Edit the {0} connection"
+msgstr "Edit the {0} connection"
+
+msgid "Configure a {0} connection (preview · not implemented yet)"
+msgstr "Configure a {0} connection (preview · not implemented yet)"
+
+msgid "Pick an existing group, or type a new name"
+msgstr "Pick an existing group, or type a new name"
+
+msgid "Choose an existing group, or type a new name"
+msgstr "Choose an existing group, or type a new name"
+
+msgid "Existing group «{0}» · {1} sessions"
+msgstr "Existing group «{0}» · {1} sessions"
+
+msgid "Will create group «{0}»"
+msgstr "Will create group «{0}»"
+
+msgid "Will be named «{0}» from the serial port"
+msgstr "Will be named «{0}» from the serial port"
+
+msgid "Will be named «{0}» from the host"
+msgstr "Will be named «{0}» from the host"
+
+msgid "More"
+msgstr "More"
+
+msgid "Shown on the tab bar"
+msgstr "Shown on the tab bar"
+
+msgid "{0} / 4"
+msgstr "{0} / 4"
+
+msgid "Restore defaults"
+msgstr "Restore defaults"
+
+msgid "Other protocols"
+msgstr "Other protocols"
+
+msgid "Pin limit reached. Remove one to add another."
+msgstr "Pin limit reached. Remove one to add another."
+
+msgid "{0} connection · layout preview"
+msgstr "{0} connection · layout preview"
+
+msgid "{0} connection · layout reserved"
+msgstr "{0} connection · layout reserved"
+
+msgid "Dedicated options (color depth, read-only / shared, clipboard) TBD; placeholders below."
+msgstr "Dedicated options (color depth, read-only / shared, clipboard) TBD; placeholders below."
+
+msgid "Dedicated options (resolution, clipboard / drive redirection, gateway) TBD; placeholders below."
+msgstr "Dedicated options (resolution, clipboard / drive redirection, gateway) TBD; placeholders below."
+
+msgid "Leave blank to use the host address"
+msgstr "Leave blank to use the host address"
+
+msgid "Leave blank to name from the host"
+msgstr "Leave blank to name from the host"
+
+msgid "e.g. production / staging"
+msgstr "e.g. production / staging"
+
+msgid "e.g. internal only · maintenance window Friday 22:00"
+msgstr "e.g. internal only · maintenance window Friday 22:00"
+
+msgid "Administrator"
+msgstr "Administrator"
+
+msgid "Data bits"
+msgstr "Data bits"
+
+msgid "Stop bits"
+msgstr "Stop bits"
+
+msgid "Parity"
+msgstr "Parity"
+
+msgid "Leave blank to use the serial port"
+msgstr "Leave blank to use the serial port"
+
+msgid "Add a port forward"
+msgstr "Add a port forward"
+
+msgid "Used to reach internal services. Example:"
+msgstr "Used to reach internal services. Example:"
+
+msgid "Add a trigger"
+msgstr "Add a trigger"
+
+msgid "Auto-reply when matching text appears. Example:"
+msgstr "Auto-reply when matching text appears. Example:"
+
+# (#proto-select 2026-09-18) 本轮新增:字段级「连接协议」下拉 / 高级开关文案
+msgid "Connection protocol"
+msgstr "Connection protocol"
+
+msgid "Remote login"
+msgstr "Remote login"
+
+msgid "Remote desktop"
+msgstr "Remote desktop"
+
+msgid "Odd"
+msgstr "Odd"
+
+msgid "Even"
+msgstr "Even"
+
+msgid "Show advanced options"
+msgstr "Show advanced options"
+
+msgid "Hide advanced options"
+msgstr "Hide advanced options"
+

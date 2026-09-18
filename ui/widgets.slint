@@ -39,11 +39,15 @@ export component IconButton inherits Rectangle {
 export component PrimaryButton inherits Rectangle {
     in property <string> text;
     in property <bool> disabled: false;
+    // (#hifi-v17 2026-09-18) 高保真 .btn 高 38px / 圆角 9px。其它调用点
+    // (chmod 等小弹窗)仍期望 30px,做成可配属性,session_dialog 显式传 38px。
+    in property <length> btn-height: 30px;
+    in property <length> btn-radius: 6px;
     callback clicked();
 
-    height: 30px;
+    height: root.btn-height;
     min-width: 80px;
-    border-radius: Theme.radius-sm;
+    border-radius: root.btn-radius;
     background: disabled
         ? Theme.bg-elevated
         : (touch.pressed ? Theme.accent-pressed
@@ -51,8 +55,8 @@ export component PrimaryButton inherits Rectangle {
     animate background { duration: 120ms; }
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
         alignment: center;
         Text {
             text: root.text;
@@ -73,24 +77,33 @@ export component PrimaryButton inherits Rectangle {
 // --- GhostButton -----------------------------------------------------------
 export component GhostButton inherits Rectangle {
     in property <string> text;
+    in property <length> btn-height: 30px;
+    in property <length> btn-radius: 6px;
+    // 新建会话页脚走高保真 .btn.ghost(line-2 / field-2);其它弹窗保持原 hover。
+    in property <bool> dialog-chrome: false;
     callback clicked();
 
-    height: 30px;
+    height: root.btn-height;
     min-width: 80px;
-    border-radius: Theme.radius-sm;
+    border-radius: root.btn-radius;
     border-width: 1px;
-    border-color: touch.has-hover ? Theme.border-strong : Theme.border-subtle;
-    background: touch.pressed ? Theme.bg-active
-        : (touch.has-hover ? Theme.bg-hover : Theme.bg-panel);
+    border-color: touch.has-hover
+        ? (root.dialog-chrome ? Theme.text-muted : Theme.border-strong)
+        : (root.dialog-chrome ? Theme.line-2 : Theme.border-control);
+    background: touch.pressed
+        ? (root.dialog-chrome ? Theme.field-2 : Theme.bg-active)
+        : (touch.has-hover
+            ? (root.dialog-chrome ? Theme.field-2 : Theme.bg-hover)
+            : transparent);
     animate background, border-color { duration: 120ms; }
 
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
         alignment: center;
         Text {
             text: root.text;
-            color: Theme.text-primary;
+            color: touch.has-hover ? Theme.text-primary : Theme.text-secondary;
             font-size: Theme.fs-md;
             vertical-alignment: center;
         }
@@ -109,17 +122,37 @@ export component LabeledInput inherits VerticalLayout {
     in-out property <string> value;
     in property <bool> password: false;
     in property <bool> auto-focus: false;   // grab focus when shown (dialog fields)
+    in property <bool> clearable: false;    // show a clear × when the field has a value
+    // (#input-height 2026-09-18) 输入框高度可配:高保真 v17 的新建会话对话框用 38px,
+    // 其它对话框维持 32px,所以做成属性而不是直接改默认值。
+    in property <length> input-height: 32px;
     in property <brush> input-background: Theme.bg-root;
+    // (#hifi-v17) 聚焦底色:HTML 的 --field-2(比常态 --field 亮半档)。
+    // 默认取 bg-active,session_dialog 传 bg-active 系;其它对话框不传则
+    // 与常态同色(视觉不变)。
+    in property <brush> focus-background: Theme.bg-active;
     in property <brush> idle-border: Theme.border-subtle;
+    in property <bool> error: false;   // 红框：校验失败（页脚提示同源）
+    in property <int> focus-seq: 0;    // bump to steal focus (test-connection locate)
+    // (#hifi-v17) 新建会话对话框: field / field-2 / 12px 内距 / 5px 标签间距。
+    // 其它对话框保持 32px 默认铬,避免 chmod 等小框被带跑。
+    in property <bool> dialog-field: false;
     callback accepted();   // Enter pressed in the field
     callback canceled();   // Esc pressed in the field (#140-3)
-    spacing: 4px;
+    spacing: root.dialog-field ? 5px : 4px;
+    property <length> inset: root.dialog-field ? 12px : 10px;
+    property <brush> idle-bg: root.dialog-field ? Theme.field : root.input-background;
+    property <brush> focus-bg: root.dialog-field ? Theme.field-2 : root.focus-background;
+    property <brush> idle-line: root.dialog-field ? Theme.border-control : root.idle-border;
     property <bool> focus-pending: false;
     // (#pw-visibility-toggle 2026-09-15) 密码明文/密文开关:输入框右缘的眼睛
     // 图标,点击切换。只在 password 模式下渲染;切换不改文字本身,只改
     // TextInput 的 input-type。
     property <bool> password-visible: false;
     public function focus-input() { input.focus(); }
+    changed focus-seq => {
+        if (self.focus-seq > 0) { input.focus(); }
+    }
 
     // A LabeledInput is often created inside a conditional dialog. Focusing its
     // TextInput during `init` asks Slint for IME geometry while the surrounding
@@ -142,18 +175,37 @@ export component LabeledInput inherits VerticalLayout {
     }
 
     Rectangle {
-        height: 32px;
-        border-radius: Theme.radius-sm;
+        height: root.input-height;
+        // (#hifi-v17 2026-09-18) 对齐高保真 .control:
+        //   · 常态边框 = 中性 line 色(原 idle-border 由调用方传 border-strong,
+        //     比 HTML 的 --line 重一档,弹框里显得每个框都描了粗边);
+        //   · 聚焦 = 1px accent 描边 + 3px accent-soft **外圈光晕**(HTML 的
+        //     box-shadow: 0 0 0 3px),**去掉了左侧 2px 竖条** —— 原型
+        //     #focus-uniform 的结论:竖条让左边看起来比右边粗,整体失重。
+        //   · 聚焦同时把底色提到 field-2(比常态亮半档)。
+        border-radius: 9px;
         border-width: 1px;
-        border-color: input.has-focus ? Theme.accent : root.idle-border;
-        background: root.input-background;
+        border-color: input.has-focus ? Theme.accent
+            : (root.error ? Theme.danger : root.idle-line);
+        background: input.has-focus ? root.focus-bg : root.idle-bg;
+        drop-shadow-blur: input.has-focus ? 0px : 0px;
+        // Slint 无 box-shadow spread,用内层描边矩形近似 3px 光晕:
+        // 比外阴影干净,也不会把弹层顶出卡片。错误态即使失焦也留淡红晕。
+        if input.has-focus || root.error : Rectangle {
+            x: -3px; y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 11px;
+            border-width: 3px;
+            border-color: input.has-focus ? Theme.accent-soft : Theme.danger.with-alpha(0.18);
+        }
 
         // Hide on focus: IME preedit is visible before value is committed.
         // (#pw-visibility-toggle) 密码模式右侧要让位给眼睛图标。
         if root.value == "" && !input.has-focus : Text {
-            x: 10px;
+            x: root.inset;
             y: 0px;
-            width: parent.width - (root.password ? 44px : 20px);
+            width: parent.width - (root.password ? 44px : (root.clearable ? 36px : (root.inset + 10px)));
             height: parent.height;
             overflow: elide;
             text: placeholder;
@@ -163,10 +215,13 @@ export component LabeledInput inherits VerticalLayout {
             vertical-alignment: center;
         }
 
+        // (#hifi-v17) 聚焦竖条已删:高保真 #focus-uniform 定稿聚焦只留
+        // 1px accent 描边 + 3px 光晕(见上),竖条让左边比右边粗。
+
         input := TextInput {
-            x: 10px;
+            x: root.inset;
             y: 0px;
-            width: parent.width - (root.password ? 44px : 20px);
+            width: parent.width - (root.password ? 44px : (root.clearable && root.value != "" ? 36px : (root.inset + 10px)));
             height: parent.height;
             text <=> root.value;
             color: Theme.text-primary;
@@ -181,8 +236,42 @@ export component LabeledInput inherits VerticalLayout {
                 ? InputType.password : InputType.text;
             accepted => { root.accepted(); }
             key-pressed(e) => {
-                if (e.text == Key.Escape) { root.canceled(); accept }
+                if (e.text == Key.Escape) { root.canceled(); reject }
                 else { reject }   // let TextInput handle normal typing
+            }
+        }
+
+        // (#v4-clearable) 有值时右侧出 ×，点击清空并回焦。密码框走眼睛图标，不叠 ×。
+        if root.clearable && !root.password && root.value != "" : clear-ta := TouchArea {
+            x: parent.width - 36px;
+            width: 32px;
+            height: parent.height;
+            mouse-cursor: pointer;
+            // 高保真:有值时悬停/聚焦才显现;其它对话框保持常显。
+            opacity: root.dialog-field && !(input.has-focus || clear-ta.has-hover) ? 0 : 1;
+            clicked => {
+                root.value = "";
+                input.focus();
+            }
+            Rectangle {
+                x: (parent.width - 28px) / 2;
+                y: (parent.height - 28px) / 2;
+                width: 28px;
+                height: 28px;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: clear-ta.has-hover ? Theme.text-primary.with-alpha(0.26) : transparent;
+                background: clear-ta.has-hover ? Theme.text-primary.with-alpha(0.16) : transparent;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "\u{E5CD}";
+                    font-family: "Material Icons";
+                    color: clear-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                    font-size: Theme.fs-sm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
             }
         }
 
@@ -190,18 +279,20 @@ export component LabeledInput inherits VerticalLayout {
         // 之间切换。闭眼/睁眼双字形与状态同步;图标右侧留 4px,与输入文字的
         // 10px 左边距对称。
         if root.password : pw-eye := TouchArea {
-            x: parent.width - 30px;
-            width: 26px;
+            x: parent.width - 36px;
+            width: 32px;
             height: parent.height;
             mouse-cursor: pointer;
             clicked => { root.password-visible = !root.password-visible; }
             Rectangle {
-                x: (parent.width - 18px) / 2;
-                y: (parent.height - 18px) / 2;
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                background: pw-eye.has-hover ? Theme.bg-hover : transparent;
+                x: (parent.width - 28px) / 2;
+                y: (parent.height - 28px) / 2;
+                width: 28px;
+                height: 28px;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: pw-eye.has-hover ? Theme.text-primary.with-alpha(0.24) : transparent;
+                background: pw-eye.has-hover ? Theme.text-primary.with-alpha(0.15) : transparent;
                 Text {
                     width: parent.width;
                     height: parent.height;
@@ -209,7 +300,7 @@ export component LabeledInput inherits VerticalLayout {
                     // 旧码 E8B4/E8B5 是 timer 一类字形,画出来像时钟(用户截图)。
                     text: root.password-visible ? "\u{E8F4}" : "\u{E8F5}";
                     font-family: "Material Icons";
-                    color: Theme.text-secondary;
+                    color: pw-eye.has-hover ? Theme.text-primary : Theme.text-muted;
                     font-size: Theme.fs-md;
                     horizontal-alignment: center;
                     vertical-alignment: center;

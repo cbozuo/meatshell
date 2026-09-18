@@ -69,21 +69,6 @@ pub(super) fn tab_group_color(store: &ConfigStore, session: &Session) -> (slint:
     }
 }
 
-fn serial_session_detail(session: &Session) -> String {
-    if session.kind != SessionKind::Serial {
-        return String::new();
-    }
-    let parity = match session.parity.as_str() {
-        "odd" => "O",
-        "even" => "E",
-        _ => "N",
-    };
-    format!(
-        "{} · {} baud · {}{}{}",
-        session.serial_port, session.baud_rate, session.data_bits, parity, session.stop_bits
-    )
-}
-
 pub(super) fn wsl_profile_model(store: &ConfigStore) -> ModelRc<WslProfileInfo> {
     let rows = store
         .wsl_profiles()
@@ -386,12 +371,12 @@ fn build_session_rows(
     let blank = |group: &str, gc: slint::Color, hex: &str| SessionInfo {
         id: "".into(),
         name: "".into(),
+        // Placeholder rows render no member icon; "" falls back to the default
+        // protocol glyph. See Theme.protocol-glyph.
+        kind: "".into(),
         host: "".into(),
-        serial_detail: "".into(),
         port: 0,
         user: "".into(),
-        auth: "".into(),
-        last_used: "".into(),
         group: group.into(),
         group_header: group.into(),
         collapsed: group_is_collapsed(group),
@@ -417,12 +402,10 @@ fn build_session_rows(
         rows.push(SessionInfo {
             id: s.id.clone().into(),
             name: s.name.clone().into(),
+            kind: s.kind.as_str().into(),
             host: s.host.clone().into(),
-            serial_detail: "".into(),
             port: 0,
             user: s.user.clone().into(),
-            auth: s.kind.as_str().into(),
-            last_used: "".into(),
             group: "system".into(),
             group_color: sys_gc,
             group_color_hex: sys_hex.as_str().into(),
@@ -471,17 +454,11 @@ fn build_session_rows(
                 rows.push(SessionInfo {
                     id: s.id.clone().into(),
                     name: s.name.clone().into(),
+                    kind: s.kind.as_str().into(),
                     host: s.host.clone().into(),
-                    serial_detail: serial_session_detail(s).into(),
                     port: s.port as i32,
                     user: s.user.clone().into(),
-                    auth: s.auth.as_str().into(),
                     note: s.note.clone().into(),
-                    last_used: s
-                        .last_used
-                        .clone()
-                        .unwrap_or_else(|| "never".to_string())
-                        .into(),
                     group: group.clone().into(),
                     group_color: gc,
                     group_color_hex: hex.as_str().into(),
@@ -866,27 +843,38 @@ mod drag_order_tests {
     }
 }
 
-mod serial_display_tests {
+#[cfg(test)]
+mod row_display_tests {
     use super::*;
 
+    // (#proto-icon 2026-09-17) 每一行的 kind 必须原样带出协议名 —— 它是成员行
+    // 图标(Theme.protocol-glyph)的唯一数据源。各协议各测一遍。
     #[test]
-    fn serial_rows_show_device_and_framing_instead_of_ssh_defaults() {
-        for (device, baud, bits, parity, stops, expected) in [
-            ("/dev/ttyUSB0", 115200, 8, "none", 1, "/dev/ttyUSB0 · 115200 baud · 8N1"),
-            ("COM3", 9600, 7, "even", 2, "COM3 · 9600 baud · 7E2"),
-            ("/dev/ttyS0", 57600, 8, "odd", 1, "/dev/ttyS0 · 57600 baud · 8O1"),
+    fn rows_carry_the_protocol_kind_for_the_row_icon() {
+        for (kind, expected) in [
+            (SessionKind::Ssh, "ssh"),
+            (SessionKind::Serial, "serial"),
+            (SessionKind::Telnet, "telnet"),
+            (SessionKind::Local, "local"),
         ] {
             let mut session = Session::new_empty();
-            session.kind = SessionKind::Serial;
-            session.serial_port = device.into();
-            session.baud_rate = baud;
-            session.data_bits = bits;
-            session.parity = parity.into();
-            session.stop_bits = stops;
+            session.kind = kind;
             let rows = build_session_rows(&[session], &[], None, &HashMap::new(), &[], "", false);
             assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].serial_detail.as_str(), expected);
+            assert_eq!(rows[0].kind.as_str(), expected);
         }
+    }
+
+    // 内置本地会话(builtin)走另一条构造分支,kind 同样要带出来(local)。
+    #[test]
+    fn builtin_rows_carry_local_kind() {
+        let builtin = builtin_local_session("id", "PowerShell", "powershell");
+        let rows = build_session_rows(&[], &[], None, &HashMap::new(), &[builtin], "", false);
+        let row = rows
+            .iter()
+            .find(|r| r.builtin && r.name.as_str() == "PowerShell")
+            .expect("builtin row");
+        assert_eq!(row.kind.as_str(), "local");
     }
 
     #[test]
@@ -898,12 +886,9 @@ mod serial_display_tests {
             session.port = 2222;
             session.user = "alice".into();
             let rows = build_session_rows(&[session], &[], None, &HashMap::new(), &[], "", false);
-            assert!(rows[0].serial_detail.is_empty());
             assert_eq!(rows[0].host.as_str(), "example.com");
             assert_eq!(rows[0].port, 2222);
             assert_eq!(rows[0].user.as_str(), "alice");
         }
-
     }
-
 }

@@ -81,6 +81,16 @@ export global Theme {
 
     out property <brush> border-subtle: dark ? #3a3d46 : #e2e2e8;
     out property <brush> border-strong: dark ? #4a4e59 : #c7c7cc;
+    // (#hifi-v17 2026-09-18) 控件常态边框:高保真 .control 的 --line,比
+    // border-subtle 亮半档、比 border-strong 淡一档 —— 输入框"看得见但不
+    // 抢眼"。新建会话对话框用;终端等既有界面仍用上面两档。
+    out property <brush> border-control: dark ? #31353e : #dcdce3;
+    // (#hifi-v17) 新建会话对话框专用面/线:原型 --field / --field-2 / --line-2 /
+    // --panel-hi。独立于 bg-elevated,避免把终端面板一起改暗。
+    out property <brush> field: dark ? #191b21 : #f4f5f8;
+    out property <brush> field-2: dark ? #1d2027 : #eef0f4;
+    out property <brush> line-2: dark ? #3f444f : #c7c7cc;
+    out property <brush> panel-hi: dark ? #282b34 : #f6f7f9;
 
     out property <brush> text-primary:   dark ? #e6e8ee : #1d1d1f;
     // Light-mode secondary/muted darkened further (was #55555a / #7c7c82): over a
@@ -95,6 +105,22 @@ export global Theme {
     out property <brush> accent:         root.accent-solid;
     out property <brush> accent-hover:   root.wallpaper-active ? root.wp-accent.brighter(0.12) : (dark ? #5aa0f2 : #0077ed);
     out property <brush> accent-pressed: root.wallpaper-active ? root.wp-accent.darker(0.12)   : (dark ? #3a80d2 : #006adb);
+
+    // (#close-behavior) 关闭键语义红:世界通用的「关闭」红,与通用
+    // danger(#e25c5c,偏柔和的告警色)刻意分开 —— 关闭键要一眼可辨。
+    // UI/app.slint 的 WinBtn 与确认卡的「完全退出」卡片共用这两档。
+    out property <color> close-red:         dark ? #e81123 : #c42b1c;
+    out property <color> close-red-pressed: dark ? #c50f1f : #a52216;
+
+    // (#v4-session-dialog) 选择器选中态 / 开关淡染 / 弹窗遮罩。chip 与 accent-soft
+    // 跟强调色走，避免实心 accent 和「创建」主按钮抢层级。modal-scrim 是方案 A：
+    // 低 alpha 纯色，无 blur（Slint 无元素级 backdrop-filter）。全屏弹窗要
+    // 看得出遮罩，alpha 略高于原型舞台值（暗 0.32 / 亮 0.36）。
+    out property <brush> chip:        root.accent-solid.with-alpha(root.dark ? 0.22 : 0.14);
+    out property <brush> accent-soft: root.accent-solid.with-alpha(root.dark ? 0.16 : 0.12);
+    out property <brush> modal-scrim: root.dark ? #0c0d11.with-alpha(0.32) : #f4f5f8.with-alpha(0.36);
+    // 滚动渐隐用的不透明面板色（不能走 frost 后的 brush，否则渐变混成灰）。
+    out property <color> panel-solid: root.base-bg-panel;
 
     out property <brush> success: dark ? #4ec9b0 : #34c759;
     out property <brush> warning: dark ? #e2a84a : #ff9f0a;
@@ -146,6 +172,27 @@ export global Theme {
     in-out property <length> term-font-size: 13px;
     in-out property <bool> term-font-bold: false;
 
+    // --- Protocol glyph (#proto-icon 2026-09-17) ---------------------------
+    // 连接协议 → Material Icons 字形。**唯一的协议图标来源**:新建会话对话框
+    // 的协议下拉框与左侧会话列表的成员图标都调它,两处恒一致(用户定稿
+    // "下拉框里的图标和成员行左侧的图标保持一致")。
+    //
+    // (#proto-icon-r19 2026-09-17) 码位**按高保真原型 SVG 的造型逐个对齐**,
+    // 不按协议语义猜。原型 new-session-dialog-alt-dropdown-2026-09-17.html:
+    //   ssh=窗口+提示符  serial=矩形+上下插针  telnet=窗口+标题栏  rdp/vnc=显示器+底座
+    // 对应内嵌 MaterialIcons-Regular.ttf:
+    //   terminal / memory / web_asset / desktop_windows(四码位均已用字体 cmap 校验存在)。
+    // 上一轮挑了 router(serial)/memory(telnet)/computer(ssh),造型与原型不符 —— 用户实测反馈。
+    // ssh / local / 未知协议统一回落 terminal。
+    //
+    // 显式 `public`:被 session_dialog.slint 与 welcome.slint 跨文件调用。
+    public pure function protocol-glyph(id: string) -> string {
+        if (id == "serial") { return "\u{E322}"; }             // memory       矩形+上下插针
+        if (id == "telnet") { return "\u{E069}"; }             // web_asset    窗口+标题栏
+        if (id == "rdp" || id == "vnc") { return "\u{E30C}"; } // desktop_windows 显示器+底座
+        return "\u{EB8E}";                                     // terminal     窗口+提示符
+    }
+
     // --- Group colour (#group-color 2026-09-14) ----------------------------
     // 分组颜色由**用户在右键菜单里设定**(Rust 侧存 HashMap<组名, hex>,
     // 见 config::set_group_color / group_colors),主题层不再派生任何颜色。
@@ -184,6 +231,7 @@ export global Theme {
     out property <length> radius-sm: 4px * root.ui-scale;
     out property <length> radius-md: 6px * root.ui-scale;
     out property <length> radius-lg: 10px * root.ui-scale;
+    out property <length> radius-xl: 16px * root.ui-scale;
 
     out property <length> gap-xs: 4px * root.ui-scale;
     out property <length> gap-sm: 8px * root.ui-scale;

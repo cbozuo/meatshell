@@ -24,6 +24,8 @@ mod single_instance;
 mod tab_callbacks;
 mod tab_transfer;
 mod terminal_ui;
+mod tray; // (#close-behavior) 系统托盘(Windows 真实现,其它平台 no-op)
+use self::tray::{Tray, TrayAction}; // (#close-behavior) 托盘入口
 mod webdav;
 mod window;
 
@@ -195,8 +197,168 @@ fn tab_title_len(title: &str) -> i32 {
         .min(i32::MAX as usize) as i32
 }
 
-fn should_block_close(exit_confirmed: bool, has_live_sessions: bool) -> bool {
-    !exit_confirmed && has_live_sessions
+/// (#close-behavior) 确认卡回传的档位。契约是 "tray" / "exit";
+/// 允许尾部带 ",remember"(用户勾了「记住我的选择」再点卡片)。
+pub(crate) fn parse_close_mode(raw: &str) -> &str {
+    if raw.starts_with("tray") {
+        "tray"
+    } else {
+        "exit"
+    }
+}
+
+/// (#close-behavior) 配置里的关闭行为归一化。
+///
+/// 旧配置没有该字段(空串)或值不合法时回落 `"ask"`,保证升级后的
+/// 首次启动与改动前行为一致(仍弹确认卡)。
+pub(crate) fn close_behavior_or_default(raw: &str) -> &str {
+    match raw {
+        "tray" => "tray",
+        "exit" => "exit",
+        _ => "ask",
+    }
+}
+
+/// (#close-behavior) 确认卡是否要顺带记住这次选择。
+pub(crate) fn close_mode_remembers(raw: &str) -> bool {
+    raw.ends_with("remember")
+}
+
+/// (#close-behavior) 点关闭键之后走哪条路。
+///
+/// 只看设置档,不看有没有活动会话:「每次询问」在欢迎页也要弹出确认卡,
+/// 否则窗口被 `hide()`、事件循环还在转,看起来像关了但进程还在。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseDecision {
+    Ask,
+    Tray,
+    Exit,
+}
+
+pub(crate) fn decide_close(mode: &str) -> CloseDecision {
+    match close_behavior_or_default(mode) {
+        "tray" => CloseDecision::Tray,
+        "exit" => CloseDecision::Exit,
+        _ => CloseDecision::Ask,
+    }
+}
+
+/// (#close-behavior) 「真的关掉这个窗口」所需的全部上下文。
+///
+/// 关闭键(直退档)、确认卡两张卡片、托盘菜单「退出」三条路径都调
+/// [`WindowCloser::confirm`],避免收尾逻辑(tab 收尾 → 布局保存 →
+/// 会话断开 → 事件循环退出)被复制成三份。
+#[derive(Clone)]
+struct WindowCloser {
+    window_id: u64,
+    window: slint::Weak<AppWindow>,
+    store: Rc<RefCell<ConfigStore>>,
+    registry: Rc<WindowRegistry<slint::Weak<AppWindow>>>,
+    core: Rc<AppCore>,
+    handles: Rc<RefCell<HashMap<String, SessionHandle>>>,
+    sftp_handles: SftpHandles,
+    proc_weak: slint::Weak<ProcWindow>,
+    sys_weak: slint::Weak<SystemInfoWindow>,
+    editor_weak: slint::Weak<EditorWindow>,
+    /// 幂等闸:置位后重复调用直接返回(托盘菜单与关闭键可能同时到达)。
+    exit_confirmed: Rc<Cell<bool>>,
+}
+
+impl WindowCloser {
+    fn confirm(&self) {
+        if self.exit_confirmed.replace(true) {
+            return;
+        }
+        if let Some(w) = self.window.upgrade() {
+            w.set_confirm_close_open(false);
+            save_layout(&w, &self.store);
+            clear_zen_on_close(&w, &self.store);
+            let _ = w.hide();
+        }
+        // 先让所有 worker 停下再拆运行时/事件循环;清空映射也让后续重复的
+        // 关闭请求看到「没有活动会话」而直接放行。
+        teardown_window(
+            self.window_id,
+            &self.handles,
+            &self.sftp_handles,
+            &self.proc_weak,
+            &self.sys_weak,
+            &self.editor_weak,
+        );
+        if self.registry.unregister(self.window_id) {
+            let _ = slint::quit_event_loop();
+        }
+        forget_window_state(&self.core, self.window_id);
+    }
+}
+
+/// (#close-behavior) 关闭确认卡第③段的会话清单。
+///
+/// 按**会话**去重(同一条会话可能开了多个标签页),只列仍在运行的会话;
+/// 主机串优先给 `user@host:port`,本地会话(无 host)退回会话名。
+fn close_session_rows(
+    tabs_model: &Rc<VecModel<TabInfo>>,
+    handles: &Rc<RefCell<HashMap<String, SessionHandle>>>,
+    store: &ConfigStore,
+) -> Vec<CloseSessionRow> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut rows: Vec<CloseSessionRow> = Vec::new();
+    for i in 0..tabs_model.row_count() {
+        let Some(tab) = tabs_model.row_data(i) else {
+            continue;
+        };
+        if tab.kind != "terminal" || tab.session_id.is_empty() {
+            continue;
+        }
+        if seen.iter().any(|s| s == tab.session_id.as_str()) {
+            continue;
+        }
+        if !handles.borrow().contains_key(tab.session_id.as_str()) {
+            continue;
+        }
+        seen.push(tab.session_id.to_string());
+        let host = store
+            .sessions()
+            .iter()
+            .find(|s| s.id == tab.session_id.as_str())
+            .map(|s| {
+                // 本地会话没有 host → 用会话名(例如「本地 PowerShell」)。
+                if s.host.is_empty() {
+                    s.name.clone()
+                } else if s.user.is_empty() {
+                    format!("{}:{}", s.host, s.port)
+                } else {
+                    format!("{}@{}:{}", s.user, s.host, s.port)
+                }
+            })
+            .unwrap_or_default();
+        rows.push(CloseSessionRow {
+            name: tab.title.clone(),
+            host: host.into(),
+        });
+    }
+    rows
+}
+
+// (#close-behavior) 托盘延迟创建:登记闭包 + 持有句柄。
+// 放模块级是因为 `minimize_to_tray` 是不带状态的自由函数(与
+// `raise_to_front` 同类),拿不到 `open_window` 的局部变量。
+thread_local! {
+    static TRAY_ENSURE: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    static TRAY_HANDLE: RefCell<Option<Tray>> = const { RefCell::new(None) };
+}
+
+/// (#close-behavior) 「最小化到托盘」:隐藏窗口但**不**断开会话。
+///
+/// 托盘图标按需创建(用到才出现),窗口从任务栏消失、进程继续跑;
+/// 之后靠托盘菜单唤回或退出。
+fn minimize_to_tray(win: &AppWindow) {
+    TRAY_ENSURE.with(|slot| {
+        if let Some(ensure) = slot.borrow().as_ref() {
+            ensure();
+        }
+    });
+    let _ = win.hide();
 }
 
 /// Tear down one window's workers (SSH + SFTP) and hide its detachable
@@ -1023,6 +1185,17 @@ fn open_window(
         window.on_set_paste_confirm_enabled(move |enabled| {
             let mut s = store.borrow_mut();
             s.set_paste_confirm_enabled(enabled);
+            let _ = s.save();
+        });
+    }
+    // (#close-behavior) 关闭行为:设置界面「界面 › 窗口」与关闭确认卡共用一份状态。
+    // 启动时从配置读入并归一化(旧配置为空 → ask)。
+    window.set_close_behavior(store.borrow().close_behavior().into());
+    {
+        let store = store.clone();
+        window.on_set_close_behavior(move |value: SharedString| {
+            let mut s = store.borrow_mut();
+            s.set_close_behavior(value.as_str());
             let _ = s.save();
         });
     }
@@ -2715,6 +2888,8 @@ fn open_window(
         let ev_core = core.clone();
         let ev_window_size_tracking_ready = window_size_tracking_ready.clone();
         let ev_pending_window_size_restore = pending_window_size_restore.clone();
+        // (#close-behavior) 原生关闭请求要填确认卡的会话清单,需拿到标签模型。
+        let ev_tabs = tabs_model.clone();
         let mut last_cursor_logical: Option<(f32, f32)> = None;
         let mut macos_wheel_accum = 0.0_f32;
         // Track the inputs that make up WinActivity; recompute on each change.
@@ -3033,19 +3208,37 @@ fn open_window(
                         }
                     }
                     WEvent::CloseRequested => {
-                        // Confirm before closing if there are open session tabs (#88),
-                        // so a stray double-click on the title-bar icon / X / Alt+F4
-                        // doesn't silently drop live sessions. Installer/Restart
-                        // Manager may send repeated requests, so never intercept
-                        // again after the user has confirmed shutdown (#267).
-                        if should_block_close(
-                            ev_exit_confirmed.get(),
-                            !close_handles.borrow().is_empty(),
-                        ) {
-                            if let Some(win) = weak.upgrade() {
-                                win.set_confirm_close_open(true);
+                        // (#close-behavior) 与标题栏关闭键走同一套分流:先读
+                        // 设置里的关闭行为,再决定弹卡 / 托盘 / 直退。
+                        // (#tray-icon-fix 2026-09-18) tray 档不再被"无会话"
+                        // 短路,0 会话也进托盘。
+                        // (#ask-always-card 2026-09-18) ask 档同样不再看 handle:
+                        // 欢迎页点 × 也要弹确认卡,窗口保持可见。
+                        // Installer/Restart Manager 可能重复发请求,故用户确认过
+                        // 之后不再拦截(#267)。
+                        if ev_exit_confirmed.get() {
+                            // 已确认过:放行默认关闭路径(下面统一收尾)。
+                        } else if let Some(win) = weak.upgrade() {
+                            match decide_close(&win.get_close_behavior()) {
+                                CloseDecision::Tray => {
+                                    minimize_to_tray(&win);
+                                    return EventResult::PreventDefault;
+                                }
+                                CloseDecision::Ask => {
+                                    win.set_close_sessions(ModelRc::from(Rc::new(
+                                        VecModel::from(close_session_rows(
+                                            &ev_tabs,
+                                            &close_handles,
+                                            &ev_store.borrow(),
+                                        )),
+                                    )));
+                                    win.set_confirm_close_open(true);
+                                    return EventResult::PreventDefault;
+                                }
+                                CloseDecision::Exit => {
+                                    // 落到下面的确认退出路径(直接拆掉)。
+                                }
                             }
-                            return EventResult::PreventDefault;
                         }
                         ev_exit_confirmed.set(true);
                         // No sessions → the window is about to close; persist layout.
@@ -3076,48 +3269,57 @@ fn open_window(
                 EventResult::Propagate
             });
     }
-    // Confirm-close dialog "Close" → actually quit the event loop (#88).
+    // (#close-behavior) 「真的关掉这个窗口」的共用上下文。
+    // 关闭键(直退档)、确认卡两张卡片、托盘菜单「退出」都走它,收尾逻辑只有一份。
+    let closer = WindowCloser {
+        window_id,
+        window: window.as_weak(),
+        store: store.clone(),
+        registry: registry.clone(),
+        core: core.clone(),
+        handles: handles.clone(),
+        sftp_handles: sftp_handles.clone(),
+        proc_weak: proc_win.as_weak(),
+        sys_weak: sys_win.as_weak(),
+        editor_weak: editor_win.as_weak(),
+        exit_confirmed: exit_confirmed.clone(),
+    };
+    // 旧的「关闭」确认回调:Slint 侧仍声明着该回调,接到共用路径上。
     {
-        let weak = window.as_weak();
-        let proc_weak = proc_win.as_weak();
-        let sys_weak = sys_win.as_weak();
+        let closer = closer.clone();
+        window.on_confirm_close_yes(move || closer.confirm());
+    }
+    // (#close-behavior) 确认卡两张卡片 → 托盘 or 完全退出。
+    // 参数允许带 ",remember" 后缀(复选框勾选时),顺带把偏好写进配置。
+    {
+        let closer = closer.clone();
         let cc_store = store.clone();
-        let close_handles = handles.clone();
-        let close_sftp_handles = sftp_handles.clone();
-        let editor_weak = editor_win.as_weak();
-        let close_exit_confirmed = exit_confirmed.clone();
-        let close_registry = registry.clone();
-        let close_core = core.clone();
-        window.on_confirm_close_yes(move || {
-            // Guard against a double click and against another close request
-            // arriving from Windows Installer while shutdown is in progress.
-            if close_exit_confirmed.replace(true) {
-                return;
+        window.on_close_confirmed(move |raw: SharedString| {
+            let mode = parse_close_mode(&raw);
+            if close_mode_remembers(&raw) {
+                {
+                    let mut s = cc_store.borrow_mut();
+                    s.set_close_behavior(mode);
+                    let _ = s.save();
+                }
+                if let Some(w) = closer.window.upgrade() {
+                    w.set_close_behavior(mode.into());
+                }
             }
-            if let Some(w) = weak.upgrade() {
-                w.set_confirm_close_open(false);
-                save_layout(&w, &cc_store);
-                clear_zen_on_close(&w, &cc_store);
-                let _ = w.hide();
+            match mode {
+                "tray" => {
+                    if let Some(w) = closer.window.upgrade() {
+                        w.set_confirm_close_open(false);
+                        minimize_to_tray(&w);
+                    } else {
+                        closer.confirm();
+                    }
+                }
+                _ => closer.confirm(),
             }
-            // Ask every worker to stop before the runtime/event loop is torn
-            // down, and hide the detachable monitor windows. Clearing the maps
-            // also makes any repeated close request see no live sessions and
-            // pass through immediately.
-            teardown_window(
-                window_id,
-                &close_handles,
-                &close_sftp_handles,
-                &proc_weak,
-                &sys_weak,
-                &editor_weak,
-            );
-            if close_registry.unregister(window_id) {
-                let _ = slint::quit_event_loop();
-            }
-            forget_window_state(&close_core, window_id);
         });
     }
+
 
     // --- Custom title-bar window controls (#119) --------------------------
     {
@@ -3143,46 +3345,53 @@ fn open_window(
             }
         });
     }
+    // (#close-behavior) 关闭键:按「关闭按钮行为」分流。
+    //   ask  → 弹确认卡(会话清单可空,欢迎页也弹)
+    //   tray → 直接最小化到托盘,保持会话
+    //   exit → 直接断开全部会话退出
     {
-        let weak = window.as_weak();
-        let close_handles = handles.clone();
-        let close_sftp_handles = sftp_handles.clone();
-        let wc_proc_weak = proc_win.as_weak();
-        let wc_sys_weak = sys_win.as_weak();
-        let wc_editor_weak = editor_win.as_weak();
+        let closer = closer.clone();
+        let wc_tabs = tabs_model.clone();
+        let wc_handles = handles.clone();
         let wc_store = store.clone();
-        let wc_exit_confirmed = exit_confirmed.clone();
-        let wc_registry = registry.clone();
-        let wc_core = core.clone();
         window.on_win_close(move || {
-            if let Some(w) = weak.upgrade() {
-                // Mirror the native-X behaviour: confirm if sessions are open.
-                if !should_block_close(wc_exit_confirmed.get(), !close_handles.borrow().is_empty())
-                {
-                    wc_exit_confirmed.set(true);
-                    save_layout(&w, &wc_store);
-                    clear_zen_on_close(&w, &wc_store);
-                    // Tear down this window's workers and hide its monitor
-                    // windows; quit only if it was the last one.
-                    teardown_window(
-                        window_id,
-                        &close_handles,
-                        &close_sftp_handles,
-                        &wc_proc_weak,
-                        &wc_sys_weak,
-                        &wc_editor_weak,
-                    );
-                    let _ = w.hide();
-                    if wc_registry.unregister(window_id) {
-                        let _ = slint::quit_event_loop();
-                    }
-                    forget_window_state(&wc_core, window_id);
-                } else {
+            let Some(w) = closer.window.upgrade() else {
+                return;
+            };
+            match decide_close(&w.get_close_behavior()) {
+                CloseDecision::Tray => minimize_to_tray(&w),
+                CloseDecision::Exit => closer.confirm(),
+                CloseDecision::Ask => {
+                    w.set_close_sessions(ModelRc::from(Rc::new(VecModel::from(
+                        close_session_rows(&wc_tabs, &wc_handles, &wc_store.borrow()),
+                    ))));
                     w.set_confirm_close_open(true);
                 }
             }
         });
     }
+    // 把惰性托盘创建闭包登记到模块级槽位,供 minimize_to_tray 触发。
+    TRAY_ENSURE.with(|slot| {
+        let closer = closer.clone();
+        let tray_weak = window.as_weak();
+        *slot.borrow_mut() = Some(Rc::new(move || {
+            if TRAY_HANDLE.with(|h| h.borrow().is_some()) {
+                return;
+            }
+            let closer = closer.clone();
+            let tray_weak = tray_weak.clone();
+            let handle = Tray::ensure(Box::new(move |action| match action {
+                TrayAction::Show => {
+                    if let Some(w) = tray_weak.upgrade() {
+                        let _ = w.show();
+                        raise_to_front(&w);
+                    }
+                }
+                TrayAction::Exit => closer.confirm(),
+            }));
+            TRAY_HANDLE.with(|h| *h.borrow_mut() = Some(handle));
+        }));
+    });
     {
         let weak = window.as_weak();
         window.on_win_drag(move || {
@@ -3881,12 +4090,9 @@ fn wire_session_callbacks(
     // Working set of port forwards (#56) for the session being created/edited.
     // The forward add/delete callbacks mutate it; saving reads it into
     // Session.forwards; opening the dialog (new/edit) resets it.
-    let edit_forwards: Rc<RefCell<Vec<PortFwd>>> =
-        Rc::new(RefCell::new(vec![blank_forward_draft()]));
-    let edit_triggers: Rc<RefCell<Vec<TriggerDraft>>> =
-        Rc::new(RefCell::new(vec![blank_trigger_draft()]));
-    let edit_trigger_secrets: Rc<RefCell<Vec<Secret>>> =
-        Rc::new(RefCell::new(vec![Secret::default()]));
+    let edit_forwards: Rc<RefCell<Vec<PortFwd>>> = Rc::new(RefCell::new(Vec::new()));
+    let edit_triggers: Rc<RefCell<Vec<TriggerDraft>>> = Rc::new(RefCell::new(Vec::new()));
+    let edit_trigger_secrets: Rc<RefCell<Vec<Secret>>> = Rc::new(RefCell::new(Vec::new()));
     // on_connect_session moves the panes_model binding into its closure; the
     // rename handler below needs its own handle, so clone up front.
     let panes_model_rename = panes_model.clone();
@@ -3922,9 +4128,9 @@ fn wire_session_callbacks(
     let store_ng = store.clone();
     window.on_new_session_clicked(move || {
         if let Some(w) = weak.upgrade() {
-            *ef_new.borrow_mut() = vec![blank_forward_draft()];
-            *et_new.borrow_mut() = vec![blank_trigger_draft()];
-            *ets_new.borrow_mut() = vec![Secret::default()];
+            *ef_new.borrow_mut() = Vec::new();
+            *et_new.borrow_mut() = Vec::new();
+            *ets_new.borrow_mut() = Vec::new();
             w.set_session_groups(session_groups_model(&store_ng.borrow()));
             w.set_dialog_forwards(forward_model(&ef_new.borrow()));
             w.set_dialog_triggers(trigger_model(&et_new.borrow()));
@@ -4150,19 +4356,12 @@ fn wire_session_callbacks(
                 return;
             };
             *ef_edit.borrow_mut() = forward_drafts(&session.forwards);
-            if ef_edit.borrow().is_empty() {
-                ef_edit.borrow_mut().push(blank_forward_draft());
-            }
             *et_edit.borrow_mut() = trigger_drafts(&session.triggers);
             *ets_edit.borrow_mut() = session
                 .triggers
                 .iter()
                 .map(|t| t.response.clone())
                 .collect();
-            if et_edit.borrow().is_empty() {
-                et_edit.borrow_mut().push(blank_trigger_draft());
-                ets_edit.borrow_mut().push(Secret::default());
-            }
             if let Some(w) = weak.upgrade() {
                 w.set_session_groups(session_groups_model(&store));
                 w.set_dialog_forwards(forward_model(&ef_edit.borrow()));
@@ -5176,9 +5375,6 @@ fn wire_session_callbacks(
                 if i < v.len() {
                     v.remove(i);
                 }
-                if v.is_empty() {
-                    v.push(blank_forward_draft());
-                }
             }
             if let Some(w) = weak.upgrade() {
                 w.set_dialog_forwards(forward_model(&ef.borrow()));
@@ -5223,12 +5419,32 @@ fn wire_session_callbacks(
             if i < saved.len() {
                 saved.remove(i);
             }
-            if values.is_empty() {
-                values.push(blank_trigger_draft());
-                saved.push(Secret::default());
-            }
             if let Some(w) = weak.upgrade() {
                 w.set_dialog_triggers(trigger_model(&values));
+            }
+        });
+    }
+
+    // v4 empty-state example: -L 127.0.0.1:8080 → db.internal:5432
+    {
+        let weak = window.as_weak();
+        let ef = edit_forwards.clone();
+        window.on_add_sample_forward(move || {
+            ef.borrow_mut().push(sample_forward_draft());
+            if let Some(w) = weak.upgrade() {
+                w.set_dialog_forwards(forward_model(&ef.borrow()));
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let triggers = edit_triggers.clone();
+        let secrets = edit_trigger_secrets.clone();
+        window.on_add_sample_trigger(move || {
+            triggers.borrow_mut().push(sample_trigger_draft());
+            secrets.borrow_mut().push(Secret::default());
+            if let Some(w) = weak.upgrade() {
+                w.set_dialog_triggers(trigger_model(&triggers.borrow()));
             }
         });
     }
@@ -7451,6 +7667,10 @@ fn parent_path(path: &str) -> String {
     }
 }
 
+
+#[cfg(test)]
+#[path = "../tests/app/close_behavior/mod.rs"]
+mod close_behavior_tests;
 #[cfg(test)]
 #[path = "../tests/app/terminal_input/mod.rs"]
 mod key_tests;
