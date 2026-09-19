@@ -150,6 +150,9 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_LibraryLoader",
     "Win32_Graphics_Gdi",
+    # (#close-exit-fix 2026-09-19) 退出看门狗:ExitProcess 绕过可能挂死的
+    # process::exit 清理路径(实测 1 线程僵尸进程)。
+    "Win32_System_Threading",
 ] }
 
 [profile.release]

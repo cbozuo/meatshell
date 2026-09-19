@@ -82,8 +82,11 @@ pub struct WindowState {
 
 /// Open-window registry, generic over the window handle so it can be unit
 /// tested without constructing Slint components. Production instantiates
-/// `WindowRegistry<slint::Weak<AppWindow>>`.
-#[derive(Default)]
+/// `WindowRegistry<AppWindow>` — AppWindow 自身即强句柄（VRc 包装），让
+/// registry 强持有组件（#tray-show-fix：hide 不得销毁组件，否则托盘
+/// 「显示主窗口」的 weak.upgrade() 为 None、唤回静默失效）。Slint 生成
+/// 类型没有 impl Rust 的 Clone/Default（只有显式 `clone_strong`），所以
+/// Default 手写、newest() 单独放 H: Clone 块。
 pub struct WindowRegistry<H> {
     next_id: RefCell<u64>,
     windows: RefCell<HashMap<u64, H>>,
@@ -93,7 +96,17 @@ pub struct WindowRegistry<H> {
     listeners: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
 }
 
-impl<H: Clone> WindowRegistry<H> {
+impl<H> Default for WindowRegistry<H> {
+    fn default() -> Self {
+        Self {
+            next_id: RefCell::new(0),
+            windows: RefCell::new(HashMap::new()),
+            listeners: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
+impl<H> WindowRegistry<H> {
     pub fn register(&self, handle: H) -> u64 {
         let mut next = self.next_id.borrow_mut();
         *next += 1;
@@ -127,16 +140,6 @@ impl<H: Clone> WindowRegistry<H> {
         }
     }
 
-    /// A handle of the most recently registered window (used as cascade /
-    /// position origin for the next one).
-    pub fn newest(&self) -> Option<H> {
-        self.windows
-            .borrow()
-            .iter()
-            .max_by_key(|(id, _)| *id)
-            .map(|(_, h)| h.clone())
-    }
-
     pub fn add_config_listener(&self, id: u64, f: Rc<dyn Fn()>) {
         self.listeners.borrow_mut().insert(id, f);
     }
@@ -148,6 +151,17 @@ impl<H: Clone> WindowRegistry<H> {
             l();
         }
     }
+
+    /// Run `f` against the most recently registered window (used as cascade /
+    /// position origin for the next one). Borrowing instead of cloning the
+    /// handle: Slint 生成句柄没有 impl Rust `Clone`（只有显式 clone_strong）。
+    pub fn with_newest<R>(&self, f: impl FnOnce(&H) -> R) -> Option<R> {
+        self.windows
+            .borrow()
+            .iter()
+            .max_by_key(|(id, _)| *id)
+            .map(|(_, h)| f(h))
+    }
 }
 
 pub struct AppCore {
@@ -155,7 +169,13 @@ pub struct AppCore {
     /// Shared among all windows; touched only on the Slint UI thread.
     pub store: Rc<RefCell<ConfigStore>>,
     /// Live windows; the last one closing quits the shared event loop.
-    pub registry: Rc<WindowRegistry<slint::Weak<AppWindow>>>,
+    /// (#tray-show-fix 2026-09-19) 必须 **Strong**：Slint 的 `hide()` 会释放
+    /// 组件的附加强引用，若只有 Weak，「最小化到托盘」后整链析构
+    /// （组件 → WindowAdapter → winit Window → HWND 销毁），托盘「显示主
+    /// 窗口」的 `tray_weak.upgrade()` 返回 None、静默跳过——正是实测的
+    /// 唤回失效。Strong 持有让 hide 只 SW_HIDE 不销毁；窗口真正关闭时
+    /// `unregister` drop Strong，组件照常释放。
+    pub registry: Rc<WindowRegistry<AppWindow>>,
     /// Per-window state reachable across windows (tab detach/merge), keyed
     /// by the same id the registry hands out. UI-thread-only.
     pub window_states: Rc<RefCell<HashMap<u64, WindowState>>>,

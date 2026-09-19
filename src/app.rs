@@ -253,7 +253,7 @@ struct WindowCloser {
     window_id: u64,
     window: slint::Weak<AppWindow>,
     store: Rc<RefCell<ConfigStore>>,
-    registry: Rc<WindowRegistry<slint::Weak<AppWindow>>>,
+    registry: Rc<WindowRegistry<AppWindow>>,
     core: Rc<AppCore>,
     handles: Rc<RefCell<HashMap<String, SessionHandle>>>,
     sftp_handles: SftpHandles,
@@ -285,9 +285,13 @@ impl WindowCloser {
             &self.sys_weak,
             &self.editor_weak,
         );
-        if self.registry.unregister(self.window_id) {
-            let _ = slint::quit_event_loop();
-        }
+        self.registry.unregister(self.window_id);
+        // (#close-exit-fix 2026-09-19) 「完全退出」= 退出**整个应用**。旧逻辑
+        // 只在本窗口是注册表里最后一个时才 quit —— 多窗口(新建窗口/单实例
+        // new-window)场景下注册表永远非空,选「完全退出」只 hide 本窗,
+        // 进程残留成无窗僵尸(用户实测)。改为无条件退出;其它窗口的收尾由
+        // 进程退出兜底(OS 回收 socket/句柄)。
+        request_quit();
         forget_window_state(&self.core, self.window_id);
     }
 }
@@ -348,16 +352,81 @@ thread_local! {
     static TRAY_HANDLE: RefCell<Option<Tray>> = const { RefCell::new(None) };
 }
 
+/// (#close-exit-fix 2026-09-19) 退出看门狗。
+///
+/// 实测(Win11):事件循环退出后的收尾链可能卡死在 `process::exit` 内部的
+/// TLS/GL 清理里 —— 进程只剩 1 个线程、窗口无响应、永不退出(用户报的
+/// "窗口关闭了进程还在")。`shutdown_timeout` 只约束 tokio,约束不了
+/// exit 自己。看门狗在第一次请求退出时武装:8 秒后进程若还活着,直接
+/// `ExitProcess(0)` 强杀 —— 不跑 atexit/TLS 析构,恰好绕开挂点。
+static EXIT_DEADLINE: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+    std::sync::OnceLock::new();
+
+/// 武装看门狗(只生效一次)。所有「想退出事件循环」的路径都必须先调它。
+fn arm_exit_watchdog() {
+    static ARMED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if ARMED.set(()).is_err() {
+        return;
+    }
+    tracing::info!("exit watchdog armed (8s)");
+    let cell = EXIT_DEADLINE.get_or_init(|| std::sync::Mutex::new(None));
+    *cell.lock().unwrap() = Some(std::time::Instant::now() + std::time::Duration::from_secs(8));
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let due = EXIT_DEADLINE
+            .get()
+            .and_then(|m| m.lock().ok().and_then(|g| *g))
+            .is_some_and(|d| std::time::Instant::now() > d);
+        if due {
+            tracing::error!("exit watchdog fired: shutdown did not finish in 8s, killing process");
+            #[cfg(windows)]
+            unsafe {
+                // TerminateProcess 而非 ExitProcess:后者跑 DLL detach,正是
+                // 挂死源;前者不派发 detach,立即终止。
+                use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+                let _ = TerminateProcess(GetCurrentProcess(), 0);
+            }
+            #[cfg(not(windows))]
+            std::process::exit(0);
+        }
+    });
+}
+
+/// (#close-exit-fix 2026-09-19) 统一的「请求退出事件循环」入口:
+/// 先武装看门狗再 quit,防止 quit 之后收尾链挂死把进程变成僵尸。
+fn request_quit() {
+    arm_exit_watchdog();
+    let _ = slint::quit_event_loop();
+}
+
 /// (#close-behavior) 「最小化到托盘」:隐藏窗口但**不**断开会话。
 ///
 /// 托盘图标按需创建(用到才出现),窗口从任务栏消失、进程继续跑;
 /// 之后靠托盘菜单唤回或退出。
+///
+/// (#close-exit-fix 2026-09-19) 兜底:托盘图标创建失败(NIM_ADD 失败)时
+/// **不**隐藏窗口 —— 否则窗口消失、进程还在、托盘又没有,用户既唤不回也
+/// 退不出(实测的"僵尸进程"路径之一)。改为回落弹关闭确认卡,用户仍可选
+/// 「完全退出」。
 fn minimize_to_tray(win: &AppWindow) {
+    tracing::info!("close: minimize_to_tray called");
     TRAY_ENSURE.with(|slot| {
         if let Some(ensure) = slot.borrow().as_ref() {
             ensure();
         }
     });
+    if !Tray::icon_ok() {
+        tracing::error!(
+            "tray: Shell_NotifyIconW failed — refusing to hide the window, \
+             falling back to the close-confirm card"
+        );
+        win.set_close_sessions(ModelRc::from(Rc::new(VecModel::from(Vec::<
+            CloseSessionRow,
+        >::new()))));
+        win.set_confirm_close_open(true);
+        return;
+    }
+    tracing::info!("close: tray ok, hiding window (event loop keeps running)");
     let _ = win.hide();
 }
 
@@ -712,7 +781,13 @@ pub fn run(intent: crate::app::launch::LaunchIntent) -> Result<()> {
 
     // Global loop: window.run() returns when *its* window closes, which is
     // wrong once several windows share the loop.
-    let loop_result = slint::run_event_loop();
+    // (#close-exit-fix 2026-09-19) 必须用 until_quit:run_event_loop() 在
+    // **最后一个可见窗口隐藏时自动退出** —— 「最小化到托盘」一 hide 窗口,
+    // 循环就退了,收尾链接着把刚建好的托盘 drop 掉(图标消失),用户看到的
+    // 正是"托盘里没有图标"。until_quit 只在显式 quit_event_loop()(即
+    // request_quit(),「完全退出」路径)时返回。
+    let loop_result = slint::run_event_loop_until_quit();
+    tracing::info!("event loop returned (err={:?}); shutting down", loop_result.as_ref().err());
     if let Err(e) = &loop_result {
         tracing::warn!("event loop exited with error ({e:#}); running bounded shutdown anyway");
     }
@@ -725,12 +800,31 @@ pub fn run(intent: crate::app::launch::LaunchIntent) -> Result<()> {
     // too: propagating with `?` would hand the runtime to the TLS destructor
     // chain, where a wedged blocking thread could hang the process forever.
     NEW_WINDOW_CORE.with(|c| *c.borrow_mut() = None);
+    // (#close-exit-fix 2026-09-19) process::exit 不跑 thread_local 析构,
+    // 显式丢弃托盘句柄让 Drop 执行(NIM_DELETE + DestroyWindow)——否则
+    // 「完全退出」后托盘里残留一个悬停才消失的死图标,像进程还活着。
+    drop(TRAY_HANDLE.with(|t| t.borrow_mut().take()));
     if let Ok(core_owned) = Rc::try_unwrap(core) {
         if let Ok(runtime) = Arc::try_unwrap(core_owned.runtime) {
             runtime.shutdown_timeout(std::time::Duration::from_secs(2));
         }
     }
+    tracing::info!("shutdown done; terminating process");
+    // (#close-exit-fix 2026-09-19) **不能**用 std::process::exit,连 ExitProcess
+    // 都不行。实测(Win11):UCRT exit 在杀掉所有其它线程后,挂在 ExitProcess 的
+    // DLL_PROCESS_DETACH 阶段(GL/驱动 detach 回调死锁)—— 进程变成"terminating
+    // 却永不消失"的僵尸(TerminateProcess 对已 terminating 的进程也被拒)。
+    // TerminateProcess 是唯一干净的强杀:立即终止,**不派发** DLL_PROCESS_DETACH
+    // /atexit/TLS dtor。日志是行写的已落盘,socket/句柄由 OS 回收。
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+        let _ = TerminateProcess(GetCurrentProcess(), 0);
+    }
+    #[cfg(not(windows))]
     std::process::exit(0);
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 /// Build and wire one application window. Called for the first window by
@@ -774,7 +868,13 @@ fn open_window(
     // registry.newest() is this window itself. Registration itself is deferred
     // until after the last fallible construction below, so a failed monitor
     // window never leaves a stale registry entry.
-    let cascade_origin = if cascade { registry.newest() } else { None };
+    // (#tray-show-fix 2026-09-19) registry 存强句柄后 newest 改为 with_newest
+    // 借用取值（生成句柄没有 impl Clone）。
+    let cascade_origin: Option<slint::PhysicalPosition> = if cascade {
+        registry.with_newest(|w| w.window().position())
+    } else {
+        None
+    };
     // Slint applies preferred-width/height while the native window is being
     // created. Do not treat those startup Resized events as user adjustments;
     // otherwise they overwrite the persisted size before restoration (#278).
@@ -834,7 +934,9 @@ fn open_window(
     sync_editor_theme(&window, &editor_win);
     // Every fallible construction has now succeeded — register the window.
     // (cascade_origin above was captured before this point, as required.)
-    let window_id = registry.register(window.as_weak());
+    // (#tray-show-fix 2026-09-19) Strong 持有：hide 不得销毁组件，否则托盘
+    // 「显示主窗口」的 weak.upgrade() 为 None、唤回静默失效（实测）。
+    let window_id = registry.register(window.clone_strong());
     sys_win.set_custom_titlebar(cfg!(not(target_os = "macos")));
     sys_win.set_metrics(ModelRc::from(sys_metrics_model.clone()));
     sys_win.set_nets(ModelRc::from(sys_net_rows_model.clone()));
@@ -3259,9 +3361,10 @@ fn open_window(
                             &ev_sys_weak,
                             &ev_editor_weak,
                         );
-                        if ev_registry.unregister(window_id) {
-                            let _ = slint::quit_event_loop();
-                        }
+                        ev_registry.unregister(window_id);
+                        // (#close-exit-fix 2026-09-19) 同 confirm():Exit 档 =
+                        // 退出整个应用,不再以"注册表是否清空"为前置条件。
+                        request_quit();
                         forget_window_state(&ev_core, window_id);
                     }
                     _ => {}
@@ -3382,9 +3485,14 @@ fn open_window(
             let tray_weak = tray_weak.clone();
             let handle = Tray::ensure(Box::new(move |action| match action {
                 TrayAction::Show => {
+                    // (#tray-show-fix 2026-09-19) upgrade 失败 = 组件已被销毁；
+                    // registry 改持 Strong 后不应再发生，留 warn 便于回归。
                     if let Some(w) = tray_weak.upgrade() {
+                        tracing::info!("tray: show main window");
                         let _ = w.show();
                         raise_to_front(&w);
+                    } else {
+                        tracing::warn!("tray: main window component gone — cannot show");
                     }
                 }
                 TrayAction::Exit => closer.confirm(),
@@ -3433,9 +3541,7 @@ fn open_window(
     // registered (registry.newest() would return this window itself).
     {
         let weak = window.as_weak();
-        let origin = cascade_origin
-            .and_then(|w| w.upgrade())
-            .map(|w| w.window().position());
+        let origin = cascade_origin;
         slint::Timer::single_shot(std::time::Duration::from_millis(30), move || {
             let Some(w) = weak.upgrade() else { return };
             if let Some(pos) = at {
@@ -4064,7 +4170,7 @@ fn wire_session_callbacks(
     // their dialogs open (and abort on close) in this window (#multi-window).
     window_id: u64,
     store: Rc<RefCell<ConfigStore>>,
-    registry: Rc<WindowRegistry<slint::Weak<AppWindow>>>,
+    registry: Rc<WindowRegistry<AppWindow>>,
     sessions_model: Rc<VecModel<SessionInfo>>,
     tabs_model: Rc<VecModel<TabInfo>>,
     terminals_model: Rc<VecModel<TerminalState>>,
