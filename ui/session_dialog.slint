@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { LabeledInput, PrimaryButton, GhostButton } from "widgets.slint";
+import { LabeledInput, PrimaryButton, GhostButton, SelectField, ProtocolIcon } from "widgets.slint";
 
 // One SSH port-forward row shown in the session dialog (#56). `summary` is a
 // ready-to-display line like "-L 127.0.0.1:8080 → host:80".
@@ -170,6 +170,7 @@ component PillToggle inherits Rectangle {
 //
 // 列表形态对齐高保真 .pop:按分类分组、当前项打勾;勾位**常驻且定宽**,
 // 未选中留空占位 —— 否则选中行多出的勾会把「即将 / 预览」徽标列挤歪。
+
 component ProtoItem inherits Rectangle {
     in property <string> proto-id;      // "ssh" | "serial" | "telnet" | "rdp" | "vnc"
     in property <string> label;
@@ -191,17 +192,13 @@ component ProtoItem inherits Rectangle {
         spacing: 9px;
 
         Rectangle {
-            width: 15px;
-            height: 15px;
+            width: 18px;
+            height: 18px;
             y: (parent.height - self.height) / 2;
-            Text {
+            ProtocolIcon {
                 width: 100%; height: 100%;
-                text: Theme.protocol-glyph(root.proto-id);
-                font-family: "Material Icons";
-                color: Theme.text-secondary;
-                font-size: 15px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+                proto-id: root.proto-id;
+                icon-color: Theme.text-secondary;
             }
         }
 
@@ -265,8 +262,17 @@ component ProtoSelect inherits VerticalLayout {
     in property <string> value;         // 当前协议 id
     in property <bool> previewing: false;
     callback picked(string);
+    // (#dialog-focus-reset) 打开弹层前由实例化处把焦点交回容器(防弹层
+    // 关闭时把焦点恢复给旧输入框,蓝框复现)。
+    callback opening();
     spacing: 5px;
     property <bool> drop-open: false;
+    // (#dialog-focus-reset 2026-09-19) 代际时钟:dialog 级 drop-clock,打开时
+    // 记 open-clock,蓝框只在「自己仍是最近一次打开」时成立 —— 点其它下拉
+    // 或点空白都会推进时钟,旧下拉的蓝框自动恢复普通边框。Slint 1.16 的
+    // PopupWindow 没有 closed 回调,拿不到 click-outside 关闭时机,只能这样。
+    in-out property <int> drop-clock: 0;
+    property <int> open-clock: -1;
 
     pure function proto-label(id: string) -> string {
         if (id == "serial") { return @tr("Serial"); }
@@ -297,10 +303,11 @@ component ProtoSelect inherits VerticalLayout {
         border-width: 1px;
         // Slint 1.16 读不到 PopupWindow.visible,用 drop-open 镜像展开态
         // (与 GroupCombo 同一套:点开置位、选中项清位)。
-        border-color: root.drop-open ? Theme.accent
+        // (#dialog-focus-reset) 蓝框只在「自己仍是最近一次打开的下拉」时成立。
+        border-color: root.drop-open && root.open-clock == root.drop-clock ? Theme.accent
             : (bta.has-hover ? Theme.line-2 : Theme.border-control);
-        background: root.drop-open ? Theme.field-2 : Theme.field;
-        if root.drop-open : Rectangle {
+        background: root.drop-open && root.open-clock == root.drop-clock ? Theme.field-2 : Theme.field;
+        if root.drop-open && root.open-clock == root.drop-clock : Rectangle {
             x: -3px; y: -3px;
             width: parent.width + 6px;
             height: parent.height + 6px;
@@ -314,17 +321,17 @@ component ProtoSelect inherits VerticalLayout {
             padding-right: 12px;
             spacing: 9px;
 
+            // (#dialog-row-align 2026-09-19) HorizontalLayout 不给有显式 height
+            // 的子项写 y(未设 padding-top 时恒 0),固定高盒子必须手动垂直居中
+            // —— 否则钉在顶部,与被拉满居中的文字错位(实测图标偏上 ~11px)。
             Rectangle {
-                width: 15px;
-                height: 15px;
-                Text {
+                width: 18px;
+                height: 18px;
+                y: (parent.height - self.height) / 2;
+                ProtocolIcon {
                     width: 100%; height: 100%;
-                    text: Theme.protocol-glyph(root.value);
-                    font-family: "Material Icons";
-                    color: Theme.text-secondary;
-                    font-size: 15px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                    proto-id: root.value;
+                    icon-color: Theme.text-secondary;
                 }
             }
 
@@ -340,6 +347,7 @@ component ProtoSelect inherits VerticalLayout {
             if root.badge-of(root.value) != "" : Rectangle {
                 min-width: 34px;
                 height: 16px;
+                y: (parent.height - self.height) / 2;
                 border-radius: 8px;
                 border-width: 1px;
                 border-color: root.badge-of(root.value) == "prev"
@@ -360,6 +368,7 @@ component ProtoSelect inherits VerticalLayout {
             Rectangle {
                 width: 14px;
                 height: 14px;
+                y: (parent.height - self.height) / 2;
                 Text {
                     width: 100%; height: 100%;
                     text: "\u{E5CF}";     // expand_more
@@ -375,6 +384,9 @@ component ProtoSelect inherits VerticalLayout {
         bta := TouchArea {
             mouse-cursor: pointer;
             clicked => {
+                root.opening();
+                root.drop-clock += 1;
+                root.open-clock = root.drop-clock;
                 root.drop-open = true;
                 proto-pop.show();
             }
@@ -470,131 +482,6 @@ component ProtoSelect inherits VerticalLayout {
     }
 }
 
-// (#hifi-v17) 与协议下拉同一套 .select + .pop:编码 / 串口四参数 / 跳板共用。
-component SelectField inherits VerticalLayout {
-    in property <string> label;
-    in property <[string]> choices;
-    in property <string> value;
-    in property <string> placeholder: "";
-    callback picked(string);
-    spacing: 5px;
-    property <bool> drop-open: false;
-
-    Text {
-        visible: root.label != "";
-        text: root.label;
-        color: Theme.text-secondary;
-        font-size: Theme.fs-sm;
-    }
-
-    sbtn := Rectangle {
-        height: 38px;
-        border-radius: 9px;
-        border-width: 1px;
-        border-color: root.drop-open ? Theme.accent
-            : (sta.has-hover ? Theme.line-2 : Theme.border-control);
-        background: root.drop-open ? Theme.field-2 : Theme.field;
-        if root.drop-open : Rectangle {
-            x: -3px; y: -3px;
-            width: parent.width + 6px;
-            height: parent.height + 6px;
-            border-radius: 11px;
-            border-width: 3px;
-            border-color: Theme.accent-soft;
-        }
-        HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 9px;
-            Text {
-                text: root.value != "" ? root.value : root.placeholder;
-                color: root.value != "" ? Theme.text-primary : Theme.text-muted;
-                font-size: Theme.fs-md;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                overflow: elide;
-            }
-            Rectangle {
-                width: 14px;
-                height: 14px;
-                Text {
-                    width: 100%; height: 100%;
-                    text: "\u{E5CF}";
-                    font-family: "Material Icons";
-                    color: (sta.has-hover || root.drop-open) ? Theme.text-secondary : Theme.text-muted;
-                    font-size: 14px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-        }
-        sta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.drop-open = true;
-                sel-pop.show();
-            }
-        }
-    }
-
-    sel-pop := PopupWindow {
-        x: 0px;
-        y: parent.height + 6px;
-        width: parent.width;
-        close-policy: close-on-click-outside;
-        Rectangle {
-            background: Theme.popup-bg;
-            border-radius: 11px;
-            border-width: 1px;
-            border-color: Theme.line-2;
-            drop-shadow-blur: 18px;
-            drop-shadow-color: #00000066;
-            VerticalLayout {
-                padding: 5px;
-                spacing: 1px;
-                for c in root.choices : Rectangle {
-                    height: 32px;
-                    border-radius: 8px;
-                    background: c-ta.has-hover ? Theme.field-2
-                        : (root.value == c ? Theme.accent-soft : transparent);
-                    c-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.drop-open = false;
-                            root.picked(c);
-                            sel-pop.close();
-                        }
-                    }
-                    Text {
-                        x: 9px;
-                        width: parent.width - 32px;
-                        height: parent.height;
-                        text: c;
-                        color: Theme.text-primary;
-                        font-size: Theme.fs-md;
-                        vertical-alignment: center;
-                        overflow: elide;
-                    }
-                    Rectangle {
-                        x: parent.width - 23px;
-                        y: (parent.height - 14px) / 2;
-                        width: 14px;
-                        height: 14px;
-                        Text {
-                            width: 100%; height: 100%;
-                            text: root.value == c ? "\u{E5CA}" : "";
-                            font-family: "Material Icons";
-                            color: Theme.accent;
-                            font-size: 14px;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 component EmptyAddButton inherits Rectangle {
     in property <string> label;
@@ -993,6 +880,11 @@ component GroupCombo inherits VerticalLayout {
     // visible,而原型 .combo:has([aria-expanded=true]) 要求"点 ▾ 展开时整框
     // 也进聚焦态"(accent 描边 + field-2 底),没有这个镜像就做不出来。
     property <bool> drop-open: false;
+    // (#dialog-focus-reset) 打开弹层前由实例化处把焦点交回容器。
+    callback opening();
+    // (#dialog-focus-reset 2026-09-19) 代际时钟,同 ProtoSelect/SelectField。
+    in-out property <int> drop-clock: 0;
+    property <int> open-clock: -1;
 
     Text {
         text: root.label;
@@ -1007,9 +899,11 @@ component GroupCombo inherits VerticalLayout {
         // (drop-open),两者任一为真整框都进聚焦态(accent 描边 + 亮底)。
         border-radius: 9px;
         border-width: 1px;
-        border-color: ginput.has-focus || drop-open ? Theme.accent : Theme.border-control;
-        background: ginput.has-focus || drop-open ? Theme.field-2 : Theme.field;
-        if ginput.has-focus || drop-open : Rectangle {
+        border-color: ginput.has-focus || (drop-open && open-clock == root.drop-clock) ? Theme.accent : Theme.border-control;
+        background: ginput.has-focus || (drop-open && open-clock == root.drop-clock) ? Theme.field-2 : Theme.field;
+        // (#dialog-focus-reset) 光晕与边框同一时钟条件:只看 drop-open 会在
+        // 点空白/其它按钮后残留光晕(边框已恢复、光晕还在,实测)。
+        if ginput.has-focus || (drop-open && open-clock == root.drop-clock) : Rectangle {
             x: -3px; y: -3px;
             width: parent.width + 6px;
             height: parent.height + 6px;
@@ -1057,8 +951,14 @@ component GroupCombo inherits VerticalLayout {
             text <=> root.value;
             // (#hifi-v17) 输入框拿到焦点 = 弹层必已收起(close-on-click-outside
             // 或已选中):这里兜底清展开态镜像,防"框亮着、弹层没了"的假聚焦。
+            // (#dialog-focus-reset) 同时推进下拉时钟:别的下拉若残留蓝框
+            // (click-outside 关掉弹层但状态没清),此刻一并恢复普通边框。
             changed has-focus => {
-                if (self.has-focus) { root.drop-open = false; }
+                if (self.has-focus) {
+                    root.drop-open = false;
+                    root.drop-clock += 1;
+                    root.open-clock = root.drop-clock;
+                }
             }
             color: Theme.text-primary;
             font-family: Theme.ui-font-family;
@@ -1079,6 +979,9 @@ component GroupCombo inherits VerticalLayout {
             mouse-cursor: root.groups.length > 0 ? pointer : default;
             clicked => {
                 if (root.groups.length > 0) {
+                    root.opening();
+                    root.drop-clock += 1;
+                    root.open-clock = root.drop-clock;
                     root.drop-open = true;
                     groups-popup.show();
                 }
@@ -1171,7 +1074,10 @@ component GroupCombo inherits VerticalLayout {
         }
     }
     Text {
+        // (#dialog-row-align 2026-09-19) 固定 16px 行高:hint 空时也占位,与
+        // 名称列 hint 对称,保证两列 preferred 高恒等(行内控件对齐)。
         visible: root.hint != "";
+        height: 16px;
         text: root.hint;
         color: Theme.text-muted;
         font-size: Theme.fs-xs;
@@ -1188,6 +1094,11 @@ component JumpCombo inherits VerticalLayout {
     in-out property <int> selected-index: 0;
     spacing: 5px;
     property <bool> drop-open: false;
+    // (#dialog-focus-reset) 同 ProtoSelect。
+    callback opening();
+    // (#dialog-focus-reset 2026-09-19) 代际时钟,同上:蓝框互斥 + 点空白恢复。
+    in-out property <int> drop-clock: 0;
+    property <int> open-clock: -1;
 
     Text {
         text: root.label;
@@ -1199,10 +1110,10 @@ component JumpCombo inherits VerticalLayout {
         height: 38px;
         border-radius: 9px;
         border-width: 1px;
-        border-color: root.drop-open ? Theme.accent
+        border-color: root.drop-open && root.open-clock == root.drop-clock ? Theme.accent
             : (jump-ta.has-hover ? Theme.line-2 : Theme.border-control);
-        background: root.drop-open ? Theme.field-2 : Theme.field;
-        if root.drop-open : Rectangle {
+        background: root.drop-open && root.open-clock == root.drop-clock ? Theme.field-2 : Theme.field;
+        if root.drop-open && root.open-clock == root.drop-clock : Rectangle {
             x: -3px; y: -3px;
             width: parent.width + 6px;
             height: parent.height + 6px;
@@ -1214,6 +1125,9 @@ component JumpCombo inherits VerticalLayout {
         jump-ta := TouchArea {
             mouse-cursor: pointer;
             clicked => {
+                root.opening();   // (#dialog-focus-reset) 焦点先回容器,弹层关闭时恢复目标即容器
+                root.drop-clock += 1;
+                root.open-clock = root.drop-clock;
                 root.drop-open = true;
                 jump-popup.show();
             }
@@ -1249,17 +1163,25 @@ component JumpCombo inherits VerticalLayout {
 
         jump-popup := PopupWindow {
             x: 0;
+            // (#dialog-pop-flip 2026-09-19) 跳板行位于弹窗下部,弹层**向上**
+            // 展开:选项多时向下会超出卡片边界、盖住自己的下拉框行(实测)。
+            // 高度 = 行数×33(32 行高 + 1 间距) + 10 内距,上限 280px,超出部分
+            // 在弹层内滚动。
+            // (#dialog-pop-flip 2026-09-19) 改回向下:78% 弹窗布局下,跳板字段下方
+            // 到弹窗底仍有约 370 逻辑 px,容纳 280px 弹层(朝上反而越过弹窗顶)。
             y: parent.height + 6px;
             width: parent.width;
             close-policy: close-on-click-outside;
             Rectangle {
+                max-height: 280px;
                 background: Theme.popup-bg;
                 border-radius: 11px;
                 border-width: 1px;
                 border-color: Theme.line-2;
                 drop-shadow-blur: 18px;
                 drop-shadow-color: #00000066;
-                VerticalLayout {
+                Flickable {
+                    VerticalLayout {
                     padding: 5px;
                     spacing: 1px;
                     for c[idx] in root.choices : Rectangle {
@@ -1300,6 +1222,7 @@ component JumpCombo inherits VerticalLayout {
                                 vertical-alignment: center;
                             }
                         }
+                    }
                     }
                 }
             }
@@ -1579,17 +1502,68 @@ export component SessionDialog inherits Rectangle {
             self.preview-kind = "";
             self.show-advanced = false;
             self.test-status = "";
+            // (#dialog-focus-reset 2026-09-19) 弹窗是常驻组件 + visible 开关,
+            // Slint 隐藏元素不清窗口焦点 —— 上次点过的输入框重开时仍持蓝色
+            // 焦点边框(实测)。打开时把焦点交还弹窗容器 FocusScope:所有
+            // 输入框/下拉回到普通边框(打开时不出现蓝框)。
+            root.scope-focus-pending = true;
+        }
+    }
+    // (#dialog-focus-reset) 切协议:字段组重建,焦点收回容器,避免上个
+    // 协议字段的蓝色焦点边框带进新布局。
+    changed draft-kind => {
+        root.scope-focus-pending = true;
+    }
+    // (#dialog-error-clear 2026-09-19) 校验失败的红框:开始输入即恢复 ——
+    // 红框消失(焦点态优先显示 accent 蓝框),底部错误信息同源消失
+    // (footer-status-text 由 missing 驱动)。点错误信息定位 + 红框机制保留。
+    changed draft-host => {
+        if (root.host-missing && root.draft-host != "") { root.host-missing = false; }
+    }
+    changed draft-serial-port => {
+        if (root.serial-missing && root.draft-serial-port != "") { root.serial-missing = false; }
+    }
+    // (#dialog-focus-reset) 焦点回容器的延迟通道:布局求值期间直接 focus()
+    // 会踩运行时递归保护,与 LabeledInput 的 0ms Timer 同一模式。
+    property <bool> scope-focus-pending: false;
+    // (#dialog-focus-reset) 下拉蓝框的代际时钟:所有下拉组件经 in-out 绑定
+    // 共享;任何一次「打开某个下拉 / 点空白 / 重开或切协议」都会推进,其它
+    // 下拉的 open-clock 落后即恢复普通边框。
+    // **不要**在这里做 dialog-focus.focus():点输入框获焦也会推进时钟
+    // (focus-changed),无条件拽焦点会让输入框永远无法聚焦(实测回归)。
+    // 「打开下拉前焦点回容器」由各下拉的 opening 回调在实例化处完成。
+    property <int> drop-clock: 0;
+    scope-focus-timer := Timer {
+        interval: 0ms;
+        running: root.scope-focus-pending;
+        triggered => {
+            root.scope-focus-pending = false;
+            root.drop-clock += 1;
+            dialog-focus.focus();
         }
     }
 
-    // Swallow clicks on the backdrop (dialog stays open).
+    // Swallow clicks on the backdrop (dialog stays open). Clicking the
+    // backdrop also hands focus back to the container (#dialog-focus-reset):
+    // any focused field drops its blue border, and the drop-clock bump clears
+    // any lingering dropdown accent.
     TouchArea {
         width: 100%; height: 100%;
+        clicked => {
+            root.scope-focus-pending = true;
+            root.drop-clock += 1;
+        }
     }
-    FocusScope {
+    dialog-focus := FocusScope {
         width: 100%;
         height: 100%;
         init => { self.focus(); }
+        // (#dialog-focus-reset) 容器获焦 = 弹层被点击外部关闭(slint 把焦点
+        // 恢复给「弹层打开前」的持有者=容器)—— 这一次点击不派发给卡片内
+        // 的 TouchArea(实测),借焦点恢复信号推进时钟,清掉残留的下拉蓝框。
+        changed has-focus => {
+            if (self.has-focus) { root.drop-clock += 1; }
+        }
         key-pressed(e) => {
             if (e.text == Key.Escape) {
                 root.cancel();
@@ -1605,20 +1579,33 @@ export component SessionDialog inherits Rectangle {
         // (#dialog-fit 2026-09-18) 高度由**内容**决定,上限才是视口 - 32px。
         // 原先取视口 78%,全屏时弹窗被撑成一整屏、内容只占上半截,下面大片留白,
         // 且内容超高时还会把首字段挤出可视区(打开就要往上滚)。
-        height: min(body.preferred-height + hdr.height + foot.height + 2px, parent.height - 32px);
+        // (#dialog-focus-reset 2026-09-19) 高度上限从「视口-32px」收紧到 88%:
+        // 高级选项展开后内容变长,旧上限让弹窗几乎顶满全屏(实测)。内容矮时
+        // 仍按内容自适应,超高时封顶 88%、body Flickable 滚动。
+        // (#dialog-fit 2026-09-19) 高级展开后 88% 仍显高(用户复测),收紧到
+        // 78%:内容少仍自适应,SSH 展开长内容封顶 78% 视口、body 滚动。
+        height: min(body.preferred-height + hdr.height + foot.height + 2px, parent.height * 0.78);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.popup-bg;
         clip: true;
         // (#hifi-v17) 对齐高保真 .dialog:1px **line-2** 外框 + 16px 圆角。
+        // (#dialog-border-lm 2026-09-20) 亮色下 line-2(#c7c7cc) 在白底上几乎
+        // 不可见(用户实测"没有外围线条"),亮色单独加深一档。
         border-radius: Theme.radius-xl;
         border-width: 1px;
-        border-color: Theme.line-2;
+        border-color: Theme.dark ? Theme.line-2 : #b9b9c2;
         drop-shadow-blur: 24px;
         drop-shadow-color: #00000080;
 
         TouchArea {
             width: 100%; height: 100%;
+            // (#dialog-focus-reset) 点卡片内空白(字段间空隙):焦点回容器,
+            // 蓝色焦点边框消失;时钟推进让残留的下拉蓝框一起恢复普通。
+            clicked => {
+                root.scope-focus-pending = true;
+                root.drop-clock += 1;
+            }
         }
 
         VerticalLayout {
@@ -1642,13 +1629,14 @@ export component SessionDialog inherits Rectangle {
                     y: (parent.height - self.height) / 2;
                     border-radius: 8px;
                     background: Theme.accent-soft;
-                    Text {
-                        text: root.proto-glyph(root.draft-kind);
-                        font-family: "Material Icons";
-                        color: Theme.accent;
-                        font-size: 15px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                    // (#hifi-icon) 统一用自绘 ProtocolIcon(与弹层/侧栏同源)。
+                    ProtocolIcon {
+                        width: 18px;
+                        height: 18px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        proto-id: root.draft-kind;
+                        icon-color: Theme.accent;
                     }
                 }
 
@@ -1718,7 +1706,26 @@ export component SessionDialog inherits Rectangle {
                 height: 100%;
                 viewport-width: self.width;
                 viewport-height: body.preferred-height;
-                body := VerticalLayout {
+                // (#dialog-focus-reset) viewport 容器:底层铺一块吞点击
+                // TouchArea —— 点字段间空隙/行距时点击会落在它上面(Flickable
+                // 不透传到卡片底层的 TouchArea,实测),把焦点交回容器使蓝色
+                // 焦点边框消失,并推进下拉时钟。字段在 z 上层,点击不受影响。
+                Rectangle {
+                    width: 100%;
+                    height: body.preferred-height;
+                    blank-ta := TouchArea {
+                        width: 100%; height: 100%;
+                        clicked => {
+                            // (#dialog-focus-reset) slint 关弹层时会**自动把焦点
+                            // 恢复给之前的输入框**(实测:下拉→空白的顺序里,旧
+                            // 输入框的蓝框会复现)——这里同步把焦点拽回容器,
+                            // 0ms Timer 再兜一次底(防恢复时序晚于本回调)。
+                            root.drop-clock += 1;
+                            dialog-focus.focus();
+                            root.scope-focus-pending = true;
+                        }
+                    }
+                    body := VerticalLayout {
                     padding-top: 16px;
                     padding-right: 20px;
                     padding-bottom: 16px;
@@ -1732,19 +1739,23 @@ export component SessionDialog inherits Rectangle {
                         // (#identity-row 2026-09-18) 名称 + 分组 **同行**:两者都是简短的
                         // "标识"信息,同行后标识区从 3 行降到 2 行(备注仍整行)。
                         HorizontalLayout {
-                            spacing: 10px;
+                            spacing: 12px;
                             // (#hifi-v17 2026-09-18) 原型这两列是 CSS Grid `1fr 1fr`:
-                            // **严格对半**,列宽与内容无关。Slint 的 HorizontalLayout
-                            // 在 stretch 相等时仍受 preferred-width 影响 —— 名称列
-                            // 的 hint("将使用主机地址命名为「长主机名」")一出现就把
-                            // 列首选宽撑大、分组框被挤窄,主机每敲一个字宽度都在变
-                            // (用户实测)。修法:hint 单行省略 + 两个 **min-width 0**
-                            // 的等权列,列宽只由权重决定,不随内容抖动。
+                            // **严格对半**,列宽与内容无关。
+                            // (#dialog-row-align 2026-09-19) 两个遗留问题:
+                            //   · 宽度:等 stretch 只均分「多余空间」,两列 preferred
+                            //     宽不等 → 终宽不等(名称列被长 hint 撑大)。改为
+                            //     **显式等宽** `(parent.width - spacing) / 2`,不再依赖权重。
+                            //   · 垂直:分组列 hint 恒非空、名称列 hint 条件渲染 → 行高被
+                            //     右列撑高,多余纵向空间灌进 LabeledInput 的 label(可生长),
+                            //     把固定 38px 的名称框压下(实测错位 ~20px)。改为 hint
+                            //     **常驻占位 + visible 开关 + 固定 16px 行高**,两列
+                            //     preferred 高恒等,名称框/分组框自然同行。
                             VerticalLayout {
-                                horizontal-stretch: 1;
-                                min-width: 0;
+                                width: (parent.width - parent.spacing) / 2;
                                 spacing: 5px;
-                                LabeledInput {
+                                name-input := LabeledInput {
+                                    focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                     dialog-field: true;
                                     input-height: 38px;
                                     auto-focus: true;
@@ -1757,16 +1768,19 @@ export component SessionDialog inherits Rectangle {
                                     canceled => { root.cancel(); }
                                     accepted => { root.try-submit(); }
                                 }
-                                if root.name-hint() != "" : Text {
+                                Text {
                                     text: root.name-hint();
+                                    visible: root.name-hint() != "";
+                                    height: 16px;
                                     color: Theme.text-muted;
                                     font-size: Theme.fs-xs;
                                     overflow: elide;
                                 }
                             }
                             GroupCombo {
-                                horizontal-stretch: 1;
-                                min-width: 0;
+                                opening => { dialog-focus.focus(); }
+    drop-clock <=> root.drop-clock;
+                                width: (parent.width - parent.spacing) / 2;
                                 label: @tr("Group (optional)");
                                 placeholder: @tr("e.g. production / staging");
                                 value <=> root.draft-group;
@@ -1774,7 +1788,8 @@ export component SessionDialog inherits Rectangle {
                                 hint: root.group-hint();
                             }
                         }
-                        LabeledInput {
+                        sf1 := LabeledInput {
+                            focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                             dialog-field: true;
                             input-height: 38px;
                             label: @tr("Note (optional)");
@@ -1795,6 +1810,8 @@ export component SessionDialog inherits Rectangle {
 HorizontalLayout {
     spacing: 12px;
     ProtoSelect {
+        opening => { dialog-focus.focus(); }
+        drop-clock <=> root.drop-clock;
         label: @tr("Connection protocol");
         value: root.draft-kind;
         previewing: root.is-preview;
@@ -1804,7 +1821,8 @@ HorizontalLayout {
             if (id == "rdp" || id == "vnc") { root.start-preview(id); } else { root.set-kind(id); }
         }
     }
-    if root.draft-kind != "serial" : LabeledInput {
+    if root.draft-kind != "serial" : sf2 := LabeledInput {
+        focus-changed(f) => { if (f) { root.drop-clock += 1; } }
         dialog-field: true;
         input-height: 38px;
         label: @tr("Host / IP");
@@ -1818,7 +1836,8 @@ HorizontalLayout {
         canceled => { root.cancel(); }
         accepted => { root.try-submit(); }
     }
-    if root.draft-kind != "serial" : LabeledInput {
+    if root.draft-kind != "serial" : sf3 := LabeledInput {
+        focus-changed(f) => { if (f) { root.drop-clock += 1; } }
         dialog-field: true;
         input-height: 38px;
         label: @tr("Port");
@@ -1830,7 +1849,8 @@ HorizontalLayout {
         canceled => { root.cancel(); }
         accepted => { root.try-submit(); }
     }
-    if root.draft-kind == "serial" : LabeledInput {
+    if root.draft-kind == "serial" : sf4 := LabeledInput {
+        focus-changed(f) => { if (f) { root.drop-clock += 1; } }
         dialog-field: true;
         input-height: 38px;
         label: @tr("Serial port");
@@ -1844,7 +1864,8 @@ HorizontalLayout {
         canceled => { root.cancel(); }
         accepted => { root.try-submit(); }
     }
-    if root.draft-kind == "serial" : LabeledInput {
+    if root.draft-kind == "serial" : sf5 := LabeledInput {
+        focus-changed(f) => { if (f) { root.drop-clock += 1; } }
         dialog-field: true;
         input-height: 38px;
         label: @tr("Baud rate");
@@ -1860,6 +1881,8 @@ HorizontalLayout {
 if root.draft-kind == "serial" : HorizontalLayout {
     spacing: 12px;
     SelectField {
+        opening => { dialog-focus.focus(); }
+        drop-clock <=> root.drop-clock;
         horizontal-stretch: 1;
         min-width: 0;
         label: @tr("Data bits");
@@ -1868,6 +1891,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
         picked(value) => { root.draft-data-bits = value; }
     }
     SelectField {
+        opening => { dialog-focus.focus(); }
+        drop-clock <=> root.drop-clock;
         horizontal-stretch: 1;
         min-width: 0;
         label: @tr("Stop bits");
@@ -1876,6 +1901,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
         picked(value) => { root.draft-stop-bits = value; }
     }
     SelectField {
+        opening => { dialog-focus.focus(); }
+        drop-clock <=> root.drop-clock;
         horizontal-stretch: 1;
         min-width: 0;
         label: @tr("Parity");
@@ -1884,6 +1911,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
         picked(value) => { root.draft-parity = root.parity-from-text(value); }
     }
     SelectField {
+        opening => { dialog-focus.focus(); }
+        drop-clock <=> root.drop-clock;
         horizontal-stretch: 1;
         min-width: 0;
         label: @tr("Flow control");
@@ -1952,6 +1981,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                     if !root.is-real : HorizontalLayout {
     spacing: 12px;
     ProtoSelect {
+        opening => { dialog-focus.focus(); }
+        drop-clock <=> root.drop-clock;
         label: @tr("Connection protocol");
         value: root.draft-kind;
         previewing: root.is-preview;
@@ -1961,7 +1992,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
             if (id == "rdp" || id == "vnc") { root.start-preview(id); } else { root.set-kind(id); }
         }
     }
-    LabeledInput {
+    sf6 := LabeledInput {
+        focus-changed(f) => { if (f) { root.drop-clock += 1; } }
         dialog-field: true;
         input-height: 38px;
         label: @tr("Host / IP");
@@ -1975,7 +2007,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
         canceled => { root.cancel(); }
         accepted => { root.try-submit(); }
     }
-    LabeledInput {
+    sf7 := LabeledInput {
+        focus-changed(f) => { if (f) { root.drop-clock += 1; } }
         dialog-field: true;
         input-height: 38px;
         label: @tr("Port");
@@ -1995,7 +2028,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                         spacing: 10px;
                         VerticalLayout {
                             spacing: 10px;
-                            LabeledInput {
+                            sf8 := LabeledInput {
+                                focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                 dialog-field: true;
                                 input-height: 38px;
                                 label: @tr("Username");
@@ -2005,7 +2039,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                 canceled => { root.cancel(); }
                                 accepted => { root.try-submit(); }
                             }
-                            LabeledInput {
+                            sf9 := LabeledInput {
+                                focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                 dialog-field: true;
                                 input-height: 38px;
                                 label: @tr("Password");
@@ -2050,7 +2085,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                         // 同行后认证区少一行,视线也不必在上下行之间来回跳。
                         if root.draft-auth != "key" : HorizontalLayout {
                             spacing: 10px;
-                            LabeledInput {
+                            sf10 := LabeledInput {
+                                focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                 dialog-field: true;
                                 input-height: 38px;
                                 label: @tr("Username");
@@ -2061,7 +2097,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                 canceled => { root.cancel(); }
                                 accepted => { root.try-submit(); }
                             }
-                            LabeledInput {
+                            sf11 := LabeledInput {
+                                focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                 dialog-field: true;
                                 input-height: 38px;
                                 label: root.draft-auth == "keyboard-interactive" ? @tr("Password / first prompt") : @tr("Password");
@@ -2080,7 +2117,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                             wrap: word-wrap;
                         }
                         // 私钥认证的凭据是「密钥 + 口令」,用户名单独一行在前。
-                        if root.draft-auth == "key" : LabeledInput {
+                        if root.draft-auth == "key" : sf12 := LabeledInput {
+                            focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                             dialog-field: true;
                             input-height: 38px;
                             label: @tr("Username");
@@ -2218,7 +2256,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                 }
                             }
                         }
-                        if root.draft-auth == "key" : LabeledInput {
+                        if root.draft-auth == "key" : sf13 := LabeledInput {
+                            focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                             dialog-field: true;
                             input-height: 38px;
                             label: @tr("Key passphrase");
@@ -2242,7 +2281,10 @@ if root.draft-kind == "serial" : HorizontalLayout {
                             height: 38px;
                             border-radius: 9px;
                             border-width: 1px;
-                            border-color: adv-ta.has-hover ? Theme.line-2 : Theme.border-control;
+                            // (#dialog-focus-reset 2026-09-19) 展开态给蓝色焦点
+                            // 边框(与字段一致),收起恢复普通边框。
+                            border-color: root.show-advanced ? Theme.accent
+                                : (adv-ta.has-hover ? Theme.line-2 : Theme.border-control);
                             background: Theme.field;
                             adv-ta := TouchArea {
                                 mouse-cursor: pointer;
@@ -2268,23 +2310,28 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                     Text {
                                         width: 100%;
                                         height: 100%;
-                                        text: "\u{E5CC}";
+                                        // (#hifi-adv-chevron 2026-09-19) transform-rotation
+                                        // 在 Text 上不生效(实测),改为直接切字形:
+                                        // 展开=向下 v(E5CF)、收起=向右 >(E5CC)。
+                                        text: root.show-advanced ? "\u{E5CF}" : "\u{E5CC}";
                                         font-family: "Material Icons";
                                         color: Theme.text-muted;
                                         font-size: Theme.fs-md;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
-                                        transform-origin: { x: 8px, y: 8px };
-                                        transform-rotation: root.show-advanced ? 90deg : 0deg;
-                                        animate transform-rotation { duration: 240ms; }
                                     }
                                 }
                             }
                         }
                         if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
                             spacing: 4px;
-                            Text { text: @tr("Terminal character encoding"); color: Theme.text-secondary; font-size: Theme.fs-sm; }
+                            // (#hifi-spacing 2026-09-19) label 并入 SelectField(间距
+                            // 回到字段标准的 5px,原独立 Text 隔着 body 14px 偏大);
+                            // (#dialog-pop-flip 2026-09-19) 弹层向下展开:78% 布局下字段下方空间充足。
                             SelectField {
+                                label: @tr("Terminal character encoding");
+                                opening => { dialog-focus.focus(); }
+                                drop-clock <=> root.drop-clock;
                                 choices: ["UTF-8", "GBK", "Big5", "Shift_JIS", "EUC-KR", "Windows-1252"];
                                 value: root.draft-encoding;
                                 picked(value) => { root.draft-encoding = value; }
@@ -2347,7 +2394,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                     SegOption { label: "HTTP"; active: root.draft-proxy-type == "http"; clicked => { root.draft-proxy-type = "http"; } }
                                 }
                             }
-                            if root.draft-proxy-type != "none" : LabeledInput {
+                            if root.draft-proxy-type != "none" : sf14 := LabeledInput {
+                                focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                 dialog-field: true;
                                 input-height: 38px;
                                 label: @tr("Proxy address");
@@ -2369,6 +2417,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                         if root.show-advanced && root.draft-kind == "ssh" : VerticalLayout {
                             spacing: 4px;
                             JumpCombo {
+                                opening => { dialog-focus.focus(); }
+                                drop-clock <=> root.drop-clock;
                                 label: @tr("Jump host (optional)");
                                 choices: root.jump-choices;
                                 selected-index <=> root.draft-jump-index;
@@ -2420,7 +2470,10 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                 }
-                                if root.forwards.length > 0 : Rectangle {
+                                // (#dialog-no-jump 2026-09-20) 「+添加」常驻:条件渲染时行高 26↔20 变化、
+                                // 标题垂直居中偏移,即标题跳动(实测)。功能与下方常驻
+                                // 添加框一致,已有行时也可继续追加。
+                                Rectangle {
                                     height: 26px;
                                     border-radius: 7px;
                                     border-width: 1px;
@@ -2450,30 +2503,48 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                     }
                                 }
                             }
-                            if root.forwards.length == 0 : EmptyAddButton {
+                            // (#dialog-no-jump 2026-09-20) 添加框**常驻**:已有行时点击继续追加,
+                            // 标题下方结构恒定,添加/删除不再引起标题跳动(实测)。
+                            EmptyAddButton {
                                 label: @tr("Add a port forward");
                                 clicked => { root.add-forward(); }
                             }
                             if root.forwards.length == 0 : Rectangle {
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    Text {
-                                        text: @tr("Used to reach internal services. Example:");
-                                        color: Theme.text-muted;
-                                        font-size: Theme.fs-xs;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: "-L 8080 → db.internal:5432";
-                                        color: Theme.accent;
-                                        font-family: Theme.font-mono;
-                                        font-size: Theme.fs-xs;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                TouchArea {
+                                hint-fw-ta := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => { root.add-sample-forward(); }
+                                }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    // (#hifi-hint-link 2026-09-20) 全部子项 stretch 0 +
+                                    // 尾部 filler:说明与代码紧靠左排,中间不留大空隙。
+                                    Text {
+                                        horizontal-stretch: 0;
+                                        text: @tr("Used to reach internal services. Example:");
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
+                                    }
+                                    // 代码示例 = 主题色,悬浮整段时出现**等宽**下划线;
+                                    // 点击(外层)新建端口转发。
+                                    VerticalLayout {
+                                        horizontal-stretch: 0;
+                                        spacing: 1px;
+                                        fw-code := Text {
+                                            text: "-L 8080 → db.internal:5432";
+                                            color: Theme.accent;
+                                            font-family: Theme.font-mono;
+                                            font-size: Theme.fs-xs;
+                                            vertical-alignment: center;
+                                        }
+                                        Rectangle {
+                                            width: fw-code.preferred-width;
+                                            height: 1px;
+                                            visible: hint-fw-ta.has-hover;
+                                            background: Theme.accent;
+                                        }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
                                 }
                             }
                             for f[i] in root.forwards : PortForwardRow {
@@ -2496,7 +2567,8 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                     vertical-alignment: center;
                                     horizontal-stretch: 1;
                                 }
-                                if root.triggers.length > 0 : Rectangle {
+                                // (#dialog-no-jump) 同端口转发:常驻防标题跳动。
+                                Rectangle {
                                     height: 26px;
                                     border-radius: 7px;
                                     border-width: 1px;
@@ -2526,30 +2598,62 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                     }
                                 }
                             }
-                            if root.triggers.length == 0 : EmptyAddButton {
+                            // (#dialog-no-jump) 同端口转发:添加框常驻。
+                            EmptyAddButton {
                                 label: @tr("Add a trigger");
                                 clicked => { root.add-trigger(); }
                             }
                             if root.triggers.length == 0 : Rectangle {
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    Text {
-                                        text: @tr("Auto-reply when matching text appears. Example:");
-                                        color: Theme.text-muted;
-                                        font-size: Theme.fs-xs;
-                                        vertical-alignment: center;
-                                    }
-                                    Text {
-                                        text: "「password:」";
-                                        color: Theme.accent;
-                                        font-family: Theme.font-mono;
-                                        font-size: Theme.fs-xs;
-                                        vertical-alignment: center;
-                                    }
-                                }
-                                TouchArea {
+                                hint-tr-ta := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => { root.add-sample-trigger(); }
+                                }
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    // (#hifi-hint-link 2026-09-20) 同端口转发段:
+                                    // stretch 0 + 尾部 filler 左对齐,下划线等宽。
+                                    Text {
+                                        horizontal-stretch: 0;
+                                        text: @tr("Auto-reply when matching text appears. Example:");
+                                        color: Theme.text-secondary;
+                                        font-size: Theme.fs-xs;
+                                        vertical-alignment: center;
+                                    }
+                                    // 代码示例(「password:」→ 自动发送保存的密码)
+                                    // 整体为主题色链接:悬浮下划线,点击(外层)添加触发器。
+                                    VerticalLayout {
+                                        horizontal-stretch: 0;
+                                        spacing: 1px;
+                                        HorizontalLayout {
+                                            spacing: 4px;
+                                            tr-code1 := Text {
+                                                text: "「password:」";
+                                                color: Theme.accent;
+                                                font-family: Theme.font-mono;
+                                                font-size: Theme.fs-xs;
+                                                vertical-alignment: center;
+                                            }
+                                            tr-code2 := Text {
+                                                text: "→";
+                                                color: Theme.accent;
+                                                font-size: Theme.fs-xs;
+                                                vertical-alignment: center;
+                                            }
+                                            tr-code3 := Text {
+                                                text: @tr("automatically send the saved password");
+                                                color: Theme.accent;
+                                                font-size: Theme.fs-xs;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        Rectangle {
+                                            width: tr-code1.preferred-width + 4px + tr-code2.preferred-width + 4px + tr-code3.preferred-width;
+                                            height: 1px;
+                                            visible: hint-tr-ta.has-hover;
+                                            background: Theme.accent;
+                                        }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
                                 }
                             }
                             for trigger[i] in root.triggers : TriggerRow {
@@ -2568,6 +2672,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                     }
 
                 }
+                }   // (#dialog-focus-reset) viewport 容器 Rectangle 闭合
             }
 
             Rectangle {
@@ -2599,7 +2704,15 @@ if root.draft-kind == "serial" : HorizontalLayout {
             // 若由布局算出来会构成 dlg-card.height -> layout-cache -> foot.height 的循环。
             height: 62px;
             // (#hifi-v17) 页脚底 = 原型 .dlg-foot 的 --panel-hi(比内容面板亮半档)。
+            // (#dialog-border-lm 2026-09-20) 亮色 panel-hi 与白底几乎无区分,
+            // 页脚"消失"(实测);顶部加 1px 分隔线,亮色底色同时加深(theme)。
             background: Theme.panel-hi;
+            Rectangle {
+                x: 0; y: 0;
+                width: 100%;
+                height: 1px;
+                background: Theme.border-control;
+            }
             border-top-left-radius: 0px;
             border-top-right-radius: 0px;
             border-bottom-left-radius: Theme.radius-xl;
@@ -2614,46 +2727,54 @@ if root.draft-kind == "serial" : HorizontalLayout {
                     btn-height: 38px;
                     btn-radius: 9px;
                     dialog-chrome: true;
+                    // (#hifi-test-icon 2026-09-19) wifi_tethering:波纹扩散,
+                    // 呼应"测试连通性"。
+                    glyph: "\u{EF48}";
                     text: @tr("Test connection");
                     clicked => { root.try-test(); }
                 }
-                Rectangle {
-                    height: 38px;
-                    horizontal-stretch: 1;
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 1px;
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text {
-                                visible: root.footer-status-icon() != "";
-                                text: root.footer-status-icon();
-                                font-family: "Material Icons";
-                                color: root.footer-status-color();
-                                font-size: Theme.fs-md;
-                                vertical-alignment: center;
+                    Rectangle {
+                        height: 38px;
+                        horizontal-stretch: 1;
+                        status-ta := TouchArea {
+                            enabled: root.host-missing || root.serial-missing;
+                            mouse-cursor: (root.host-missing || root.serial-missing) ? pointer : default;
+                            clicked => { root.focus-error-field(); }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 1px;
+                            HorizontalLayout {
+                                spacing: 6px;
+                                Text {
+                                    visible: root.footer-status-icon() != "";
+                                    text: root.footer-status-icon();
+                                    font-family: "Material Icons";
+                                    color: root.footer-status-color();
+                                    font-size: Theme.fs-md;
+                                    vertical-alignment: center;
+                                }
+                                status-txt := Text {
+                                    text: root.footer-status-text();
+                                    color: root.footer-status-color();
+                                    font-size: Theme.fs-sm;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    max-width: 320px;
+                                }
                             }
-                            Text {
-                                text: root.footer-status-text();
-                                color: root.footer-status-color();
-                                font-size: Theme.fs-sm;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                overflow: elide;
+                            // (#hifi-err-underline 2026-09-20) 悬浮错误信息时显示
+                            // 红色下划线 —— 宽度只到文字内在宽,且**不超过状态区
+                            // 可用宽**(文字被 elide 截断时 preferred-width 会大于
+                            // 显示宽,下划线超出文字,实测);旧版占满整段也过长。
+                            Rectangle {
+                                width: min(status-txt.preferred-width, 320px);
+                                height: 1px;
+                                visible: (root.host-missing || root.serial-missing) && status-ta.has-hover;
+                                background: Theme.danger;
                             }
                         }
-                        Rectangle {
-                            height: 1px;
-                            background: (root.host-missing || root.serial-missing) && status-ta.has-hover
-                                ? Theme.danger : transparent;
-                        }
                     }
-                    status-ta := TouchArea {
-                        enabled: root.host-missing || root.serial-missing;
-                        mouse-cursor: (root.host-missing || root.serial-missing) ? pointer : default;
-                        clicked => { root.focus-error-field(); }
-                    }
-                }
                 // (#hifi-v17) 页脚按钮 38px 高 / 9px 圆角,同原型 .btn。
                 GhostButton {
                     btn-height: 38px;

@@ -944,3 +944,7 @@ msgstr "Show advanced options"
 msgid "Hide advanced options"
 msgstr "Hide advanced options"
 
+
+
+msgid "automatically send the saved password"
+msgstr "automatically send the saved password"

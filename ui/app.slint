@@ -5843,7 +5843,9 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 spacing: 6px;
                                 Text {
-                                    text: "\u{E8B8}";
+                                    // (#hifi-tray-icon 2026-09-19) flip_to_back:"翻到后台",
+                                    // 语义"最小化到托盘保持后台运行"(原齿轮图标语义不符)。
+                                    text: "\u{E882}";
                                     font-family: "Material Icons";
                                     font-size: 20px;
                                     color: tray-ta.has-hover ? Theme.accent : Theme.text-secondary;
@@ -5902,7 +5904,9 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 spacing: 6px;
                                 Text {
-                                    text: "\u{E8D5}";
+                                    // (#hifi-tray-icon 2026-09-19) power_settings_new:电源键,
+                                    // "完全退出"的通用语义图标(原 E8D5 语义不明)。
+                                    text: "\u{E8AC}";
                                     font-family: "Material Icons";
                                     font-size: 20px;
                                     color: exit-ta.has-hover ? Theme.close-red : Theme.text-secondary;

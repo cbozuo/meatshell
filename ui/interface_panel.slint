@@ -8,6 +8,7 @@
 
 import { Theme } from "theme.slint";
 import { ComboBox, Slider, ScrollView } from "std-widgets.slint";
+import { SelectField } from "widgets.slint";
 import { LabeledInput, PrimaryButton, GhostButton } from "widgets.slint";
 
 export struct OutputRuleItem {
@@ -1616,18 +1617,20 @@ export component InterfacePanel inherits Rectangle {
                         ? "What the window close button does."
                         : "点击窗口关闭按钮时的行为";
                     show-divider: false;
-                    close-dd := ComboBox {
+                    // (#hifi-select 2026-09-19) 换用与新建会话弹窗同款的 SelectField:
+                    // 38px 圆角框 + 蓝色焦点/展开态 + 原生弹层,替代 ComboBox 的系统样式。
+                    close-dd := SelectField {
                         width: 200px;
-                        // 选项文案随语言;selected 里再映射回 id 下发。
-                        model: root.lang-en
+                        // 选项文案随语言;picked 里再映射回 id 下发。
+                        choices: root.lang-en
                             ? ["Ask every time", "Minimize to tray", "Quit completely"]
                             : ["每次询问", "最小化到托盘", "直接完全退出"];
-                        current-value: root.close-behavior == "tray"
+                        value: root.close-behavior == "tray"
                             ? (root.lang-en ? "Minimize to tray" : "最小化到托盘")
                             : root.close-behavior == "exit"
                                 ? (root.lang-en ? "Quit completely" : "直接完全退出")
                                 : (root.lang-en ? "Ask every time" : "每次询问");
-                        selected(v) => {
+                        picked(v) => {
                             root.close-behavior = v == (root.lang-en ? "Minimize to tray" : "最小化到托盘")
                                 ? "tray"
                                 : v == (root.lang-en ? "Quit completely" : "直接完全退出")

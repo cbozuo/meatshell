@@ -90,7 +90,9 @@ export global Theme {
     out property <brush> field: dark ? #191b21 : #f4f5f8;
     out property <brush> field-2: dark ? #1d2027 : #eef0f4;
     out property <brush> line-2: dark ? #3f444f : #c7c7cc;
-    out property <brush> panel-hi: dark ? #282b34 : #f6f7f9;
+    // (#dialog-border-lm 2026-09-20) 亮色 #f6f7f9 与弹窗白底几乎无区分,页脚
+    // "消失"(实测);加深到 #eef0f4(= field-2 亮色值)。panel-hi 为会话弹窗专用。
+    out property <brush> panel-hi: dark ? #282b34 : #eef0f4;
 
     out property <brush> text-primary:   dark ? #e6e8ee : #1d1d1f;
     // Light-mode secondary/muted darkened further (was #55555a / #7c7c82): over a
@@ -179,18 +181,30 @@ export global Theme {
     //
     // (#proto-icon-r19 2026-09-17) 码位**按高保真原型 SVG 的造型逐个对齐**,
     // 不按协议语义猜。原型 new-session-dialog-alt-dropdown-2026-09-17.html:
-    //   ssh=窗口+提示符  serial=矩形+上下插针  telnet=窗口+标题栏  rdp/vnc=显示器+底座
+    //   ssh=窗口+提示符  serial=三针接头      telnet=窗口+标题栏  rdp/vnc=显示器+底座
     // 对应内嵌 MaterialIcons-Regular.ttf:
-    //   terminal / memory / web_asset / desktop_windows(四码位均已用字体 cmap 校验存在)。
+    //   terminal / settings_input_component / web_asset / desktop_windows(均已用字体 cmap 校验存在)。
     // 上一轮挑了 router(serial)/memory(telnet)/computer(ssh),造型与原型不符 —— 用户实测反馈。
     // ssh / local / 未知协议统一回落 terminal。
     //
     // 显式 `public`:被 session_dialog.slint 与 welcome.slint 跨文件调用。
     public pure function protocol-glyph(id: string) -> string {
-        if (id == "serial") { return "\u{E322}"; }             // memory       矩形+上下插针
+        if (id == "serial") { return "\u{E8C0}"; }             // settings_input_component 三针接头
         if (id == "telnet") { return "\u{E069}"; }             // web_asset    窗口+标题栏
         if (id == "rdp" || id == "vnc") { return "\u{E30C}"; } // desktop_windows 显示器+底座
         return "\u{EB8E}";                                     // terminal     窗口+提示符
+    }
+
+    // (#proto-optical 2026-09-20) 光学尺寸补偿:同一 font-size 下各字形的视觉占位
+    // 差异可达 25%(实测 glyf bbox,24 网格高度):
+    //   terminal / web_asset 16.03 · desktop_windows 19.97 · settings_input_component 22.03
+    // 系数 = 18 / 该字形视觉高,让五个协议在下拉框里视觉等大。
+    // 换码位时必须同步更新本表。
+    public pure function protocol-scale(id: string) -> float {
+        if (id == "serial") { return 0.82; }              // settings_input_component 22.03
+        if (id == "rdp" || id == "vnc") { return 0.90; }  // desktop_windows 19.97
+        if (id == "telnet") { return 1.12; }              // web_asset 16.03
+        return 1.12;                                      // terminal(ssh / local / 未知) 16.03
     }
 
     // --- Group colour (#group-color 2026-09-14) ----------------------------

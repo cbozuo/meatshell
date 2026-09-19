@@ -1,5 +1,5 @@
 import { Theme } from "theme.slint";
-import { PrimaryButton, GhostButton } from "widgets.slint";
+import { PrimaryButton, GhostButton, ProtocolIcon } from "widgets.slint";
 
 export struct SessionInfo {
     id: string,
@@ -657,23 +657,20 @@ component SessionRow inherits Rectangle {
             // default(未分组)成员走 20px + fs-xl 的"组头级"特例,那是"未分组
             // 平铺在顶层"时代的伪装;现在 default 有真正的组头,成员就该是
             // 标准成员尺寸,不再有第二套视觉。
-            // (#proto-icon 2026-09-17) 图标内容改为**按协议取字形**,与新建会话
-            // 对话框的协议下拉框同源(Theme.protocol-glyph,码位按高保真原型造型
-            // 对齐):SSH/local→terminal,Serial→memory,Telnet→web_asset,
-            // RDP/VNC→desktop_windows。此前无差别用 dns(E875) 当"服务器"通用图,
-            // 与下拉框里的协议图不一致(用户实测)。
+            // (#proto-icon 2026-09-17) 图标内容**按协议取字形**,与新建会话
+            // 对话框的协议下拉框同源。
+            // (#hifi-icon-r3 2026-09-20) 去掉底板色块(用户实测与文字抢视觉),
+            // 图标直接裸渲染;15px 与成员名 fs-sm(12px) 视觉等高协调。
             width: 16px;
             height: 16px;
             y: (parent.height - self.height) / 2;
-            border-radius: 3px;
-            background: Theme.bg-elevated;
-            Text {
-                text: Theme.protocol-glyph(session.kind);
-                font-family: "Material Icons";
-                color: Theme.text-secondary;
-                font-size: 11px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            ProtocolIcon {
+                width: 15px;
+                height: 15px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                proto-id: session.kind == "local" ? "ssh" : session.kind;
+                icon-color: Theme.text-secondary;
             }
             // (#session-status-dot-removed 2026-09-14) 连接状态点已移除：会话行
             // 不再用图标左侧的 6px 圆点表达"连接中 / 已连接"。该点原本是绝对

@@ -911,13 +911,13 @@ msgid "Add a port forward"
 msgstr "添加端口转发"
 
 msgid "Used to reach internal services. Example:"
-msgstr "用于访问内网服务。示例："
+msgstr "常用于从本地访问内网服务（数据库、VNC、Web 后台等）。例如"
 
 msgid "Add a trigger"
 msgstr "添加触发器"
 
 msgid "Auto-reply when matching text appears. Example:"
-msgstr "匹配到文本时自动回复。示例："
+msgstr "出现指定文本时自动应答（如自动输入密码、跳过首次确认）。例如"
 
 # (#proto-select 2026-09-18) 本轮新增:字段级「连接协议」下拉 / 高级开关文案
 msgid "Connection protocol"
@@ -941,3 +941,7 @@ msgstr "显示高级选项"
 msgid "Hide advanced options"
 msgstr "隐藏高级选项"
 
+
+
+msgid "automatically send the saved password"
+msgstr "自动发送保存的密码"

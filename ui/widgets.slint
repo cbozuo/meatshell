@@ -77,6 +77,9 @@ export component PrimaryButton inherits Rectangle {
 // --- GhostButton -----------------------------------------------------------
 export component GhostButton inherits Rectangle {
     in property <string> text;
+    // (#hifi-test-icon 2026-09-19) 可选 Material 字形,渲染在文字左侧
+    // (测试连接的波形图标等);空串不渲染,不占布局。
+    in property <string> glyph: "";
     in property <length> btn-height: 30px;
     in property <length> btn-radius: 6px;
     // 新建会话页脚走高保真 .btn.ghost(line-2 / field-2);其它弹窗保持原 hover。
@@ -101,6 +104,14 @@ export component GhostButton inherits Rectangle {
         padding-left: 16px;
         padding-right: 16px;
         alignment: center;
+        spacing: root.glyph == "" ? 0px : 7px;
+        if root.glyph != "" : Text {
+            text: root.glyph;
+            font-family: "Material Icons";
+            color: touch.has-hover ? Theme.text-primary : Theme.text-secondary;
+            font-size: Theme.fs-md;
+            vertical-alignment: center;
+        }
         Text {
             text: root.text;
             color: touch.has-hover ? Theme.text-primary : Theme.text-secondary;
@@ -134,6 +145,11 @@ export component LabeledInput inherits VerticalLayout {
     in property <brush> idle-border: Theme.border-subtle;
     in property <bool> error: false;   // 红框：校验失败（页脚提示同源）
     in property <int> focus-seq: 0;    // bump to steal focus (test-connection locate)
+    // (#dialog-focus-reset 2026-09-19) 焦点镜像:供调用方聚合「任一输入框
+    // 持焦点」—— 会话弹窗用它推进下拉代际时钟(任何输入框获焦都让残留的
+    // 下拉蓝框恢复普通边框)。
+    out property <bool> has-input-focus: input.has-focus;
+    callback focus-changed(bool);
     // (#hifi-v17) 新建会话对话框: field / field-2 / 12px 内距 / 5px 标签间距。
     // 其它对话框保持 32px 默认铬,避免 chmod 等小框被带跑。
     in property <bool> dialog-field: false;
@@ -150,9 +166,17 @@ export component LabeledInput inherits VerticalLayout {
     // TextInput 的 input-type。
     property <bool> password-visible: false;
     public function focus-input() { input.focus(); }
+    /// (#dialog-focus-reset 2026-09-19) 外部请求聚焦(如弹窗每次打开时聚焦
+    /// 名称框):复用下面的 0ms Timer,等布局完成后再落焦 —— 布局求值期间
+    /// 直接 focus() 会踩运行时递归保护。与 auto-focus 的区别:auto-focus
+    /// 只在 init 置位一次,常驻组件重开弹窗不会再走;request-focus 随叫随到。
+    public function request-focus() { root.focus-pending = true; }
     changed focus-seq => {
         if (self.focus-seq > 0) { input.focus(); }
     }
+    // (#dialog-focus-reset) 焦点变化上抛:会话弹窗借此推进下拉代际时钟
+    // (任何输入框获焦都让残留的下拉蓝框恢复普通边框)。
+    changed has-input-focus => { root.focus-changed(self.has-input-focus); }
 
     // A LabeledInput is often created inside a conditional dialog. Focusing its
     // TextInput during `init` asks Slint for IME geometry while the surrounding
@@ -164,7 +188,7 @@ export component LabeledInput inherits VerticalLayout {
         running: root.focus-pending;
         triggered => {
             root.focus-pending = false;
-            if (root.auto-focus) { input.focus(); }
+            input.focus();
         }
     }
 
@@ -185,9 +209,14 @@ export component LabeledInput inherits VerticalLayout {
         //   · 聚焦同时把底色提到 field-2(比常态亮半档)。
         border-radius: 9px;
         border-width: 1px;
-        border-color: input.has-focus ? Theme.accent
-            : (root.error ? Theme.danger : root.idle-line);
-        background: input.has-focus ? root.focus-bg : root.idle-bg;
+        // (#dialog-error-clear 2026-09-19) error **优先**于焦点:点底部错误
+        // 信息定位后,聚焦的字段显示红框(高保真语义"这里没填");开始输入
+        // 后 missing 清除,才回落到蓝色焦点边框。
+        border-color: root.error ? Theme.danger
+            : input.has-focus ? Theme.accent
+            : root.idle-line;
+        background: root.error && !input.has-focus ? root.idle-bg
+            : input.has-focus ? root.focus-bg : root.idle-bg;
         drop-shadow-blur: input.has-focus ? 0px : 0px;
         // Slint 无 box-shadow spread,用内层描边矩形近似 3px 光晕:
         // 比外阴影干净,也不会把弹层顶出卡片。错误态即使失焦也留淡红晕。
@@ -197,7 +226,11 @@ export component LabeledInput inherits VerticalLayout {
             height: parent.height + 6px;
             border-radius: 11px;
             border-width: 3px;
-            border-color: input.has-focus ? Theme.accent-soft : Theme.danger.with-alpha(0.18);
+            // (#dialog-error-clear 2026-09-19) error **一票优先**:校验失败的
+            // 字段即使聚焦也保持淡红晕 —— 旧条件 error && focus 时走到
+            // accent 分支,红框外圈出现蓝晕(用户实测)。
+            border-color: root.error ? Theme.danger.with-alpha(0.18)
+                : input.has-focus ? Theme.accent-soft : Theme.danger.with-alpha(0.18);
         }
 
         // Hide on focus: IME preedit is visible before value is committed.
@@ -477,5 +510,170 @@ export component DockExpandButton inherits Rectangle {
             width: parent.width;
             height: parent.height;
         }
+    }
+}
+// (#hifi-v17) 与协议下拉同一套 .select + .pop:编码 / 串口四参数 / 跳板共用。
+export component SelectField inherits VerticalLayout {
+    // (#dialog-pop-flip 2026-09-19) 弹层展开方向:默认向下,空间不足的实例(高级区/底部)传 true 向上翻转。
+    in property <bool> open-up: false;
+    in property <string> label;
+    in property <[string]> choices;
+    in property <string> value;
+    in property <string> placeholder: "";
+    callback picked(string);
+    // (#dialog-focus-reset) 同 ProtoSelect:实例化处把焦点交回容器。
+    callback opening();
+    spacing: 5px;
+    property <bool> drop-open: false;
+    // (#dialog-focus-reset 2026-09-19) 代际时钟,同 ProtoSelect:蓝框只在
+    // 自己是最近一次打开的下拉时成立;点其它下拉/点空白时钟推进即恢复。
+    in-out property <int> drop-clock: 0;
+    property <int> open-clock: -1;
+
+    Text {
+        visible: root.label != "";
+        text: root.label;
+        color: Theme.text-secondary;
+        font-size: Theme.fs-sm;
+    }
+
+    sbtn := Rectangle {
+        height: 38px;
+        border-radius: 9px;
+        border-width: 1px;
+        border-color: root.drop-open && root.open-clock == root.drop-clock ? Theme.accent
+            : (sta.has-hover ? Theme.line-2 : Theme.border-control);
+        background: root.drop-open && root.open-clock == root.drop-clock ? Theme.field-2 : Theme.field;
+        if root.drop-open && root.open-clock == root.drop-clock : Rectangle {
+            x: -3px; y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 11px;
+            border-width: 3px;
+            border-color: Theme.accent-soft;
+        }
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 9px;
+            Text {
+                text: root.value != "" ? root.value : root.placeholder;
+                color: root.value != "" ? Theme.text-primary : Theme.text-muted;
+                font-size: Theme.fs-md;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                y: (parent.height - self.height) / 2;
+                Text {
+                    width: 100%; height: 100%;
+                    text: "\u{E5CF}";
+                    font-family: "Material Icons";
+                    color: (sta.has-hover || root.drop-open) ? Theme.text-secondary : Theme.text-muted;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        sta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.opening();
+                root.drop-clock += 1;
+                root.open-clock = root.drop-clock;
+                root.drop-open = true;
+                sel-pop.show();
+            }
+        }
+    }
+
+    sel-pop := PopupWindow {
+        x: 0px;
+        y: root.open-up ? -(min(root.choices.length * 33px + 10px, 280px) + 6px) : parent.height + 6px;
+        width: parent.width;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.popup-bg;
+            border-radius: 11px;
+            border-width: 1px;
+            border-color: Theme.line-2;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: #00000066;
+            VerticalLayout {
+                padding: 5px;
+                spacing: 1px;
+                for c in root.choices : Rectangle {
+                    height: 32px;
+                    border-radius: 8px;
+                    background: c-ta.has-hover ? Theme.field-2
+                        : (root.value == c ? Theme.accent-soft : transparent);
+                    c-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.drop-open = false;
+                            root.picked(c);
+                            sel-pop.close();
+                        }
+                    }
+                    Text {
+                        x: 9px;
+                        width: parent.width - 32px;
+                        height: parent.height;
+                        text: c;
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-md;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                    Rectangle {
+                        x: parent.width - 23px;
+                        y: (parent.height - 14px) / 2;
+                        width: 14px;
+                        height: 14px;
+                        Text {
+                            width: 100%; height: 100%;
+                            text: root.value == c ? "\u{E5CA}" : "";
+                            font-family: "Material Icons";
+                            color: Theme.accent;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+// (#hifi-icon 2026-09-19) 协议图标:对齐高保真的 24×24 细线 SVG(stroke 1.8
+// 圆角)——Material 字体的齿轮/窗口字形粗细不均(用户实测 serial 上边过粗),
+// 弃用。ssh=终端+提示符 serial=接头+上下触针 telnet=窗口+标题栏;
+// rdp/vnc(预览态)仍用字体字形。颜色由调用方传入(hover/选中态可切换)。
+export component ProtocolIcon inherits Rectangle {
+    in property <string> proto-id;
+    in property <brush> icon-color: Theme.text-secondary;
+    in property <length> icon-size: 18px;   // (#hifi-icon) 15px 偏小,默认 18 与文字匹配
+    width: root.icon-size;
+    height: root.icon-size;
+    // (#hifi-icon-r2 2026-09-19) 回退 **Material 字体字形**:自绘 Path 的 Q
+    // 近似圆角与平头线帽观感不够精细(用户实测),字体图标本身线条均匀。
+    // 码位统一走 Theme.protocol-glyph(单一真源),不再在此处分叉。
+    // serial 此前用的 E8BC 实为 settings_cell(手机信号塔),与串口无关;
+    // 已修正为 E8C0(settings_input_component 三针接头)。
+    Text {
+        width: 100%; height: 100%;
+        text: Theme.protocol-glyph(root.proto-id);
+        font-family: "Material Icons";
+        color: root.icon-color;
+        // (#proto-optical 2026-09-20) 字号跟随**实际渲染宽度**(调用方覆盖
+        // width/height 后自动生效),而非 icon-size —— 此前 icon-size 恒为
+        // 默认 18px,导致 12px / 15px 容器里字号仍是 16.56px(会话行溢出 38%)。
+        font-size: root.width * 0.92 * Theme.protocol-scale(root.proto-id);
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
