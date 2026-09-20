@@ -11,6 +11,11 @@
 # [target.*] 只作用于目标编译;构建脚本 / proc-macros 按 host 编译,须
 # 另配 [host.*](本机 host == target,两段内容相同)。缺 host 段时
 # build.rs 链接会报 lld: unable to find library -lgcc。
+# 本机 15.2GB 内存有限:并行 rustc 同峰时 OOM(2026-09-21 debug 链接阶段
+# rustc-LLVM out of memory / STATUS_STACK_BUFFER_OVERRUN),限并行编译进程数。
+[build]
+jobs = 2
+
 [target.x86_64-pc-windows-gnu]
 rustflags = [
     "-C", "link-arg=-fuse-ld=lld",
