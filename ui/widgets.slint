@@ -43,10 +43,22 @@ export component PrimaryButton inherits Rectangle {
     // (chmod 等小弹窗)仍期望 30px,做成可配属性,session_dialog 显式传 38px。
     in property <length> btn-height: 30px;
     in property <length> btn-radius: 6px;
+    // (#foot-btn 2026-09-20) 最小宽可配:会话弹框页脚按高保真走内容宽
+    // (传 0px),其它弹窗保持 80px 默认。
+    in property <length> btn-min-width: 80px;
+    // (#foot-btn2 2026-09-20) hug-width:把 min/max 同时钉到内容首选宽,
+    // 布局别无选择。horizontal-stretch:0 在组件实例上真机未按预期收缩
+    // (页脚三键仍近均分,用户复测),改用与 stretch 语义解耦的确定性约束。
+    in property <bool> hug-width: false;
+    // (#foot-btn3 2026-09-20) 内容宽按 Text preferred **直算**:HL 在
+    // alignment:center 下的 preferred 偏大(真机按钮仍偏宽的疑因),Text 的
+    // preferred 是文本真实宽度。
+    property <length> natural-w: label-t.preferred-width + 32px;   // 32 = 左右 padding
     callback clicked();
 
     height: root.btn-height;
-    min-width: 80px;
+    min-width: root.hug-width ? max(root.btn-min-width, root.natural-w) : root.btn-min-width;
+    max-width: root.hug-width ? max(root.btn-min-width, root.natural-w) : 100000px;
     border-radius: root.btn-radius;
     background: disabled
         ? Theme.bg-elevated
@@ -54,15 +66,21 @@ export component PrimaryButton inherits Rectangle {
            : (touch.has-hover ? Theme.accent-hover : Theme.accent));
     animate background { duration: 120ms; }
 
-    HorizontalLayout {
+    // (#btn-center 2026-09-20) 居中职责从"布局 alignment"换成"文字自居中":
+    // hug-width 把 min/max 钉成同一个 natural-w(按 Text preferred 直算),而
+    // alignment:center 下 HL 的 preferred 偏大,零余量 + preferred 偏大 = 布局被
+    // 压缩、居中退化(用户报"取消"二字偏心)。改为 label 占满内容盒(按钮宽 − 左右
+    // 各 16px padding,天然对称)并自居中,不再依赖 preferred-width 的测量精度。
+    btn-row := HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
-        alignment: center;
-        Text {
+        label-t := Text {
             text: root.text;
             color: disabled ? Theme.text-muted : white;
             font-size: Theme.fs-md;
             font-weight: 600;
+            horizontal-stretch: 1;
+            horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
@@ -82,12 +100,40 @@ export component GhostButton inherits Rectangle {
     in property <string> glyph: "";
     in property <length> btn-height: 30px;
     in property <length> btn-radius: 6px;
+    // (#foot-btn 2026-09-20) 最小宽可配:会话弹框页脚按高保真走内容宽
+    // (传 0px),其它弹窗保持 80px 默认。
+    in property <length> btn-min-width: 80px;
+    // (#foot-btn2 2026-09-20) hug-width:把 min/max 同时钉到内容首选宽,
+    // 布局别无选择。horizontal-stretch:0 在组件实例上真机未按预期收缩
+    // (页脚三键仍近均分,用户复测),改用与 stretch 语义解耦的确定性约束。
+    in property <bool> hug-width: false;
+    // (#ghost-glyph-w 2026-09-20) 图标宽度:既要能被 natural-w 引用,又**不能
+    // 参与布局** —— 用一个 0 尺寸、绝对定位的测量 Text(父是 Rectangle 而非布局,
+    // 设了 x/y/width/height 就不会被布局接管)。
+    //
+    // ⚠ 不要为了同一个目的去给布局里的 glyph-t 设 `width`。在布局内显式设 width
+    // 会同时钉住 min/max-width 并覆盖布局分配,把**整个按钮**撑开——实测页脚
+    // 「取消」和关闭卡的「取消」都被撑到 200px+(用户截图)。
+    glyph-probe := Text {
+        x: 0px;
+        y: 0px;
+        width: 0px;
+        height: 0px;
+        text: root.glyph;
+        font-family: "Material Icons";
+        font-size: Theme.fs-md;
+    }
+    // (#foot-btn3 2026-09-20) 内容宽按 Text preferred **直算**(同 Primary);
+    // HL 在 alignment:center 下的 preferred 偏大。
+    property <length> natural-w: (root.glyph == "" ? 0px : glyph-probe.preferred-width + 7px)
+        + label-t.preferred-width + 32px;   // 32 = 左右 padding
     // 新建会话页脚走高保真 .btn.ghost(line-2 / field-2);其它弹窗保持原 hover。
     in property <bool> dialog-chrome: false;
     callback clicked();
 
     height: root.btn-height;
-    min-width: 80px;
+    min-width: root.hug-width ? max(root.btn-min-width, root.natural-w) : root.btn-min-width;
+    max-width: root.hug-width ? max(root.btn-min-width, root.natural-w) : 100000px;
     border-radius: root.btn-radius;
     border-width: 1px;
     border-color: touch.has-hover
@@ -100,22 +146,34 @@ export component GhostButton inherits Rectangle {
             : transparent);
     animate background, border-color { duration: 120ms; }
 
-    HorizontalLayout {
+    // (#btn-center 2026-09-20) 同 PrimaryButton:去掉 alignment:center,改由 label
+    // 占满剩余内容宽并自居中(过约束下 alignment 居中会退化,用户报"取消"偏心)。
+    // 带图标时 glyph-t 仍取 preferred,label 拿到的剩余恰好等于自身 preferred,
+    // 自居中是空操作,"测试连接"观感不变。
+    btn-row := HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
-        alignment: center;
         spacing: root.glyph == "" ? 0px : 7px;
+        // (#ghost-glyph-slot 2026-09-20) 改回 **if 条件实例化**:空 glyph 时元素
+        // 根本不存在,自然完全不占位。上一步用「常驻元素 + visible 开关」是为了让
+        // natural-w 能引用它的 preferred-width,现在那个宽度由 glyph-probe(不参与
+        // 布局)提供,所以这里可以安全地改回 if —— 空串 Text 仍会贡献 preferred-
+        // width(Slint 的 visible:false 不脱离布局,不同于 CSS display:none),
+        // 正是它把 label 推右 2-3px。
         if root.glyph != "" : Text {
             text: root.glyph;
             font-family: "Material Icons";
             color: touch.has-hover ? Theme.text-primary : Theme.text-secondary;
             font-size: Theme.fs-md;
+            horizontal-stretch: 0;
             vertical-alignment: center;
         }
-        Text {
+        label-t := Text {
             text: root.text;
             color: touch.has-hover ? Theme.text-primary : Theme.text-secondary;
             font-size: Theme.fs-md;
+            horizontal-stretch: 1;
+            horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
@@ -293,8 +351,13 @@ export component LabeledInput inherits VerticalLayout {
                 height: 28px;
                 border-radius: 7px;
                 border-width: 1px;
-                border-color: clear-ta.has-hover ? Theme.text-primary.with-alpha(0.26) : transparent;
-                background: clear-ta.has-hover ? Theme.text-primary.with-alpha(0.16) : transparent;
+                // (#field-btn-nonoise 2026-09-20) 用**不透明** token,不要用
+                // Theme.text-primary.with-alpha(...)。半透明填充叠 1px 半透明圆角
+                // 描边,在 Slint 合成时边缘会抖出颗粒噪点 —— 悬浮时按钮底面"发花"
+                // (用户截图)。本文件其它所有 hover 态按钮用的都是不透明的
+                // Theme.bg-hover / Theme.field-2,没有这个问题;这里对齐即可。
+                border-color: clear-ta.has-hover ? Theme.border-strong : transparent;
+                background: clear-ta.has-hover ? Theme.bg-hover : transparent;
                 Text {
                     width: parent.width;
                     height: parent.height;
@@ -324,8 +387,9 @@ export component LabeledInput inherits VerticalLayout {
                 height: 28px;
                 border-radius: 7px;
                 border-width: 1px;
-                border-color: pw-eye.has-hover ? Theme.text-primary.with-alpha(0.24) : transparent;
-                background: pw-eye.has-hover ? Theme.text-primary.with-alpha(0.15) : transparent;
+                // (#field-btn-nonoise) 同上:不透明 token,避免半透明叠描边的颗粒噪点。
+                border-color: pw-eye.has-hover ? Theme.border-strong : transparent;
+                background: pw-eye.has-hover ? Theme.bg-hover : transparent;
                 Text {
                     width: parent.width;
                     height: parent.height;

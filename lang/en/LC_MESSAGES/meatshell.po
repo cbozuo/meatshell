@@ -948,3 +948,11 @@ msgstr "Hide advanced options"
 
 msgid "automatically send the saved password"
 msgstr "automatically send the saved password"
+
+# (#close-card-count 2026-09-20) 关闭卡的会话数副标签
+msgid "Keeps {0} connections"
+msgstr "Keeps {0} connections"
+
+msgid "Closes {0} connections"
+msgstr "Closes {0} connections"
+

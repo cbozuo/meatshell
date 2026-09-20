@@ -84,7 +84,11 @@ component SegOption inherits Rectangle {
     // chip 淡染圆块,hover = text 8% 浅底(原型 .seg button:hover),未选中
     // 透明。文字三态:选中 accent / hover primary / 常态 secondary。
     border-radius: 7px;
-    background: active ? Theme.chip : (ta.has-hover ? Theme.text-primary.with-alpha(0.08) : transparent);
+    // (#nonoise-hover 2026-09-20) hover 底色改用**不透明**的 bg-hover。
+    // 原来的 text-primary@0.08 是半透明填充,和 1px 描边叠加时边缘会抖出颗粒
+    // (同 LabeledInput 的清除 × / 密码眼睛,见 #field-btn-nonoise)。
+    // 选中态仍保留 Theme.chip —— 那是"已选中"的语义淡染,不是 hover 反馈。
+    background: active ? Theme.chip : (ta.has-hover ? Theme.bg-hover : transparent);
     Text {
         visible: root.glyph == "";
         text: root.label;
@@ -992,8 +996,10 @@ component GroupCombo inherits VerticalLayout {
                 y: (parent.height - self.height) / 2;
                 border-radius: 7px;
                 border-width: 1px;
-                border-color: (drop-ta.has-hover && root.groups.length > 0) ? Theme.text-primary.with-alpha(0.24) : transparent;
-                background: (drop-ta.has-hover && root.groups.length > 0) ? Theme.text-primary.with-alpha(0.15) : transparent;
+                // (#nonoise-hover) 与清除 × 按钮完全同款的问题:28×28 圆角块,
+                // 半透明填充 + 1px 半透明描边 → hover 时边缘出颗粒。改不透明 token。
+                border-color: (drop-ta.has-hover && root.groups.length > 0) ? Theme.border-strong : transparent;
+                background: (drop-ta.has-hover && root.groups.length > 0) ? Theme.bg-hover : transparent;
                 Text {
                     text: root.groups.length > 0 ? "\u{E5CF}" : "";
                     font-family: "Material Icons";
@@ -1574,7 +1580,10 @@ export component SessionDialog inherits Rectangle {
         }
     }
 
-    dlg-card := Rectangle {
+    // (#dialog-lazy 2026-09-20) 卡片子树惰性挂载:关闭即销毁、打开才构建,
+    // 启动不再为整棵弹框元素树分配内存。焦点复位机器(changed is-open /
+    // drop-clock / scope-focus-timer)都在根上,不受影响。
+    if root.is-open : dlg-card := Rectangle {
         width: min(600px, parent.width - 48px);
         // (#dialog-fit 2026-09-18) 高度由**内容**决定,上限才是视口 - 32px。
         // 原先取视口 78%,全屏时弹窗被撑成一整屏、内容只占上半截,下面大片留白,
@@ -1584,7 +1593,10 @@ export component SessionDialog inherits Rectangle {
         // 仍按内容自适应,超高时封顶 88%、body Flickable 滚动。
         // (#dialog-fit 2026-09-19) 高级展开后 88% 仍显高(用户复测),收紧到
         // 78%:内容少仍自适应,SSH 展开长内容封顶 78% 视口、body 滚动。
-        height: min(body.preferred-height + hdr.height + foot.height + 2px, parent.height * 0.78);
+        // (#foot-border 2026-09-20) body 高度取整:文本 preferred 高常带分数,
+        // 卡片总高含分数会让水平分隔线落在半像素相位、发糊显粗(用户标注④,
+        // 同 #close-dialog-lines 的教训)。取整后各水平线同相位、粗细一致。
+        height: min(Math.round(body.preferred-height / 1px) * 1px + hdr.height + foot.height + 2px, parent.height * 0.78);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Theme.popup-bg;
@@ -1593,7 +1605,10 @@ export component SessionDialog inherits Rectangle {
         // (#dialog-border-lm 2026-09-20) 亮色下 line-2(#c7c7cc) 在白底上几乎
         // 不可见(用户实测"没有外围线条"),亮色单独加深一档。
         border-radius: Theme.radius-xl;
-        border-width: 1px;
+        // (#hairline-phx 2026-09-20) 外框（含四圆角）与所有区块线统一用
+        // **1phx** 物理像素:逻辑 1px 在 125% 缩放下是 1.25 物理像素,跨两行
+        // 像素 → 粗细观感随相位浮动;1phx 恒定一个设备像素。
+        border-width: 1phx;
         border-color: Theme.dark ? Theme.line-2 : #b9b9c2;
         drop-shadow-blur: 24px;
         drop-shadow-color: #00000080;
@@ -1690,12 +1705,8 @@ export component SessionDialog inherits Rectangle {
             }
         }
 
-        Rectangle {
-            width: 100%;
-            height: 1px;
-            background: Theme.border-control;
-        }
-
+        // (#head-line-moved 2026-09-20) 头部下分隔线已**移进下面的 body 容器**,
+        // 排在两条滚动渐隐条之后。见 body 容器末尾的注释。
         Rectangle {
             width: 100%;
             vertical-stretch: 1;
@@ -1801,7 +1812,7 @@ export component SessionDialog inherits Rectangle {
                         }
                     }
 
-                    Rectangle { height: 1px; background: Theme.border-control; }
+                    Rectangle { height: 1phx; background: Theme.dark ? Theme.line-2 : #b9b9c2; }
 
                     // ② 连接到哪 —— 「连接协议 + 主机/串口 + 端口/波特率」同一行:
                     // 三者同属"连到哪",放一行既省高度,也让"协议决定主机字段语义"一眼可见。
@@ -1977,7 +1988,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                             }
                         }
                     }
-                    if !root.is-real : Rectangle { height: 1px; background: Theme.border-control; }
+                    if !root.is-real : Rectangle { height: 1phx; background: Theme.dark ? Theme.line-2 : #b9b9c2; }
                     if !root.is-real : HorizontalLayout {
     spacing: 12px;
     ProtoSelect {
@@ -2022,7 +2033,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
     }
 }
 
-                    Rectangle { height: 1px; background: Theme.border-control; }
+                    Rectangle { height: 1phx; background: Theme.dark ? Theme.line-2 : #b9b9c2; }
 
                     if !root.is-real : VerticalLayout {
                         spacing: 10px;
@@ -2052,7 +2063,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                             }
                         }
                     }
-                    if !root.is-real : Rectangle { height: 1px; background: Theme.border-control; }
+                    if !root.is-real : Rectangle { height: 1phx; background: Theme.dark ? Theme.line-2 : #b9b9c2; }
 
                     // ③ 身份认证(仅 SSH) —— 先选「认证方式」,再填凭据:
                     // 谁决定"下面出现哪些字段"谁在前,读起来才顺(#auth-order,高保真 v17)。
@@ -2270,7 +2281,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                             accepted => { root.try-submit(); }
                         }
                     }
-                    if root.draft-kind == "ssh" : Rectangle { height: 1px; background: Theme.border-control; }
+                    if root.draft-kind == "ssh" : Rectangle { height: 1phx; background: Theme.dark ? Theme.line-2 : #b9b9c2; }
 
                     // ④ 高级 —— 所有协议统一形态:按钮 + 折叠容器(#adv-uniform)。
                     // 旧版 Serial 只渲染内容、不渲染开关,从 SSH 切过来会出现"字段露在外面
@@ -2675,27 +2686,57 @@ if root.draft-kind == "serial" : HorizontalLayout {
                 }   // (#dialog-focus-reset) viewport 容器 Rectangle 闭合
             }
 
+            // (#fade-inset 2026-09-20) 渐隐条内缩到 body 内容区(20px = body 的
+            // padding-left/right):这两条填的是与卡片 popup-bg **同色**的不透明
+            // panel-solid,只内缩 1phx 时名义上与 border 内沿相切,但卡片 x 是居中
+            // 小数、height 又被 0.78 封顶,1phx 圆角描边落在非整数物理像素相位上会
+            // 被抗锯齿摊到相邻两像素,同色填充正好把摊出去的那半份墨擦掉 —— 即
+            // "SSH 展开高级后左下角边线断一段"(只在可滚动时 visible,故只在展开后
+            // 出现;刚打开 viewport-y==0,顶部那条隐藏,故只见靠下那段)。
+            // 内缩 20px 后离 border 足够远;边缘那 20px 本就没有内容可遮,且两色
+            // 相同,视觉无差别。
             Rectangle {
-                y: 0px;
-                width: 100%;
+                // (#head-line-over-fade) 再让出 1 个物理像素:即便 z 已把头部线抬到
+                // 上层,错开相位能让缩放取整时二者彻底不争同一条设备像素行。
+                // body 的 padding-top 是 16px,这 1px 内没有内容,且两色相同,看不出。
+                y: 1phx;
+                x: 20px;
+                width: parent.width - 40px;
                 height: 18px;
                 visible: body-flick.viewport-y > 0px;
                 background: @linear-gradient(180deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
             Rectangle {
                 y: parent.height - 18px;
-                width: 100%;
+                x: 20px;
+                width: parent.width - 40px;
                 height: 18px;
                 visible: body-flick.viewport-y < body.preferred-height - body-flick.height;
                 background: @linear-gradient(0deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
+            // (#head-line-moved 2026-09-20) 头部下分隔线。
+            //
+            // 位置很关键:它必须在**这一层**(body 容器内)、且排在 Flickable 与两条
+            // 渐隐条**之后** —— 与页脚那条线恒可见是同一个道理。页脚的线是 foot
+            // 自己的 border 顶边,foot 排在 body 之后绘制,所以谁也盖不住它。
+            //
+            // 之前它作为 close-body 的独立子元素、排在 body 容器**之前**,被容器里的
+            // 顶部渐隐条(不透明 panel-solid、与卡片底色同源,仅滚动后 visible)擦掉
+            // 墨量;上一轮给它加 z:1 **并没有解决**(用户复测仍消失)—— 布局子元素的
+            // z 在这里不可靠。改到本层之后,它就是最后绘制的元素,恒在最上。
+            //
+            // 高度仍用 1phx(物理像素):逻辑 1px 在 125% 缩放下跨两行光栅化,粗细
+            // 会随主题/缩放/展开态浮动(见 #hairline-phx)。
+            Rectangle {
+                y: 0px;
+                width: 100%;
+                height: 1phx;
+                background: Theme.dark ? Theme.line-2 : #b9b9c2;
+            }
         }
 
-        Rectangle {
-            width: 100%;
-            height: 1px;
-            background: Theme.border-control;
-        }
+        // (#foot-border3 2026-09-20) 布局里这条页脚顶分隔线已删:页脚顶线改由
+        // foot 自身的 border 顶边承担(见下),避免两条相邻 1px 叠成 2px。
 
         foot := Rectangle {
             width: 100%;
@@ -2703,16 +2744,16 @@ if root.draft-kind == "serial" : HorizontalLayout {
             // padding 与按钮高)。必须写死:dlg-card 的高度要用 foot.height 推算,
             // 若由布局算出来会构成 dlg-card.height -> layout-cache -> foot.height 的循环。
             height: 62px;
-            // (#hifi-v17) 页脚底 = 原型 .dlg-foot 的 --panel-hi(比内容面板亮半档)。
-            // (#dialog-border-lm 2026-09-20) 亮色 panel-hi 与白底几乎无区分,
-            // 页脚"消失"(实测);顶部加 1px 分隔线,亮色底色同时加深(theme)。
+            // (#foot-border3 2026-09-20) 页脚四边框由 foot **自身 border** 画:
+            //   · 顶边 = 页脚顶分隔线(与外框同色同宽,布局线已删,不再双线);
+            //   · 左/右/下与卡片 border 完全同几何、同色、重叠 —— 贴合无缝,
+            //     圆角弧线由两边同几何圆弧重叠承担(上一轮"内缩 1px 露缝"的
+            //     方案在亮色主题下缝可见,用户标注①②;叠画补线段则发粗,③);
+            //   · border 画在背景之上,panel-hi 底铺满也不遮线。
             background: Theme.panel-hi;
-            Rectangle {
-                x: 0; y: 0;
-                width: 100%;
-                height: 1px;
-                background: Theme.border-control;
-            }
+            // (#hairline-phx 2026-09-20) 同外框:1phx 物理像素,含顶线与两个底圆角。
+            border-width: 1phx;
+            border-color: Theme.dark ? Theme.line-2 : #b9b9c2;
             border-top-left-radius: 0px;
             border-top-right-radius: 0px;
             border-bottom-left-radius: Theme.radius-xl;
@@ -2723,6 +2764,12 @@ if root.draft-kind == "serial" : HorizontalLayout {
                 padding-top: 12px;
                 padding-bottom: 12px;
                 spacing: 10px;
+                // (#foot-btn3 2026-09-20) 左右分组:左组吃掉全部剩余空间(测试
+                // 连接靠左、状态信息居中),右组 stretch 0 只占内容宽 → 取消/
+                // 创建**贴右边框**(高保真 .dlg-foot:测试靠左、取消/创建靠右)。
+                HorizontalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 10px;
                 GhostButton {
                     btn-height: 38px;
                     btn-radius: 9px;
@@ -2730,10 +2777,14 @@ if root.draft-kind == "serial" : HorizontalLayout {
                     // (#hifi-test-icon 2026-09-19) wifi_tethering:波纹扩散,
                     // 呼应"测试连通性"。
                     glyph: "\u{EF48}";
+                    // (#foot-btn 2026-09-20) 内容宽,不再均分拉伸。
+                    horizontal-stretch: 0;
+                    btn-min-width: 0px;
+                    hug-width: true;
                     text: @tr("Test connection");
                     clicked => { root.try-test(); }
                 }
-                    Rectangle {
+                    status-box := Rectangle {
                         height: 38px;
                         horizontal-stretch: 1;
                         status-ta := TouchArea {
@@ -2744,55 +2795,126 @@ if root.draft-kind == "serial" : HorizontalLayout {
                         VerticalLayout {
                             alignment: center;
                             spacing: 1px;
-                            HorizontalLayout {
+                            status-row := HorizontalLayout {
+                                // (#foot-status-row 2026-09-20) 显式左对齐 + 明确谁吸空间。
+                                // 之前图标 Text 既没写 stretch 也没 id,布局把**剩余的
+                                // 空白全给了它** —— 于是图标与文字之间空出一大截
+                                // (用户截图:感叹号和错误文字离得很远)。现在图标锁
+                                // 0、文字拿 1:间距恒为 spacing,文字靠左、elide 生效。
+                                alignment: start;
                                 spacing: 6px;
-                                Text {
+                                status-ico := Text {
                                     visible: root.footer-status-icon() != "";
                                     text: root.footer-status-icon();
                                     font-family: "Material Icons";
                                     color: root.footer-status-color();
                                     font-size: Theme.fs-md;
                                     vertical-alignment: center;
+                                    horizontal-stretch: 0;
                                 }
                                 status-txt := Text {
                                     text: root.footer-status-text();
                                     color: root.footer-status-color();
                                     font-size: Theme.fs-sm;
                                     vertical-alignment: center;
+                                    horizontal-stretch: 1;
                                     overflow: elide;
-                                    max-width: 320px;
+                                    // (#foot-status-wide 2026-09-20) 原写死 max-width:320px
+                                    // 已删:它让错误文字在右侧还有一大片空白时就被省略。
+                                    // 现在宽度交给布局 —— 左组独占「测试连接 → 取消」
+                                    // 之间的全部空间(见下方 spacer 移除),文字能一路
+                                    // 顶到取消按钮左侧;真放不下时 elide,悬停出浮层。
                                 }
                             }
-                            // (#hifi-err-underline 2026-09-20) 悬浮错误信息时显示
-                            // 红色下划线 —— 宽度只到文字内在宽,且**不超过状态区
-                            // 可用宽**(文字被 elide 截断时 preferred-width 会大于
-                            // 显示宽,下划线超出文字,实测);旧版占满整段也过长。
-                            Rectangle {
-                                width: min(status-txt.preferred-width, 320px);
-                                height: 1px;
-                                visible: (root.host-missing || root.serial-missing) && status-ta.has-hover;
-                                background: Theme.danger;
+                        }
+                        // (#foot-status-underline-r2 2026-09-20) 下划线**移出
+                        // VerticalLayout** 改为绝对定位。原先它在布局流里且带显式
+                        // width,会向上传播钉住左组的 max-width(原 spacer 注释记的
+                        // 就是这个坑),反过来压住状态区能占的宽度;移出后既不反压,
+                        // 也能直接跟随文字组的实际显示宽(截断时不再超出文字)。
+                        Rectangle {
+                            // (#foot-status-underline-r3 2026-09-20) 宽度 = **图标 + 间隙 +
+                            // 文字实际显示宽**,与内容严格等长。
+                            // 上一版用的是 status-row.width —— 那是 HorizontalLayout 的
+                            // 容器宽(会被拉伸到整个状态区),所以下划线远长于文字
+                            // (用户截图)。文字若被 elide,取 min(preferred, width) 才是
+                            // 真正画出来的那一段。
+                            // 本矩形在布局之外(绝对定位),不反压上面的宽度计算。
+                            x: 0px;
+                            y: (status-box.height + status-row.height) / 2 + 1px;
+                            width: (root.footer-status-icon() == "" ? 0px : status-ico.width + 6px)
+                                + min(status-txt.preferred-width, status-txt.width);
+                            height: 1px;
+                            visible: (root.host-missing || root.serial-missing) && status-ta.has-hover;
+                            background: Theme.danger;
+                        }
+                        // (#foot-status-tip 2026-09-20) 文字被省略号截断时,悬停状态区
+                        // 浮出完整错误信息。宽度取状态区宽(上限 360px)以承载长句。
+                        // 气泡不带 TouchArea,不接收鼠标 → 指针移上去它照常消失,
+                        // 不会与状态区的 has-hover 互相触发形成抖动。
+                        if (root.host-missing || root.serial-missing)
+                            && status-ta.has-hover
+                            && status-txt.preferred-width > status-txt.width : Rectangle {
+                            x: 0px;
+                            y: -self.height - 8px;
+                            width: min(status-box.width, 360px);
+                            height: tip-txt.preferred-height + 14px;
+                            border-radius: Theme.radius-md;
+                            border-width: 1px;
+                            border-color: Theme.border-strong;
+                            background: Theme.popup-bg;
+                            drop-shadow-blur: 12px;
+                            drop-shadow-color: #000000a0;
+                            tip-txt := Text {
+                                x: 12px;
+                                y: 7px;
+                                width: parent.width - 24px;
+                                text: root.footer-status-text();
+                                color: Theme.text-primary;
+                                font-size: Theme.fs-sm;
+                                wrap: word-wrap;
                             }
                         }
                     }
+                }
+                // (#foot-spacer-removed 2026-09-20) 原 spacer(纯撑开块)已删。
+                // 它当年存在,是因为「状态区里那条错误下划线的显式 width 钉住了左组
+                // 的 max-width,左组吸不动剩余空间」。现在下划线已移出布局流(见状态
+                // 区注释),左组能正常吸满「测试连接 → 取消」之间的空间;留着 spacer
+                // 反而会和左组**平分**,把状态区挤到半宽 —— 用户实测错误文字过早被
+                // 省略号截断(#foot-status-wide)。
+                // 右组 stretch:0,左组吸满后它自然贴右,与原型 .dlg-foot 一致。
+                HorizontalLayout {
+                    horizontal-stretch: 0;
+                    spacing: 10px;
                 // (#hifi-v17) 页脚按钮 38px 高 / 9px 圆角,同原型 .btn。
                 GhostButton {
                     btn-height: 38px;
                     btn-radius: 9px;
                     dialog-chrome: true;
+                    // (#foot-btn 2026-09-20) 内容宽,不再均分拉伸。
+                    horizontal-stretch: 0;
+                    btn-min-width: 0px;
+                    hug-width: true;
                     text: @tr("Cancel");
                     clicked => { root.cancel(); }
                 }
                 PrimaryButton {
                     btn-height: 38px;
                     btn-radius: 9px;
+                    // (#foot-btn 2026-09-20) 按高保真 .btn 走内容宽:布局里不再
+                    // 均分拉伸(原三键被撑成等宽大按钮,把中间错误信息挤没)。
+                    horizontal-stretch: 0;
+                    btn-min-width: 0px;
+                    hug-width: true;
                     text: is-editing ? @tr("Save") : @tr("Create");
                     disabled: root.is-preview;
                     clicked => { root.try-submit(); }
                 }
+                }
             }
         }
-        }
+        }   // (#foot-border) VerticalLayout（弹框内容流）闭合
 
     }
 }

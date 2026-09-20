@@ -724,7 +724,14 @@ export component AppWindow inherits Window {
     callback win-maximize-toggle();
     callback win-close();
     callback win-drag();          // start an OS window-move
-    callback win-resize(int);     // start an OS resize; arg = direction code
+    // (#self-drawn-resize 2026-09-20) 无边框窗口自绘 resize:不再走 winit
+    // drag_resize_window 的 OS 模态循环——模态期间 Slint 不重绘,拖大时右侧/
+    // 底部露出窗口底色空白,松手才恢复(用户实测)。begin 上报方向(0N/1S/2E/
+    // 3W/4NE/5NW/6SE/7SW)与按下点(窗口内逻辑坐标),Rust 快照窗口位置/尺寸;
+    // move 每帧上报指针的窗口内坐标,Rust 换算屏幕坐标后逐帧
+    // set_position/set_size,拖动中 UI 实时跟手。
+    callback win-resize-begin(int /*dir*/, length /*grab-x*/, length /*grab-y*/);
+    callback win-resize-move(length /*pointer-x*/, length /*pointer-y*/);
     in-out property <bool> sidebar-collapsed: false; // left panel hidden
     // (#drag-stale-cancel 2026-09-07) 会话/组头拖拽活跃态与外部取消:
     // Rust 侧轮询发现左键已松(被截图等全局工具吃掉 up)时调用取消。
@@ -857,10 +864,8 @@ export component AppWindow inherits Window {
     // `true` while at least one transfer is active or preparing; drives the
     // breathing indicator on the toolbar Transfers button (#breathing-light).
     in-out property <bool> has-active-transfers: false;
-    // Start an OS resize from the bottom-right grip; mirrors ProcWindow so the
-    // main window gets the same visual affordance when the OS frame is hidden
-    // (custom-titlebar mode on Windows/Linux, #main-resize-grip).
-    callback win-resize-se();
+    // (#self-drawn-resize 2026-09-20) 右下 grip 改走自绘 resize(见
+    // win-resize-begin 注释),OS 模态路径已删。
     // Process monitor is now a detachable top-level window (ProcWindow). Rust
     // shows/hides it in response to open-processes(); proc-list/proc-available
     // stay here as the live data source shared with that window (#23).
@@ -3693,50 +3698,132 @@ export component AppWindow inherits Window {
         }
     }
 
-    // Frameless resize edges (#119): thin hit-zones that start an OS-level
-    // resize via winit. Hidden when maximized.
+    // Frameless resize edges (#119): thin hit-zones.
+    // (#self-drawn-resize 2026-09-20) 不再启动 OS 模态 resize(拖动中 Slint
+    // 不重绘,空白到松手);改为 begin 记方向+按下点、moved 逐帧上报指针的
+    // 窗口内坐标,由 Rust 逐帧 set_position/set_size。Hidden when maximized.
     if root.custom-titlebar && !root.window-maximized : Rectangle {
         width: 100%;
         height: 100%;
-        TouchArea {  // top
+        TouchArea {  // top (N)
             x: 8px; y: 0; width: parent.width - 16px; height: 5px;
             mouse-cursor: ns-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(0); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(0,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // bottom
+        TouchArea {  // bottom (S)
             x: 8px; y: parent.height - 5px; width: parent.width - 16px; height: 5px;
             mouse-cursor: ns-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(1); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(1,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // left
+        TouchArea {  // left (W)
             x: 0; y: 8px; width: 5px; height: parent.height - 16px;
             mouse-cursor: ew-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(3); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(3,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // right
+        TouchArea {  // right (E)
             x: parent.width - 5px; y: 8px; width: 5px; height: parent.height - 16px;
             mouse-cursor: ew-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(2); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(2,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // top-left
+        TouchArea {  // top-left (NW)
             x: 0; y: 0; width: 8px; height: 8px;
             mouse-cursor: nwse-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(5); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(5,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // top-right
+        TouchArea {  // top-right (NE)
             x: parent.width - 8px; y: 0; width: 8px; height: 8px;
             mouse-cursor: nesw-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(4); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(4,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // bottom-left
+        TouchArea {  // bottom-left (SW)
             x: 0; y: parent.height - 8px; width: 8px; height: 8px;
             mouse-cursor: nesw-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(7); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(7,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
-        TouchArea {  // bottom-right
+        TouchArea {  // bottom-right (SE)
             x: parent.width - 8px; y: parent.height - 8px; width: 8px; height: 8px;
             mouse-cursor: nwse-resize;
-            pointer-event(e) => { if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) { root.win-resize(6); } }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                    root.win-resize-begin(6,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
+                }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
+            }
         }
     }
 
@@ -5702,28 +5789,48 @@ export component AppWindow inherits Window {
             close-body := VerticalLayout {
                 spacing: 0;
 
-                // ---- ① 头部:标题 + ×(取消) ----
+                // ---- ① 头部:标题 + 说明 + ×(取消) ----
                 // (#close-dialog-lines 2026-09-18) 各段**固定整数高度**:
                 // 弹框垂直居中 + 1.25 UI 缩放会让 1px 分隔线落在不同亚像素相位,
                 // 一条清晰一条发糊(用户实测"上下两条横线粗细不一致")。段高恒定
                 // 后,两条线的 y 只差整数 → 同相位 → 粗细观感一致。
-                VerticalLayout {
-                    height: 74px;
+                //
+                // (#close-head-oneline 2026-09-20) 头部改**单行**:标题与说明同一行,
+                // 74px → 52px。原先说明独占一行占掉弹框 27%,而它只起"这里要选一下"
+                // 的引子作用 —— 卡片本身已把意思表达完。压成一行后弹框更紧凑,层级
+                // 仍然清晰(标题 15px/700 vs 说明 12px text-secondary)。
+                // 文案随之换短句:完整句「请选择这次关闭的行为。」在标题旁会显得啰嗦。
+                HorizontalLayout {
+                    height: 52px;
                     padding-left: 18px;
                     padding-right: 12px;
-                    padding-top: 14px;
-                    padding-bottom: 14px;
-                    spacing: 6px;
-                    HorizontalLayout {
-                        spacing: 10px;
-                        Text {
-                            text: root.lang-en ? "Close main window" : "关闭主窗口";
-                            color: Theme.text-primary;
-                            font-size: Theme.fs-lg;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
+                    spacing: 9px;
+                    // (#close-head-left 2026-09-20) **不要**在这里写 alignment:center。
+                    // HorizontalLayout 的 alignment 是**主轴(水平)**对齐:即便说明
+                    // 文本带了 horizontal-stretch:1,整组「标题+说明+×」仍会被推到
+                    // 弹框正中,标题与左侧脱开(用户截图)。去掉后按声明顺序左排,
+                    // 说明吸收剩余空间、× 自然贴右。
+                    Text {
+                        text: root.lang-en ? "Close main window" : "关闭主窗口";
+                        color: Theme.text-primary;
+                        font-size: Theme.fs-lg;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.lang-en ? "Choose how to close" : "选择关闭方式";
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-sm;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    // (#close-head-valign 2026-09-20) × 要包一层 VerticalLayout 才能垂直居中。
+                    // HorizontalLayout 只会把**没有固定尺寸**的子元素拉伸到满高(标题 / 说明
+                    // 那种),26px 固定高的按钮会被留在行的起始位置 —— 实测表现为"× 比标题
+                    // 高一截"。套一层带 alignment: center 的竖直布局即可对齐。
+                    VerticalLayout {
+                        alignment: center;
                         close-x := Rectangle {
                             width: 26px;
                             height: 26px;
@@ -5744,28 +5851,14 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
-                    Text {
-                        text: root.close-sessions.length == 0
-                            ? (root.lang-en
-                                ? "No active sessions. Choose what closing should do."
-                                : "当前没有活动会话，请选择关闭后的行为。")
-                            : (root.lang-en
-                                ? "There " + (root.close-sessions.length == 1 ? "is" : "are")
-                                    + " " + root.close-sessions.length + " active session"
-                                    + (root.close-sessions.length == 1 ? "" : "s")
-                                    + ", choose what closing should do."
-                                : "当前有 " + root.close-sessions.length + " 个活动会话，请选择关闭后的行为。");
-                        color: Theme.text-secondary;
-                        font-size: Theme.fs-sm;
-                        wrap: word-wrap;
-                    }
                 }
                 Rectangle { height: 1px; background: Theme.border-subtle; }
 
                 // ---- ② 关闭行为:卡片即操作 ----
                 VerticalLayout {
                     // (#close-dialog-lines) 固定段高,见头部注释。
-                    height: 134px;
+                    // 140 = 14 + 勾选行 18 + 间隙 12 + 卡片 82 + 14
+                    height: 140px;
                     padding-left: 18px; padding-right: 18px;
                     padding-top: 14px; padding-bottom: 14px;
                     spacing: 12px;
@@ -5809,7 +5902,14 @@ export component AppWindow inherits Window {
                         // 最小化到托盘 ── 非破坏性:hover 走 accent
                         tray-card := Rectangle {
                             horizontal-stretch: 1;
-                            height: 74px;
+                            // (#close-cards-equal 2026-09-20) 两张卡必须**等宽**。只靠
+                            // horizontal-stretch:1 做不到 —— 布局按"preferred + 均分
+                            // 剩余"分配,文案更长的「最小化到托盘」会比「完全退出」宽出
+                            // 约 16px(用户截图肉眼可见)。给两张卡同一个 min-width,
+                            // 而它恰好等于可用宽的一半(min 已占满),布局没有剩余可偏向,
+                            // 于是强制等宽。parent 是外层 HorizontalLayout。
+                            min-width: (parent.width - 10px) / 2;
+                            height: 82px;
                             border-radius: Theme.radius-md;
                             border-width: 1px;
                             border-color: tray-ta.has-hover ? Theme.accent : Theme.border-subtle;
@@ -5847,7 +5947,7 @@ export component AppWindow inherits Window {
                                     // 语义"最小化到托盘保持后台运行"(原齿轮图标语义不符)。
                                     text: "\u{E882}";
                                     font-family: "Material Icons";
-                                    font-size: 20px;
+                                    font-size: 22px;
                                     color: tray-ta.has-hover ? Theme.accent : Theme.text-secondary;
                                     horizontal-alignment: center;
                                 }
@@ -5859,7 +5959,12 @@ export component AppWindow inherits Window {
                                     horizontal-alignment: center;
                                 }
                                 Text {
-                                    text: root.lang-en ? "Keeps running" : "保持后台运行";
+                                    // (#close-card-count 2026-09-20) 会话数写在**会导致
+                                    // 丢失的那张卡片**的副标签上:原先靠下方的「活动会话」
+                                    // 列表段承载,那段与头部文案重复、又把弹框拉成四段拼盘。
+                                    text: root.close-sessions.length > 0
+                                        ? @tr("Keeps {0} connections", root.close-sessions.length)
+                                        : (root.lang-en ? "Keeps running" : "保持后台运行");
                                     color: Theme.text-muted;
                                     font-size: Theme.fs-xs;
                                     horizontal-alignment: center;
@@ -5870,7 +5975,9 @@ export component AppWindow inherits Window {
                         // 完全退出 ── 破坏性:hover 变红(去掉主按钮后的预警承担者)
                         exit-card := Rectangle {
                             horizontal-stretch: 1;
-                            height: 74px;
+                            // 同 tray-card:等宽,见上方注释。
+                            min-width: (parent.width - 10px) / 2;
+                            height: 82px;
                             border-radius: Theme.radius-md;
                             border-width: 1px;
                             border-color: exit-ta.has-hover ? Theme.close-red : Theme.border-subtle;
@@ -5908,7 +6015,7 @@ export component AppWindow inherits Window {
                                     // "完全退出"的通用语义图标(原 E8D5 语义不明)。
                                     text: "\u{E8AC}";
                                     font-family: "Material Icons";
-                                    font-size: 20px;
+                                    font-size: 22px;
                                     color: exit-ta.has-hover ? Theme.close-red : Theme.text-secondary;
                                     horizontal-alignment: center;
                                 }
@@ -5920,105 +6027,25 @@ export component AppWindow inherits Window {
                                     horizontal-alignment: center;
                                 }
                                 Text {
-                                    text: root.lang-en ? "Disconnects all" : "断开所有连接";
+                                    // 同上:把"会断开什么"写在会导致断开的这张卡上。
+                                    text: root.close-sessions.length > 0
+                                        ? @tr("Closes {0} connections", root.close-sessions.length)
+                                        : (root.lang-en ? "Closes the app" : "关闭应用");
                                     color: Theme.text-muted;
                                     font-size: Theme.fs-xs;
                                     horizontal-alignment: center;
                                 }
                             }
-                        }
-                    }
-                }
-                // ---- ③ 活动会话:无会话时整段隐藏 ----
-                if root.close-sessions.length > 0 : VerticalLayout {
-                    Rectangle { height: 1px; background: Theme.border-subtle; }
-                    VerticalLayout {
-                        padding-left: 18px; padding-right: 18px;
-                        padding-top: 14px; padding-bottom: 14px;
-                        spacing: 8px;
-                        HorizontalLayout {
-                            spacing: 6px;
-                            Text {
-                                text: root.lang-en ? "Active sessions" : "活动会话";
-                                color: Theme.text-secondary;
-                                font-size: Theme.fs-xs;
-                                vertical-alignment: center;
-                            }
-                            Rectangle {
-                                width: 22px; height: 15px;
-                                border-radius: 8px;
-                                background: Theme.bg-elevated;
-                                Text {
-                                    text: root.close-sessions.length;
-                                    color: Theme.text-muted;
-                                    font-size: 10px;
-                                    font-weight: 600;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-                            Text {
-                                text: root.close-sessions.length > 4
-                                    ? (root.lang-en ? "scroll for all" : "滚动查看全部")
-                                    : "";
-                                color: Theme.text-muted;
-                                font-size: 10px;
-                                vertical-alignment: center;
-                                horizontal-stretch: 1;
-                                horizontal-alignment: right;
-                            }
-                        }
-                        // 超过约 4 行(4×27px)时容器内滚动,不撑高卡片
-                        Rectangle {
-                            height: min(4 * 27px, root.close-sessions.length * 27px);
-                            border-radius: Theme.radius-sm;
-                            border-width: 1px;
-                            border-color: Theme.border-subtle;
-                            background: Theme.bg-root;
-                            clip: true;
-                            sess-scroll := ScrollView {
-                                x: 1px; y: 1px;
-                                width: parent.width - 2px;
-                                height: parent.height - 2px;
-                                viewport-width: self.visible-width;
-                                viewport-height: max(self.visible-height,
-                                                     root.close-sessions.length * 27px);
-                                VerticalLayout {
-                                    width: sess-scroll.visible-width;
-                                    for row in root.close-sessions : Rectangle {
-                                        height: 27px;
-                                        HorizontalLayout {
-                                            padding-left: 10px;
-                                            padding-right: 10px;
-                                            spacing: 8px;
-                                            Rectangle {
-                                                width: 7px; height: 7px;
-                                                border-radius: 4px;
-                                                background: Theme.success;
-                                                // 圆点在行内垂直居中由父级 HL 的 alignment 负责
-                                            }
-                                            Text {
-                                                text: row.name;
-                                                color: Theme.text-primary;
-                                                font-size: Theme.fs-sm;
-                                                font-weight: 600;
-                                                vertical-alignment: center;
-                                                overflow: elide;
-                                            }
-                                            Text {
-                                                text: row.host;
-                                                color: Theme.text-muted;
-                                                font-family: Theme.font-mono;
-                                                font-size: Theme.fs-xs;
-                                                vertical-alignment: center;
-                                                horizontal-stretch: 1;
-                                                horizontal-alignment: right;
-                                                overflow: elide;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            // (#close-focus-scope-removed 2026-09-20) 这里原有一个
+                            // exit-focus := FocusScope,用来给「完全退出」补键盘聚焦态。
+                            // **已移除**:FocusScope 被点击时会自己去获取焦点、把这一击
+                            // 消费掉 —— 于是第一次点卡片到不了下面那个 TouchArea,
+                            // 表现为"点一次没反应、点第二次才退出"(用户实测:第一下
+                            // 连卡片都不关,hover 却正常)。
+                            // 危险预警仍由 hover 承担(卡片的红边)。
+                            // TODO(#close-focus-visible):若要恢复键盘聚焦态,需要找
+                            // 一种不消费点击的写法(例如把 FocusScope 尺寸压到 0 后再
+                            // 单独处理 Tab),不能直接盖在卡片上。
                         }
                     }
                 }
@@ -6038,6 +6065,14 @@ export component AppWindow inherits Window {
                         horizontal-stretch: 1;
                     }
                     GhostButton {
+                        // (#close-cancel-width 2026-09-20) 走内容宽。不传这两个参
+                        // 数时 GhostButton 用默认 min-width:80px / max-width:100000px,
+                        // 而底部布局里没有别的 stretch 元素 → 剩余空间被它吃掉,
+                        // 「取消」被撑成一条横贯右半边的长条(用户截图)。
+                        // 与 session_dialog 页脚的两颗按钮写法保持一致。
+                        horizontal-stretch: 0;
+                        btn-min-width: 0px;
+                        hug-width: true;
                         text: root.lang-en ? "Cancel" : "取消";
                         clicked => { root.confirm-close-open = false; }
                     }
@@ -6968,7 +7003,9 @@ export component AppWindow inherits Window {
     // same visual affordance + drag-resize behavior when the OS title bar is
     // hidden (custom-titlebar mode). Only rendered in frameless mode; otherwise
     // the OS frame already provides this corner.
-    if root.custom-titlebar : Rectangle {
+    // (#self-drawn-resize 2026-09-20) 改自绘 resize(dir=6 SE),拖动中 UI 实时
+    // 跟手;最大化下不响应(与边缘热区一致)。
+    if root.custom-titlebar && !root.window-maximized : Rectangle {
         width: 16px;
         height: 16px;
         x: root.width - self.width;
@@ -6977,8 +7014,14 @@ export component AppWindow inherits Window {
             mouse-cursor: nwse-resize;
             pointer-event(e) => {
                 if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
-                    root.win-resize-se();
+                    root.win-resize-begin(6,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y);
                 }
+            }
+            moved => {
+                root.win-resize-move(self.absolute-position.x + self.mouse-x,
+                                     self.absolute-position.y + self.mouse-y);
             }
         }
         // Classic dotted resize grip (a diagonal of 2px dots, bottom-right).

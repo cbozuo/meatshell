@@ -945,3 +945,11 @@ msgstr "隐藏高级选项"
 
 msgid "automatically send the saved password"
 msgstr "自动发送保存的密码"
+
+# (#close-card-count 2026-09-20) 关闭卡的会话数副标签
+msgid "Keeps {0} connections"
+msgstr "保持 {0} 个连接"
+
+msgid "Closes {0} connections"
+msgstr "断开 {0} 个连接"
+

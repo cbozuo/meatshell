@@ -296,7 +296,7 @@ impl WindowCloser {
     }
 }
 
-/// (#close-behavior) 关闭确认卡第③段的会话清单。
+/// (#close-behavior) 关闭确认卡的会话清单(供「保持 N 个连接 / 断开 N 个连接」计数)。
 ///
 /// 按**会话**去重(同一条会话可能开了多个标签页),只列仍在运行的会话;
 /// 主机串优先给 `user@host:port`,本地会话(无 host)退回会话名。
@@ -317,7 +317,12 @@ fn close_session_rows(
         if seen.iter().any(|s| s == tab.session_id.as_str()) {
             continue;
         }
-        if !handles.borrow().contains_key(tab.session_id.as_str()) {
+        // (#close-rows-key-fix 2026-09-20) 这里必须用 **tab.id** 查 handles ——
+        // handles 的 key 是 tab_id(见 session_runtime.rs 的 `insert(tab_id, handle)`,
+        // teardown 也按 tab_id remove)。原先误用 session_id,`contains_key` 恒为
+        // false → rows 恒空:关闭确认卡上的会话数永远走 0 会话分支(用户实测)。
+        // 去重仍按 session_id —— 同一条会话可能开了多个标签页,只该列一次。
+        if !handles.borrow().contains_key(tab.id.as_str()) {
             continue;
         }
         seen.push(tab.session_id.to_string());
@@ -428,6 +433,31 @@ fn minimize_to_tray(win: &AppWindow) {
     }
     tracing::info!("close: tray ok, hiding window (event loop keeps running)");
     let _ = win.hide();
+}
+
+/// (#self-drawn-resize 2026-09-20) 进行中的自绘 resize 拖拽快照。
+///
+/// 无边框主窗口的 resize 不再走 winit `drag_resize_window` 的 OS 模态循环
+/// (模态期间 Slint 不重绘,拖大时右/底部露出窗口底色空白、松手才恢复,
+/// 用户实测)。改为:UI 按下时上报方向与按下点(窗口内逻辑坐标),这里快照
+/// 窗口物理位置/尺寸;拖动中每帧收到指针的窗口内坐标,换算成屏幕坐标后按
+/// 方向分量算新尺寸(含 N/W 时同时平移窗口、让对侧缘固定),逐帧
+/// set_position/set_size —— Slint 每帧重排重绘,拖动中 UI 实时跟手。
+///
+/// dir 编码与 UI 一致:0N / 1S / 2E / 3W / 4NE / 5NW / 6SE / 7SW。
+#[derive(Clone, Copy)]
+struct ResizeDrag {
+    dir: i32,
+    /// begin 时的窗口物理位置(左上角)。
+    pos: (i32, i32),
+    /// begin 时的窗口物理尺寸。
+    size: (u32, u32),
+    /// 按下点相对窗口左上角的逻辑坐标。
+    grab: (f32, f32),
+}
+
+thread_local! {
+    static RESIZE_DRAG: RefCell<Option<ResizeDrag>> = const { RefCell::new(None) };
 }
 
 /// Tear down one window's workers (SSH + SFTP) and hide its detachable
@@ -1010,19 +1040,85 @@ fn open_window(
         });
     }
     {
-        // Bottom-right resize grip on the main window (frameless mode only).
-        // #main-resize-grip: mirrors proc_window's grip so the main window
-        // gets the same OS-drag-resize-from-corner behavior when the OS title
-        // bar is hidden (custom-titlebar mode on Windows/Linux).
-        use i_slint_backend_winit::winit::window::ResizeDirection;
+        // (#self-drawn-resize 2026-09-20) 自绘 resize·begin:快照窗口物理
+        // 位置/尺寸 + 按下点(窗口内逻辑坐标)。方向编码见 RESIZE_DRAG。
         let weak = window.as_weak();
-        window.on_win_resize_se(move || {
-            if let Some(w) = weak.upgrade() {
-                w.window().with_winit_window(|ww| {
-                    let _ = ww.drag_resize_window(ResizeDirection::SouthEast);
+        window.on_win_resize_begin(move |dir: i32, grab_x: f32, grab_y: f32| {
+            let Some(w) = weak.upgrade() else { return };
+            let snap = w
+                .window()
+                .with_winit_window(|ww| {
+                    ww.outer_position().ok().map(|pos| (pos, ww.outer_size()))
+                })
+                .flatten();
+            let Some((pos, size)) = snap else { return };
+            RESIZE_DRAG.with(|slot| {
+                *slot.borrow_mut() = Some(ResizeDrag {
+                    dir,
+                    pos: (pos.x, pos.y),
+                    size: (size.width, size.height),
+                    grab: (grab_x, grab_y),
                 });
-                schedule_slint_pointer_ungrab(weak.clone());
+            });
+        });
+    }
+    {
+        // (#self-drawn-resize 2026-09-20) 自绘 resize·move:每帧把指针的
+        // 窗口内逻辑坐标换算成屏幕坐标,按方向分量推出新尺寸;含 N/W 时
+        // 对应轴同时平移窗口(顶/左缘贴指针、对侧缘固定)。最小尺寸对齐
+        // AppWindow 的 min-width/min-height(720×420)。
+        let weak = window.as_weak();
+        window.on_win_resize_move(move |cur_x: f32, cur_y: f32| {
+            let Some(w) = weak.upgrade() else { return };
+            let Some(drag) = RESIZE_DRAG.with(|slot| slot.borrow().as_ref().copied())
+            else {
+                return;
+            };
+            let scale = w.window().scale_factor().max(0.01);
+            let pos = w
+                .window()
+                .with_winit_window(|ww| ww.outer_position().ok())
+                .flatten();
+            let Some(pos) = pos else { return };
+            let px = pos.x as f32 / scale + cur_x;
+            let py = pos.y as f32 / scale + cur_y;
+            let bx = drag.pos.0 as f32 / scale;
+            let by = drag.pos.1 as f32 / scale;
+            let bw = drag.size.0 as f32 / scale;
+            let bh = drag.size.1 as f32 / scale;
+            let gx = bx + drag.grab.0; // 按下点的屏幕逻辑坐标
+            let gy = by + drag.grab.1;
+            let east = matches!(drag.dir, 2 | 4 | 6);
+            let west = matches!(drag.dir, 3 | 5 | 7);
+            let north = matches!(drag.dir, 0 | 4 | 5);
+            let south = matches!(drag.dir, 1 | 6 | 7);
+            let mut new_w = bw;
+            let mut new_h = bh;
+            if east {
+                new_w = px - bx;
+            } else if west {
+                new_w = gx - px + bw;
             }
+            if south {
+                new_h = py - by;
+            } else if north {
+                new_h = gy - py + bh;
+            }
+            new_w = new_w.max(720.0);
+            new_h = new_h.max(420.0);
+            let mut new_x = drag.pos.0;
+            let mut new_y = drag.pos.1;
+            if west {
+                new_x = drag.pos.0 + drag.size.0 as i32 - (new_w * scale).round() as i32;
+            }
+            if north {
+                new_y = drag.pos.1 + drag.size.1 as i32 - (new_h * scale).round() as i32;
+            }
+            if west || north {
+                w.window()
+                    .set_position(slint::PhysicalPosition::new(new_x, new_y));
+            }
+            w.window().set_size(slint::LogicalSize::new(new_w, new_h));
         });
     }
     {
@@ -3506,28 +3602,6 @@ fn open_window(
             if let Some(w) = weak.upgrade() {
                 w.window().with_winit_window(|ww| {
                     let _ = ww.drag_window();
-                });
-                schedule_slint_pointer_ungrab(weak.clone());
-            }
-        });
-    }
-    {
-        use i_slint_backend_winit::winit::window::ResizeDirection;
-        let weak = window.as_weak();
-        window.on_win_resize(move |dir: i32| {
-            if let Some(w) = weak.upgrade() {
-                let d = match dir {
-                    0 => ResizeDirection::North,
-                    1 => ResizeDirection::South,
-                    2 => ResizeDirection::East,
-                    3 => ResizeDirection::West,
-                    4 => ResizeDirection::NorthEast,
-                    5 => ResizeDirection::NorthWest,
-                    6 => ResizeDirection::SouthEast,
-                    _ => ResizeDirection::SouthWest,
-                };
-                w.window().with_winit_window(|ww| {
-                    let _ = ww.drag_resize_window(d);
                 });
                 schedule_slint_pointer_ungrab(weak.clone());
             }
