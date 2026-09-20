@@ -5010,37 +5010,51 @@ fn wire_session_callbacks(
     // 读作"改色没生效"(高保真 v3 ⑤ 定稿:改色后 列表/页签/菜单 同帧刷新)。
     // 取色面板(on_set_group_color)与对话框提交(on_submit_group)两条路径
     // 都要跑;会话已不存在的页签保持原样。
-    fn refresh_tab_group_colors(store: &ConfigStore, tabs_model: &Rc<VecModel<TabInfo>>) {
+    //
+    // (#group-color-live-tab 2026-09-20) 页签条渲染的是 pane.tabs ——
+    // refresh_panes 构建的每 pane 快照子模型,不是 tabs_model 本身(同
+    // on_rename_tab 的双写):全局 model 改完必须就地同步各 pane 子模型,
+    // 否则已打开页签的竖条停在旧色,直到该 pane 下次开/关 tab 才被重建带走。
+    fn refresh_tab_group_colors(
+        store: &ConfigStore,
+        tabs_model: &Rc<VecModel<TabInfo>>,
+        panes_model: &Rc<VecModel<PaneInfo>>,
+    ) {
         // 本地终端(PowerShell/CMD)是运行时生成的 builtin,不在 store.sessions()
         // 里 —— 页签颜色按"内建身份 = system 组"查色,同样要被刷新覆盖。
         let builtins = session_models::builtin_local_sessions(store.wsl_profiles());
-        for i in 0..tabs_model.row_count() {
-            let Some(tab) = tabs_model.row_data(i) else { continue };
-            if tab.session_id.is_empty() {
-                continue;
-            }
+        let lookup = |session_id: &str| -> (slint::Color, String) {
             let session = store
                 .sessions()
                 .iter()
-                .find(|sess| sess.id == tab.session_id.as_str())
+                .find(|sess| sess.id == session_id)
                 .cloned()
-                .or_else(|| {
-                    builtins
-                        .iter()
-                        .find(|b| b.id == tab.session_id.as_str())
-                        .cloned()
-                });
-            let (gc, gc_hex) = match session.as_ref() {
+                .or_else(|| builtins.iter().find(|b| b.id == session_id).cloned());
+            match session.as_ref() {
                 Some(session) => tab_group_color(store, session),
                 // 会话已不存在:清掉色条,避免残留旧组色。
                 None => (slint::Color::default(), String::new()),
-            };
-            if tab.group_color_hex.as_str() != gc_hex.as_str() {
-                let mut updated = tab.clone();
-                updated.group_color_hex = gc_hex.as_str().into();
-                updated.group_color = gc;
-                tabs_model.set_row_data(i, updated);
             }
+        };
+        let apply = |tabs: &ModelRc<TabInfo>| {
+            for i in 0..tabs.row_count() {
+                let Some(tab) = tabs.row_data(i) else { continue };
+                if tab.session_id.is_empty() {
+                    continue;
+                }
+                let (gc, gc_hex) = lookup(tab.session_id.as_str());
+                if tab.group_color_hex.as_str() != gc_hex.as_str() {
+                    let mut updated = tab.clone();
+                    updated.group_color_hex = gc_hex.as_str().into();
+                    updated.group_color = gc;
+                    tabs.set_row_data(i, updated);
+                }
+            }
+        };
+        apply(&ModelRc::from(tabs_model.clone()));
+        for pi in 0..panes_model.row_count() {
+            let Some(pane) = panes_model.row_data(pi) else { continue };
+            apply(&pane.tabs);
         }
     }
     {
@@ -5049,6 +5063,7 @@ fn wire_session_callbacks(
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
         let tabs_model = tabs_model.clone();
+        let panes_model = panes_model.clone();
         window.on_set_group_color(move |name: SharedString, hex: SharedString| {
             let raw = hex.trim();
             // 非法输入直接忽略(输入框是自由文本,允许用户打到一半)。
@@ -5071,7 +5086,7 @@ fn wire_session_callbacks(
             sync_sessions_for_window(&weak, &store.borrow(), &sessions_model);
             registry.broadcast_config_changed();
             // (#group-color-live-tab) 页签竖条同步换色(见上方函数注释)。
-            refresh_tab_group_colors(&store.borrow(), &tabs_model);
+            refresh_tab_group_colors(&store.borrow(), &tabs_model, &panes_model);
             if let Some(w) = weak.upgrade() {
                 let _ = w.get_sessions();
                 // 菜单项右侧小色块 + 面板顶栏都读这两个:提交后立即同步,
@@ -5089,6 +5104,7 @@ fn wire_session_callbacks(
         let sessions_model = sessions_model.clone();
         let registry = registry.clone();
         let tabs_model = tabs_model.clone();
+        let panes_model = panes_model.clone();
         window.on_resolve_color(move |hex: SharedString| -> slint::Color {
             parse_hex_color(hex.trim()).unwrap_or_default()
         });
@@ -5145,7 +5161,7 @@ fn wire_session_callbacks(
             registry.broadcast_config_changed();
             // (#group-color-live-tab) 对话框提交(新建设色/改名覆盖/清除)同样
             // 要让已打开页签的竖条同步换色。
-            refresh_tab_group_colors(&store.borrow(), &tabs_model);
+            refresh_tab_group_colors(&store.borrow(), &tabs_model, &panes_model);
             if let Some(w) = weak.upgrade() {
                 let _ = w.get_sessions();
                 w.set_ctx_menu_group_color(parse_hex_color(&final_hex).unwrap_or_default());
@@ -6039,8 +6055,10 @@ fn tabs_eq(a: &ModelRc<TabInfo>, b: &ModelRc<TabInfo>) -> bool {
     if a.row_count() != b.row_count() {
         return false;
     }
+    // (#group-color-live-tab) 色值也参与相等判断:否则改组色后 pane 的 tab-id
+    // 序列未变,refresh_panes 会复用携带旧色的子模型。
     (0..a.row_count()).all(|i| match (a.row_data(i), b.row_data(i)) {
-        (Some(x), Some(y)) => x.id == y.id,
+        (Some(x), Some(y)) => x.id == y.id && x.group_color_hex == y.group_color_hex,
         _ => false,
     })
 }
