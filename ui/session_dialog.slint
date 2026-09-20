@@ -488,6 +488,8 @@ component ProtoSelect inherits VerticalLayout {
 
 
 component EmptyAddButton inherits Rectangle {
+    // (#empty-add-solid 2026-09-21) 设计稿 .empty-add 是 1px dashed,但 Slint
+    // Rectangle 边框无虚线样式,实线为定稿偏差(用户确认保持);勿再当 bug 报。
     in property <string> label;
     callback clicked();
     height: 42px;
@@ -2638,9 +2640,13 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                         HorizontalLayout {
                                             spacing: 4px;
                                             tr-code1 := Text {
+                                                // (#hint-quote-cjk-font 2026-09-21) 不能给这段
+                                                // 挂 font-mono:内嵌 Meatshell Mono 无 CJK 字形,
+                                                // Slint 对夹在拉丁词中的孤立 CJK 标点(「」)回退
+                                                // 失败直接丢字(#54 同因,见 terminal_view CJK span)。
+                                                // 设计稿此处也是整句 UI 字体,无 mono。
                                                 text: "「password:」";
                                                 color: Theme.accent;
-                                                font-family: Theme.font-mono;
                                                 font-size: Theme.fs-xs;
                                                 vertical-alignment: center;
                                             }
@@ -2699,19 +2705,25 @@ if root.draft-kind == "serial" : HorizontalLayout {
                 // (#head-line-over-fade) 再让出 1 个物理像素:即便 z 已把头部线抬到
                 // 上层,错开相位能让缩放取整时二者彻底不争同一条设备像素行。
                 // body 的 padding-top 是 16px,这 1px 内没有内容,且两色相同,看不出。
+                // (#fade-visible-fix 2026-09-21) viewport-y 被引擎钳在
+                // [height-viewport-height, 0],向下滚动变负 —— 原条件 `> 0px` 恒
+                // 假,这条顶部雾化自引入起从未显示过。
                 y: 1phx;
                 x: 20px;
                 width: parent.width - 40px;
                 height: 18px;
-                visible: body-flick.viewport-y > 0px;
+                visible: body-flick.viewport-y < 0px;
                 background: @linear-gradient(180deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
             Rectangle {
+                // (#fade-visible-fix 2026-09-21) 原条件阈值是正数,可滚动时恒真、
+                // 滚到底也不消失(内容底线被永久罩雾)。改为"未滚到底"的正确
+                // 判定:viewport-y 仍大于其最小值 height-viewport-height。
                 y: parent.height - 18px;
                 x: 20px;
                 width: parent.width - 40px;
                 height: 18px;
-                visible: body-flick.viewport-y < body.preferred-height - body-flick.height;
+                visible: body-flick.viewport-y > body-flick.height - body.preferred-height;
                 background: @linear-gradient(0deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
             // (#head-line-moved 2026-09-20) 头部下分隔线。
