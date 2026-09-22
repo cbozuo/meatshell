@@ -20,7 +20,8 @@
 pub(crate) enum TrayAction {
     /// 用户要回主窗口(左键单击,或菜单「显示」)
     Show,
-    /// 右键:在光标处打开自绘菜单。坐标是屏幕物理像素(`GetCursorPos`)。
+    /// 右键:打开自绘菜单。坐标是弹出锚点(托盘图标矩形的左缘/顶缘,屏幕
+    /// 物理像素;`Shell_NotifyIconGetRect` 现查,菜单锚定其右上方向)。
     OpenMenu { x: i32, y: i32 },
 }
 
@@ -102,6 +103,20 @@ impl Tray {
     }
 }
 
+/// (#tray-click-pos 2026-09-23) `GetMessagePos()` 返回值 → 屏幕物理坐标
+/// (x, y)。低 16 位 = x、高 16 位 = y,都必须按**有符号**解释:虚拟桌面
+/// 坐标系下副屏在主屏左侧/上方时坐标为负。
+#[cfg(windows)]
+fn split_message_pos(pos: u32) -> (i32, i32) {
+    let x = (pos & 0xffff) as u16 as i16 as i32;
+    let y = (pos >> 16) as u16 as i16 as i32;
+    (x, y)
+}
+
+#[cfg(test)]
+#[path = "../../tests/app/tray/mod.rs"]
+mod tray_tests;
+
 // ======================================================================
 // Windows 实现
 // ======================================================================
@@ -110,24 +125,27 @@ mod win {
     use super::{TrayAction, TraySink};
     use std::cell::{Cell, RefCell};
     use std::mem::size_of;
-    use windows::core::{w, PCWSTR};
-    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::core::{w, GUID, PCWSTR};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-        NOTIFYICONDATAW,
+        Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
+        NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
-        GetSystemMetrics, GetWindowRect, HHOOK, LoadImageW, MSLLHOOKSTRUCT, RegisterClassW,
-        RegisterWindowMessageW, SetWindowsHookExW, UnhookWindowsHookEx, WH_MOUSE_LL,
-        CW_USEDEFAULT, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, LR_DEFAULTSIZE,
-        LR_SHARED, SM_CXSMICON, SM_CYSMICON, WM_APP, WM_CONTEXTMENU, WM_DESTROY,
-        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetMessagePos,
+        GetSystemMetrics, GetWindowRect, HHOOK, LoadImageW, MSLLHOOKSTRUCT, PostMessageW,
+        RegisterClassW, RegisterWindowMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+        WH_MOUSE_LL, CW_USEDEFAULT, HICON, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR,
+        LR_DEFAULTSIZE, LR_SHARED, SM_CXSMICON, SM_CYSMICON, WM_APP, WM_CONTEXTMENU,
+        WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP,
         WNDCLASSW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
     };
     /// 托盘回调消息(自定义区起始值);winit 的消息循环会派发到 wnd_proc。
     const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
+    /// (#tray-dismiss-msg 2026-09-23) 点外收起派发消息:低级鼠标钩子只 Post 它,
+    /// hide 链路在宿主窗口的正常消息上下文执行(见 menu_hook_proc / wnd_proc)。
+    const WM_TRAY_DISMISS: u32 = WM_APP + 2;
     /// `NOTIFYICONDATAW.szTip` 声明长度。
     const TIP_LEN: usize = 128;
 
@@ -354,6 +372,14 @@ mod win {
                 }
                 LRESULT(0)
             }
+            WM_TRAY_DISMISS => {
+                // (#tray-dismiss-msg 2026-09-23) 点外收起的执行点:低级鼠标钩子
+                // 只 Post 本消息,hide 链路(Slint 窗口 hide + Timer)在这里的
+                // 正常消息上下文跑,不占钩子回调的超时预算。
+                tracing::info!("tray: dismiss message received");
+                super::super::hide_tray_flyout();
+                LRESULT(0)
+            }
             msg if msg == taskbar_created_msg() => {
                 // (#tray-show-fix 2026-09-19) Explorer 重启后任务栏重建:
                 // 重新注册图标(同 hWnd+uID 的 ADD 是幂等更新)。
@@ -366,13 +392,46 @@ mod win {
         }
     }
 
-    /// 右键:把光标坐标交给 `app.rs` 弹出自绘菜单。
+    /// 右键:把弹出锚点交给 `app.rs` 弹出自绘菜单。
     ///
     /// 不再调用 `TrackPopupMenu` —— 原生菜单画不出每项图标,也不能 hug 内容宽度。
-    unsafe fn show_menu(_hwnd: HWND) {
-        let mut pt = POINT::default();
-        let _ = GetCursorPos(&mut pt);
-        emit(TrayAction::OpenMenu { x: pt.x, y: pt.y });
+    ///
+    /// (#tray-click-pos 2026-09-23 → #tray-icon-rect) 锚点来源的第二次修正:
+    /// `GetCursorPos` 是消息**处理时刻**的光标(主线程忙时漂移);`GetMessagePos`
+    /// 也不可靠 —— 托盘回调是 Explorer **PostMessage 投递的 posted 消息,不携带
+    /// 点击位置**,GetMessagePos 返回线程的陈旧输入记录(实测:连续「别处左击 →
+    /// 右击图标」菜单弹回上一次左击处,place x 与点外记录 4/4 吻合)。最终改用
+    /// **Shell_NotifyIconGetRect**:向系统现查托盘图标矩形(右击必落在图标上,
+    /// 锚定图标左缘/顶缘向右上展开,与点击点语义一致),完全确定性;查询失败或
+    /// 矩形异常时回落 GetMessagePos 兜底。
+    unsafe fn show_menu(hwnd: HWND) {
+        let nid = NOTIFYICONIDENTIFIER {
+            cbSize: size_of::<NOTIFYICONIDENTIFIER>() as u32,
+            hWnd: hwnd,
+            uID: 1,
+            guidItem: GUID::default(),
+        };
+        if let Ok(rect) = Shell_NotifyIconGetRect(&nid) {
+            let valid = rect.right > rect.left && rect.bottom > rect.top;
+            tracing::info!(
+                l = rect.left,
+                t = rect.top,
+                r = rect.right,
+                b = rect.bottom,
+                valid,
+                "tray: icon rect queried"
+            );
+            if valid {
+                emit(TrayAction::OpenMenu {
+                    x: rect.left,
+                    y: rect.top,
+                });
+                return;
+            }
+        }
+        let (x, y) = super::split_message_pos(GetMessagePos());
+        tracing::info!(x, y, "tray: icon rect unavailable, fall back to GetMessagePos");
+        emit(TrayAction::OpenMenu { x, y });
     }
 
     /// (#tray-flyout-r8) 菜单打开期间装**低级鼠标钩子**:点击菜单窗口矩形之外
@@ -381,6 +440,11 @@ mod win {
     /// remove 于弹层 hide),钩子回调要求安装线程持续泵消息——主线程 winit
     /// 事件循环满足。
     pub(super) fn install_menu_hook(menu_hwnd: isize) {
+        // (#tray-flyout-r9) 幂等:弹层首个 winit 事件里会反复尝试补装,
+        // 已装钩子时直接返回(否则泄漏旧钩子句柄)。
+        if MENU_HOOK.get() != 0 {
+            return;
+        }
         MENU_HWND.set(menu_hwnd);
         unsafe {
             let Ok(hook) = SetWindowsHookExW(
@@ -389,9 +453,12 @@ mod win {
                 HINSTANCE(std::ptr::null_mut()),
                 0,
             ) else {
+                let err = windows::core::Error::from_win32();
+                tracing::error!("tray: SetWindowsHookExW(WH_MOUSE_LL) failed: {err}");
                 return;
             };
             MENU_HOOK.set(hook.0 as isize);
+            tracing::info!(hook = hook.0 as isize, menu_hwnd, "tray: menu hook installed");
         }
     }
 
@@ -426,7 +493,33 @@ mod win {
                             && info.pt.y >= rect.top
                             && info.pt.y < rect.bottom;
                         if !inside {
-                            super::super::hide_tray_flyout();
+                            // (#tray-dismiss-msg 2026-09-23) 只 Post 一条消息,
+                            // 不在钩子回调里直接执行 hide_tray_flyout(Slint 窗口
+                            // hide + Timer 是重活):低级钩子回调一旦超时,Win11
+                            // 会静默跳过乃至移除钩子,点外收起从此失灵。回调只发
+                            // 消息,耗时微秒级;hide 挪到 wnd_proc 的
+                            // WM_TRAY_DISMISS(正常消息上下文)执行。Post 失败
+                            //(宿主未建等)回落旧路径兜底。
+                            let host = HOST_HWND.with(|h| *h.borrow());
+                            let posted = host != 0
+                                && PostMessageW(
+                                    HWND(host as *mut _),
+                                    WM_TRAY_DISMISS,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                )
+                                .is_ok();
+                            tracing::info!(
+                                info.pt.x,
+                                info.pt.y,
+                                menu,
+                                host,
+                                posted,
+                                "tray: outside click on flyout"
+                            );
+                            if !posted {
+                                super::super::hide_tray_flyout();
+                            }
                         }
                     }
                 }

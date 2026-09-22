@@ -3,6 +3,9 @@
 // This frameless always-on-top window mirrors the mainstream prototype:
 //   16px / 1.25 stroke icons in an 11x11 optical box, width = max-content.
 // Geometry: 8px radius, 32px rows, 12px item inset, 6px chrome padding.
+// (#tray-round-corner 2026-09-23) Window 本体透明,圆角矩形作为可见菜单底:
+// 四角真圆角(per-pixel alpha),不依赖 Win11 DWM;后端须配套
+// with_transparent(true)(src/app/window.rs TRAY_TRANSPARENT_NEXT)。
 
 import { Theme } from "theme.slint";
 
@@ -166,7 +169,9 @@ export component TrayMenuWindow inherits Window {
     icon: @image-url("../assets/icon.png");
     no-frame: true;
     always-on-top: true;
-    background: Theme.popup-bg;
+    // (#tray-round-corner) 窗口底透明,菜单底由下方圆角矩形绘制 —— 四角外
+    // 露出透明像素,任何系统版本都是圆角。
+    background: transparent;
     default-font-family: Theme.ui-font-family;
 
     in-out property <bool> dark-mode <=> Theme.dark;
@@ -176,8 +181,23 @@ export component TrayMenuWindow inherits Window {
     in-out property <color> wp-accent <=> Theme.wp-accent;
 
     in-out property <int> session-count: 0;
-    out property <float> flyout-w: body.preferred-width / 1px;
-    out property <float> flyout-h: body.preferred-height / 1px;
+    // (#tray-flyout-size 2026-09-23) 尺寸**不能用 body.preferred-\***:布局
+    // 聚合缓存只在首次求值,之后不随 session-count 失效(实测 set(2) 后仍返回
+    // 无会话尺寸 → place 按旧尺寸开窗,头部行溢出贴边/窗口底部空置)。改为
+    // 纯算术:高度按 body 的布局常量逐项相加(改布局须同步这里);宽度 =
+    // 菜单行 preferred(行恒渲染,缓存稳定) 与会话行分量(算术:12 内距 +
+    // 数字 ≤20 + 间距 4 + 文字 min-width 76 + 12 内距)取 max。
+    out property <float> flyout-w: max(
+        body.preferred-width / 1px,
+        root.session-count > 0 ? (12px + 20px + 4px + 76px + 12px) * Theme.ui-scale / 1px : 0px / 1px
+    );
+    out property <float> flyout-h: (
+        6px * Theme.ui-scale
+        + 3 * (32px * Theme.ui-scale)
+        + 9px * Theme.ui-scale
+        + 6px * Theme.ui-scale
+        + (root.session-count > 0 ? (32px + 9px) * Theme.ui-scale : 0px)
+    ) / 1px;
 
     callback show-clicked();
     callback about-clicked();
@@ -190,8 +210,8 @@ export component TrayMenuWindow inherits Window {
 
     preferred-width: body.preferred-width;
     preferred-height: body.preferred-height;
-    width: body.preferred-width;
-    height: body.preferred-height;
+    // (#tray-flyout-size) 不再显式绑定 width/height(旧绑定把渲染尺寸钉在
+    // preferred 缓存上,与 set_size 的窗口尺寸脱节):内容跟随 set_size 开窗。
 
     Rectangle {
         width: parent.width;
@@ -199,14 +219,15 @@ export component TrayMenuWindow inherits Window {
         border-width: 1px;
         border-color: Theme.border-subtle;
         border-radius: 8px * Theme.ui-scale;
-        background: transparent;
+        // (#tray-round-corner) 原窗口底色挪到这里:圆角矩形才是可见菜单面板。
+        background: Theme.popup-bg;
     }
 
     keys := FocusScope {
         x: 0;
         y: 0;
-        width: body.preferred-width;
-        height: body.preferred-height;
+        width: 100%;
+        height: 100%;
         focus-on-click: false;
         key-pressed(e) => {
             if (e.text == Key.Escape) {
@@ -218,6 +239,10 @@ export component TrayMenuWindow inherits Window {
         }
 
         body := VerticalLayout {
+            // (#tray-flyout-size) 跟随窗口尺寸(非布局父级内 VL 默认只有
+            // preferred 大小,不开满),行 alignment:start 堆顶。
+            width: 100%;
+            height: 100%;
             padding: 6px * Theme.ui-scale;
             spacing: 0px;
             alignment: start;
@@ -242,6 +267,11 @@ export component TrayMenuWindow inherits Window {
                         font-size: Theme.fs-md;
                         font-weight: 400;
                         vertical-alignment: center;
+                        // (#tray-session-head-width 2026-09-23) 中文译文经
+                        // fallback 字体度量,preferred-width 偏小 → 菜单 hug
+                        // 最宽行时头部文字贴边。5 个汉字 @fs-md ≈ 67.5px,
+                        // min-width 托底;拉丁语言 preferred 更宽时不受影响。
+                        min-width: 72px * Theme.ui-scale;
                     }
                 }
             }

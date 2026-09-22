@@ -361,6 +361,8 @@ thread_local! {
     // 实例"的槽位,None = 无弹层。
     static TRAY_MENU: RefCell<Option<Rc<TrayMenuWindow>>> = const { RefCell::new(None) };
     static TRAY_DISMISS_ARMED: Cell<bool> = const { Cell::new(false) };
+    // (#tray-flyout-r9) 弹层"chrome 补装"(点外钩子 + DWM 圆角)是否已完成。
+    static TRAY_CHROME_DONE: Cell<bool> = const { Cell::new(false) };
     // (#about-window 2026-09-21) 托盘「关于」的独立介绍弹窗槽位(现建现毁,
     // 同 TRAY_MENU 模式)。
     static ABOUT_WIN: RefCell<Option<Rc<AboutWindow>>> = const { RefCell::new(None) };
@@ -449,6 +451,8 @@ fn minimize_to_tray(win: &AppWindow) {
 
 fn hide_tray_flyout() {
     TRAY_DISMISS_ARMED.with(|a| a.set(false));
+    // (#tray-flyout-r9) 弹层窗口每次右击现建,chrome 补装标记随之复位。
+    TRAY_CHROME_DONE.with(|c| c.set(false));
     // (#tray-flyout-r8) 停 Esc 轮询 + 卸载点外部收起的低级鼠标钩子。
     TRAY_ESC_TIMER.with(|t| t.borrow().stop());
     Tray::remove_menu_hook();
@@ -580,6 +584,43 @@ fn active_session_count(core: &AppCore) -> i32 {
 /// 在上时飞出屏幕。
 const TRAY_CURSOR_GAP: i32 = 24;
 
+/// (#tray-place-scale 2026-09-23) 点击点所在显示器的有效 DPI 缩放(96 dpi =
+/// 1.0)。弹层 place 时窗口**尚未映射**,winit 的 scale_factor 拿不到目标
+/// 显示器的真实缩放(200% 屏实测:首次创建的窗口返回 1.0,ph 被算成一半,
+/// 弹层底缘反而越过点击点)—— 几何必须按点击点所在显示器现查 DPI。
+#[cfg(windows)]
+fn monitor_scale_at(cursor_x: i32, cursor_y: i32, fallback: f32) -> f32 {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    unsafe {
+        let mon = MonitorFromPoint(
+            POINT {
+                x: cursor_x,
+                y: cursor_y,
+            },
+            MONITOR_DEFAULTTONEAREST,
+        );
+        if mon.is_invalid() {
+            return fallback;
+        }
+        let mut dpi_x = 0u32;
+        let mut dpi_y = 0u32;
+        if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_ok()
+            && dpi_x > 0
+        {
+            dpi_x as f32 / 96.0
+        } else {
+            fallback
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn monitor_scale_at(_cursor_x: i32, _cursor_y: i32, fallback: f32) -> f32 {
+    fallback
+}
+
 fn clamp_tray_pos(cursor_x: i32, cursor_y: i32, width: i32, height: i32) -> (i32, i32) {
     // (#tray-flyout-r4-r2) **左缘对齐点击点、向右上弹**(x = cursor_x):右缘
     // 对齐(r4)实测被用户否决("感觉是朝左向上弹了");超出工作区右侧时由
@@ -666,6 +707,42 @@ fn apply_tray_flyout_chrome(fly: &Rc<TrayMenuWindow>) {
     });
 }
 
+/// (#tray-flyout-r9) 弹层 chrome 补装:点外收起的低级鼠标钩子 + DWM 圆角。
+///
+/// **不能在 show() 后立即做**:Slint 1.18 下 winit 窗口的实际创建由事件循环
+/// 完成,show 后立刻 `with_winit_window` 闭包静默不执行(实测日志:
+/// install 日志从未出现,钩子/圆角双双失效 —— 用户报告"点外不关、四角直角"
+/// 的共同根因)。改为挂到弹层**首个 winit 事件**(此时窗口必然已创建),
+/// 经 TRAY_CHROME_DONE + install_menu_hook 的幂等守卫只做一次。
+fn arm_tray_flyout_chrome(sw: &slint::Window) {
+    if TRAY_CHROME_DONE.with(|c| c.get()) {
+        return;
+    }
+    apply_window_chrome(sw);
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let mut hwnd: isize = 0;
+        sw.with_winit_window(|ww| {
+            let Ok(handle) = ww.window_handle() else {
+                return;
+            };
+            let RawWindowHandle::Win32(h) = handle.as_raw() else {
+                return;
+            };
+            hwnd = h.hwnd.get() as isize;
+        });
+        if hwnd == 0 {
+            return;
+        }
+        Tray::install_menu_hook(hwnd);
+        TRAY_CHROME_DONE.with(|c| c.set(true));
+        tracing::info!("tray: flyout chrome armed (hook + dwm corner)");
+    }
+    #[cfg(not(windows))]
+    TRAY_CHROME_DONE.with(|c| c.set(true));
+}
+
 fn show_tray_flyout(
     fly: &Rc<TrayMenuWindow>,
     main: &slint::Weak<AppWindow>,
@@ -684,14 +761,18 @@ fn show_tray_flyout(
     let place = || {
         let lw = fly.get_flyout_w().max(8.0);
         let lh = fly.get_flyout_h().max(8.0);
-        fly.window().set_size(slint::LogicalSize::new(lw, lh));
-        let scale = fly.window().scale_factor().max(0.01);
+        // (#tray-place-scale 2026-09-23) 缩放按点击点所在显示器现查,不用
+        // 窗口 scale_factor(未映射窗口拿不到真实值);尺寸直接给**物理**像素,
+        // 与 clamp_tray_pos 的物理几何同源,不经过任何隐式换算。
+        let scale = monitor_scale_at(cursor_x, cursor_y, fly.window().scale_factor().max(0.01));
         let pw = (lw * scale).round().max(1.0) as i32;
         let ph = (lh * scale).round().max(1.0) as i32;
+        fly.window()
+            .set_size(slint::PhysicalSize::new(pw.max(1) as u32, ph.max(1) as u32));
         let (px, py) = clamp_tray_pos(cursor_x, cursor_y, pw, ph);
         fly.window()
             .set_position(slint::PhysicalPosition::new(px, py));
-        tracing::info!(px, py, pw, ph, "tray: place flyout");
+        tracing::info!(px, py, pw, ph, scale, "tray: place flyout");
     };
     place();
     let _ = fly.show();
@@ -702,22 +783,14 @@ fn show_tray_flyout(
     // 无激活改在**创建时**经后端钩子注入(window.rs TRAY_WINDOW_NEXT)——
     // 创建期属性不会被 winit apply_diff 的 EXSTYLE 重写清掉,任务栏按钮从
     // 不出现,飞出层不被顶掉。不再 focus_window(不抢前台,飞出层保持)。
-    // (#tray-flyout-r7) 菜单窗口可聚焦:NOACTIVATE 已取消 → Focused(false)
-    // 失焦隐藏恢复有效(点外部/Esc 都能收)。
-    apply_window_chrome(fly.window());
-    // (#tray-flyout-r8) 点外部收起:装低级鼠标钩子(hide_tray_flyout 时卸载)。
-    #[cfg(windows)]
-    fly.window().with_winit_window(|ww| {
-        use i_slint_backend_winit::winit::platform::windows::WindowExtWindows;
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let Ok(handle) = ww.window_handle() else {
-            return;
-        };
-        let RawWindowHandle::Win32(h) = handle.as_raw() else {
-            return;
-        };
-        Tray::install_menu_hook(h.hwnd.get());
-    });
+    // (#tray-dismiss-msg 2026-09-23) 注释勘误:菜单窗口创建时注入
+    // with_active(false)(NOACTIVATE,见 window.rs)—— 不抢前台、飞出层不被
+    // 顶掉,该注入至今有效。NOACTIVATE 下窗口收不到 Focused 变化,失焦分支
+    // 基本不触发:点外收起主力是低级鼠标钩子(WM_TRAY_DISMISS 派发),Esc 靠
+    // GetAsyncKeyState 轮询。
+    // (#tray-flyout-r9) 点外钩子与 DWM 圆角不再在这里安装 —— show 后立即
+    // with_winit_window 拿不到窗口(闭包静默不执行),已挪到
+    // arm_tray_flyout_chrome,由弹层首个 winit 事件触发补装。
     // (#tray-flyout-r8) Esc 收起:菜单打开期间 50ms 轮询 GetAsyncKeyState
     //(NOACTIVATE 窗口收不到键盘焦点,轮询是绕行方案;同 app.rs 拖拽取消
     // 兜底的既有模式)。GetAsyncKeyState 高位=按住、低位=按下过,任一命中
@@ -763,10 +836,13 @@ fn bind_tray_flyout(
     {
         // (#tray-icon-vanish) 失焦/Esc 统一走 hide_tray_flyout(armed 复位 +
         // NIM_MODIFY 心跳),不再直接持 fly_weak 手动 hide。
-        fly.window().on_winit_window_event(move |_sw, event| {
+        fly.window().on_winit_window_event(move |sw, event| {
             use i_slint_backend_winit::winit::event::{ElementState, WindowEvent as WEvent};
             use i_slint_backend_winit::winit::keyboard::{Key, NamedKey};
             use i_slint_backend_winit::EventResult;
+            // (#tray-flyout-r9) 首个事件时补装点外钩子与 DWM 圆角
+            //(show 后立即安装拿不到 winit 窗口;幂等,重复事件直接短路)。
+            arm_tray_flyout_chrome(sw);
             match event {
                 WEvent::Focused(false) => {
                     // (#tray-icon-vanish) 统一走 hide_tray_flyout:armed 复位 +
@@ -783,9 +859,10 @@ fn bind_tray_flyout(
                         return EventResult::PreventDefault;
                     }
                 }
-                // (#tray-flyout-r7) 菜单窗口恢复可聚焦(NOACTIVATE 已随创建期
-                // 注入方案移除)→ Focused(false) 失焦隐藏重新有效:点外部/Esc/
-                // 菜单项都会收;鼠标移到哪里都不会让菜单自动消失(用户诉求)。
+                // (#tray-dismiss-msg 2026-09-23) 注释勘误:窗口实际创建时带
+                // NOACTIVATE(window.rs with_active(false)),收不到 Focused
+                // 变化 —— 本分支仅作可聚焦场景的保险;点外收起主力在低级鼠标
+                // 钩子,Esc 在 GetAsyncKeyState 轮询。
                 _ => {}
             }
             EventResult::Propagate
@@ -4022,10 +4099,16 @@ fn open_window(
                     // (#tray-flyout-r7) 创建期注入:标志 → 后端创建钩子给这个窗口
                     // 带 owner(托盘宿主)/skip-taskbar/无激活(见 window.rs
                     // TRAY_WINDOW_NEXT)。
+                    // (#tray-round-corner 2026-09-23) 同套机制开透明窗底,配合
+                    // ui/tray_menu.slint 圆角矩形 → 四角真圆角。
                     window::TRAY_WINDOW_NEXT.store(true, std::sync::atomic::Ordering::Relaxed);
+                    window::TRAY_TRANSPARENT_NEXT
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                     let fly = match TrayMenuWindow::new() {
                         Ok(w) => {
                             window::TRAY_WINDOW_NEXT
+                                .store(false, std::sync::atomic::Ordering::Relaxed);
+                            window::TRAY_TRANSPARENT_NEXT
                                 .store(false, std::sync::atomic::Ordering::Relaxed);
                             let fly = Rc::new(w);
                             bind_tray_flyout(&fly, closer.clone(), tray_weak.clone());
@@ -4034,6 +4117,8 @@ fn open_window(
                         }
                         Err(e) => {
                             window::TRAY_WINDOW_NEXT
+                                .store(false, std::sync::atomic::Ordering::Relaxed);
+                            window::TRAY_TRANSPARENT_NEXT
                                 .store(false, std::sync::atomic::Ordering::Relaxed);
                             tracing::error!("tray: flyout window failed: {e}");
                             return;

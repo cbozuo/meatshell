@@ -9,6 +9,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// (r3-r5 三轮实测任务栏按钮反复出现)。
 pub(super) static TRAY_WINDOW_NEXT: AtomicBool = AtomicBool::new(false);
 
+/// (#tray-round-corner 2026-09-23) "下一个创建的窗口 = 透明弹层"标志:后端创建
+/// 钩子借此给托盘菜单开 per-pixel alpha(`with_transparent(true)`),配合
+/// ui/tray_menu.slint 的透明窗底 + 圆角矩形,四角在任何系统版本都是真圆角
+/// (不透明窗口下 Win10 没有 DWM 圆角,四角是直角)。透明同样是创建期属性,
+/// 运行时改无效 —— 与 TRAY_WINDOW_NEXT 同一套注入机制。
+pub(super) static TRAY_TRANSPARENT_NEXT: AtomicBool = AtomicBool::new(false);
+
 #[cfg(target_os = "linux")]
 pub(super) fn set_window_icon(window: &AppWindow) {
     use i_slint_backend_winit::winit::window::Icon;
@@ -102,7 +109,13 @@ pub(super) fn setup_windows_platform(renderer_mode: &str) {
     );
     let backend = builder
         .with_window_attributes_hook(|attrs| {
-            let attrs = attrs.with_transparent(false).with_undecorated_shadow(false);
+            // (#tray-round-corner 2026-09-23) 透明属性创建期注入:仅托盘菜单
+            //(TRAY_TRANSPARENT_NEXT 置位)开 per-pixel alpha,其余窗口维持
+            // 不透明(swap 自带复位,置位方无需清理)。
+            let transparent = TRAY_TRANSPARENT_NEXT.swap(false, Ordering::Relaxed);
+            let attrs = attrs
+                .with_transparent(transparent)
+                .with_undecorated_shadow(false);
             // (#tray-flyout-r7) 托盘弹层/关于窗:创建时注入 owner(托盘宿主)+
             // skip-taskbar+无激活——被属主的顶层窗口 Windows 从不给任务栏按钮
             //(确定性,与 TOOLWINDOW 时序无关),且不产生任务栏状态变化(飞出层
