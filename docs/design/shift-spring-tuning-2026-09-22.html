@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>让位动画参数调试台 · spring vs bezier</title>
+<style>
+:root{
+  --font:"Inter","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  --mono:"JetBrains Mono","Cascadia Mono",Consolas,monospace;
+}
+html[data-theme="dark"]{
+  --page:#0d0e12; --list:#14161a; --group:#1b1f27; --hover:#22262f;
+  --panel:#1a1d23; --field:#191b21; --line:#3a3d46;
+  --tp:#e6e8ee; --ts:#b4b9c4; --tm:#9196a3; --accent:#4a90e2;
+  --ok:#4ec9b0; --warn:#e2a84a; --bad:#e25c5c;
+}
+html[data-theme="light"]{
+  --page:#f4f5f8; --list:#ffffff; --group:#f2f2f7; --hover:#eaeaef;
+  --panel:#ffffff; --field:#f4f5f8; --line:#dcdce3;
+  --tp:#1d1d1f; --ts:#45454a; --tm:#606066; --accent:#0071e3;
+  --ok:#0f8a6a; --warn:#b06a00; --bad:#c42b1c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--page);color:var(--tp);font-size:13px;line-height:1.6;padding:26px 30px 60px}
+h1{font-size:17px;font-weight:500}
+.sub{color:var(--tm);font-size:12px;margin-top:6px}
+.sub code{font-family:var(--mono);font-size:11px;color:var(--ts);background:var(--field);padding:1px 5px;border-radius:4px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:20px;flex-wrap:wrap}
+.seg{display:flex;background:var(--field);border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg button{font-family:var(--font);font-size:12px;color:var(--ts);background:transparent;border:0;padding:5px 12px;border-radius:6px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--tp)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:18px}
+.card h2{font-size:13px;font-weight:500;color:var(--ts);margin-bottom:4px}
+.card .hint{font-size:11.5px;color:var(--tm);margin-bottom:14px}
+.cols{display:grid;grid-template-columns:1.15fr 1fr;gap:18px;align-items:start}
+
+/* 列表 */
+.list{background:var(--list);border:1px solid var(--line);border-radius:10px;position:relative;height:204px;overflow:hidden;user-select:none;cursor:grab}
+.row{position:absolute;left:0;right:0;height:32px;display:flex;align-items:center;padding-left:12px;gap:8px;will-change:transform}
+.row .sp{width:2px;height:100%;background:#7f77dd;flex:0 0 2px;opacity:.5}
+.row .nm{font-size:13px;color:var(--tp)}
+.row.ghost{background:var(--hover);border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.35);z-index:5;cursor:grabbing}
+.row .tag{margin-left:auto;margin-right:12px;font-size:10.5px;font-family:var(--mono);color:var(--tm)}
+
+/* 控件 */
+.lab{display:grid;grid-template-columns:104px 1fr 84px;gap:9px 12px;align-items:center}
+.lab label{font-size:12px;color:var(--ts)}
+.lab output{font-family:var(--mono);font-size:11px;color:var(--tm);text-align:right}
+input[type=range]{width:100%;accent-color:var(--accent);height:16px}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.m{background:var(--field);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.m .k{font-size:11px;color:var(--tm)}
+.m .v{font-family:var(--mono);font-size:16px;margin-top:2px}
+.m .n{font-size:10.5px;color:var(--tm)}
+.m.good .v{color:var(--ok)} .m.warn .v{color:var(--warn)} .m.bad .v{color:var(--bad)}
+
+canvas{width:100%;height:190px;display:block}
+.legend{display:flex;gap:18px;font-size:11.5px;color:var(--tm);margin-top:8px;flex-wrap:wrap}
+.legend i{display:inline-block;width:16px;height:2px;vertical-align:middle;margin-right:6px}
+
+.dots{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:6px}
+.dotcol{text-align:center}
+.dottrack{position:relative;height:150px;background:var(--field);border:1px solid var(--line);border-radius:9px}
+.dot{position:absolute;left:50%;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:var(--accent);top:10px;will-change:transform}
+.dotcol .nm{font-size:11px;font-family:var(--mono);color:var(--ts);margin-top:8px}
+.dotcol .dsc{font-size:10.5px;font-family:var(--mono);color:var(--tm)}
+button.act{font-family:var(--font);font-size:12px;color:var(--tp);background:var(--field);border:1px solid var(--line);border-radius:8px;padding:7px 14px;cursor:pointer}
+button.act:hover{background:var(--hover)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+th{color:var(--tm);font-weight:500;font-size:11px}
+td code{font-family:var(--mono);font-size:11px;color:var(--ts)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+<h2 class="sr">让位动画参数调试台，可对比 Slint spring 弹簧与原 140ms 贝塞尔曲线的运动差异</h2>
+
+<header>
+  <div>
+    <h1>让位动画参数调试台</h1>
+    <div class="sub">
+      按 Slint 的弹簧模型积分：<code>w_n = 2π / duration</code>，<code>zeta = 1 - bounce</code>，
+      收敛判定 <code>|位置误差| &lt; 0.001 且 |速度| &lt; 0.05</code>（与 i-slint-core 一致）。
+      左边列表可直接拖行体验让位。
+    </div>
+  </div>
+  <div class="seg" id="theme">
+    <button aria-pressed="true" data-th="dark">暗色</button>
+    <button aria-pressed="false" data-th="light">亮色</button>
+  </div>
+</header>
+
+<div class="cols">
+  <div class="card">
+    <h2>拖拽让位模拟</h2>
+    <div class="hint">按住任意一行上下拖动，其余行按当前参数让位。松手归位。列表底为 32px 行高。</div>
+    <div class="list" id="list"></div>
+  </div>
+
+  <div class="card">
+    <h2>参数</h2>
+    <div class="hint">bounce 只能是数字字面量，改完要重新编译；duration 可以是表达式。</div>
+    <div class="lab">
+      <label for="s-dur">duration</label>
+      <input type="range" id="s-dur" min="20" max="200" step="5" value="90">
+      <output id="o-dur">90 ms</output>
+
+      <label for="s-bnc">bounce</label>
+      <input type="range" id="s-bnc" min="-0.5" max="0.8" step="0.05" value="0.35">
+      <output id="o-bnc">0.35</output>
+    </div>
+    <div class="metrics">
+      <div class="m" id="m-z"><div class="k">阻尼比 zeta</div><div class="v">-</div><div class="n">1 - bounce</div></div>
+      <div class="m" id="m-t"><div class="k">到位时间</div><div class="v">-</div><div class="n">达收敛判定</div></div>
+      <div class="m" id="m-o"><div class="k">过冲</div><div class="v">-</div><div class="n">占位移 34px 的</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap" id="presets"></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>位移曲线对照</h2>
+  <div class="hint">同样让出 34px 的行距，弹簧与原贝塞尔曲线的差别。虚线为原 <code>140ms cubic-bezier(.22,.61,.36,1)</code>。</div>
+  <canvas id="curve"></canvas>
+  <div class="legend">
+    <span><i style="background:var(--accent)"></i>当前 spring</span>
+    <span><i style="background:var(--tm)"></i>原 140ms 贝塞尔</span>
+    <span><i style="background:var(--ok)"></i>连续目标变化下的 spring（速度不重置）</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>预设同时播放</h2>
+  <div class="hint">点击播放，五个圆点从同一位置用各自参数移动到底。位移量与让位一致，都是 34px。</div>
+  <button class="act" id="play">播放</button>
+  <div class="dots" id="dots" style="margin-top:16px"></div>
+</div>
+
+<div class="card">
+  <h2>参数建议（按同一模型积分实测）</h2>
+  <div class="hint">位移固定为一个行距 34px。原实现 140ms 贝塞尔到位即 140ms、零过冲，下表以它为节奏基准。</div>
+  <table>
+    <thead><tr><th>取向</th><th>参数</th><th>到位</th><th>过冲</th><th>特点</th></tr></thead>
+    <tbody>
+      <tr><td>原实现</td><td><code>140ms bezier</code></td><td>140ms</td><td>0</td><td>基准，无过冲但目标变化会重启</td></tr>
+      <tr><td>最稳</td><td><code>spring(0) + 90ms</code></td><td>138ms</td><td>0</td><td>零过冲，节奏与原实现几乎相同</td></tr>
+      <tr><td>推荐</td><td><code>spring(0.25) + 95ms</code></td><td>约 135ms</td><td>0.9px</td><td>过冲不足 3%，几乎看不出，但有活性</td></tr>
+      <tr><td>更活</td><td><code>spring(0.35) + 80ms</code></td><td>143ms</td><td>2.3px</td><td>弹性可辨，仍在同节奏内</td></tr>
+      <tr><td>过度</td><td><code>spring(0.5) + 70ms</code></td><td>154ms</td><td>5.5px</td><td>回摆明显，高频拖动时显廉价</td></tr>
+    </tbody>
+  </table>
+
+  <h2 style="margin-top:20px">两个旋钮是解耦的</h2>
+  <div class="hint">实测结论：过冲量<b>只由 bounce 决定</b>，与 duration 无关；到位时间与 duration 近似线性。所以「弹多少」和「多久到位」可以分别调。</div>
+  <table>
+    <thead><tr><th>bounce</th><th>zeta</th><th>过冲</th><th>到位 ÷ duration</th></tr></thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>1.00</td><td>0</td><td>约 1.53 倍</td></tr>
+      <tr><td><code>0.15</code></td><td>0.85</td><td>0.2px</td><td>约 1.46 倍</td></tr>
+      <tr><td><code>0.25</code></td><td>0.75</td><td>0.9px</td><td>约 1.40 倍</td></tr>
+      <tr><td><code>0.35</code></td><td>0.65</td><td>2.3px</td><td>约 1.71 倍</td></tr>
+      <tr><td><code>0.50</code></td><td>0.50</td><td>5.5px</td><td>约 2.16 倍</td></tr>
+    </tbody>
+  </table>
+  <div class="hint" style="margin-top:12px;margin-bottom:0">
+    要反推 duration，用「目标到位时间 ÷ 上表最后一列」。例如想要 140ms 到位且过冲约 1px，取
+    <code>140 ÷ 1.40 ≈ 100ms</code> 配 <code>bounce 0.25</code>。
+    注意 bounce 从 0.25 涨到 0.35 时到位时间会跳增（1.40 变 1.71 倍），因为过冲越大，要等振荡衰减到判定阈值以下越久。
+  </div>
+</div>
+
+<script>
+const PRESETS = [
+  { name:"原实现", dur:140, bnc:null, curve:[0.22,0.61,0.36,1] },
+  { name:"稳 spring(0)", dur:90, bnc:0 },
+  { name:"推荐 spring(.25)", dur:95, bnc:0.25 },
+  { name:"活 spring(.35)", dur:80, bnc:0.35 },
+  { name:"过 spring(.5)", dur:70, bnc:0.5 }
+];
+const ITEMS = ["188 (2)","188 (1)","1","202-2","202-1","3-2"];
+const ROW = 32, PITCH = 34, SHIFT = 34;
+
+/* ---------- 弹簧与贝塞尔 ---------- */
+function springStep(s, dt){
+  const wn = 2*Math.PI/(s.dur/1000), zeta = 1 - s.bnc;
+  const a = -wn*wn*(s.p - s.target) - 2*zeta*wn*s.v;
+  s.v += a*dt; s.p += s.v*dt;
+}
+function mkSpring(dur, bnc){ return { dur, bnc, p:0, v:0, target:0 }; }
+
+function bezierY(x, a, b, c, d){
+  const cx = 3*a, bx = 3*(c-a)-cx, ax = 1-cx-bx;
+  const cy = 3*b, by = 3*(d-b)-cy, ay = 1-cy-by;
+  const sx = t => ((ax*t+bx)*t+cx)*t;
+  const sy = t => ((ay*t+by)*t+cy)*t;
+  let lo = 0, hi = 1, t = x;
+  for (let i=0;i<24;i++){ const cur = sx(t); if (Math.abs(cur-x) < 1e-5) break; if (cur < x) lo = t; else hi = t; t = (lo+hi)/2; }
+  return sy(t);
+}
+function mkBezier(dur, curve){ return { dur, curve, from:0, p:0, target:0, t0:0, started:false }; }
+function bezierSetTarget(s, v, now){
+  if (s.target === v) return;
+  s.from = s.p; s.target = v; s.t0 = now; s.started = true;
+}
+function bezierStep(s, now){
+  if (!s.started) return;
+  const e = Math.min(1, (now - s.t0) / s.dur);
+  s.p = s.from + (s.target - s.from) * bezierY(e, ...s.curve);
+  if (e >= 1) s.started = false;
+}
+
+/* ---------- 指标 ---------- */
+function analyse(dur, bnc){
+  const s = mkSpring(dur, bnc); s.target = 1;
+  const dt = 1/4000;
+  let t = 0, over = 0, settle = null;
+  for (let i=0;i<4000*3;i++){
+    springStep(s, dt); t += dt;
+    if (s.p > over) over = s.p;
+    if (settle === null && Math.abs(s.p-1) < 0.001 && Math.abs(s.v) < 0.05) settle = t;
+  }
+  return { zeta: 1-bnc, settle, over: Math.max(0, over-1) };
+}
+
+/* ---------- 主列表 ---------- */
+const list = document.getElementById("list");
+const rows = [];
+const P = { current: { dur:90, bnc:0.35 } };
+let dragIdx = -1, targetIdx = -1, grabOffset = 0, ghostY = 0;
+
+ITEMS.forEach((name, i) => {
+  const el = document.createElement("div");
+  el.className = "row";
+  el.innerHTML = '<span class="sp"></span><span class="nm">'+name+'</span>';
+  el.style.top = "0px";
+  el.style.transform = "translateY(" + (i*PITCH) + "px)";
+  list.appendChild(el);
+  rows.push({ el, sp: mkSpring(P.current.dur, P.current.bnc), baseY: i*PITCH, y: i*PITCH });
+});
+list.style.height = (ITEMS.length*PITCH) + "px";
+
+function slotFor(j){
+  if (dragIdx < 0) return 0;
+  if (dragIdx < targetIdx && j > dragIdx && j <= targetIdx) return -SHIFT;
+  if (dragIdx > targetIdx && j >= targetIdx && j < dragIdx) return SHIFT;
+  return 0;
+}
+function pressed(e){
+  const r = list.getBoundingClientRect();
+  const y = e.clientY - r.top - 1;
+  const i = Math.max(0, Math.min(ITEMS.length-1, Math.floor(y / PITCH)));
+  dragIdx = i; targetIdx = i;
+  grabOffset = y - i*PITCH;
+  rows[i].el.classList.add("ghost");
+}
+function moved(e){
+  if (dragIdx < 0) return;
+  const r = list.getBoundingClientRect();
+  const y = e.clientY - r.top - 1;
+  const raw = (y - grabOffset) / PITCH;
+  targetIdx = Math.max(0, Math.min(ITEMS.length-1, Math.round(raw)));
+  ghostY = y - grabOffset;
+}
+function released(){
+  if (dragIdx < 0) return;
+  rows[dragIdx].el.classList.remove("ghost");
+  const order = ITEMS.map((n,i)=>i);
+  const dragged = order.splice(dragIdx,1)[0];
+  order.splice(targetIdx,0,dragged);
+  order.forEach((src, slot) => {
+    const r = rows[src];
+    r.baseY = slot * PITCH;
+  });
+  const dr = rows[dragged];
+  dr.sp.p = dr.y; dr.sp.v = 0;
+  dragIdx = -1; targetIdx = -1;
+}
+list.addEventListener("pointerdown", e => { list.setPointerCapture(e.pointerId); pressed(e); });
+list.addEventListener("pointermove", e => { moved(e); });
+list.addEventListener("pointerup", released);
+list.addEventListener("pointercancel", released);
+
+/* ---------- 动画循环 ---------- */
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now-last)/1000); last = now;
+  rows.forEach((r, i) => {
+    const base = dragIdx >= 0 ? r.baseY : r.baseY;
+    const shift = slotFor(i);
+    const targetY = base + shift;
+    if (i === dragIdx) {
+      r.y = ghostY;
+      r.el.style.transform = "translateY(" + r.y + "px)";
+      return;
+    }
+    r.sp.dur = P.current.dur; r.sp.bnc = P.current.bnc;
+    r.sp.target = targetY;
+    springStep(r.sp, dt);
+    r.y = r.sp.p;
+    r.el.style.transform = "translateY(" + r.y.toFixed(2) + "px)";
+  });
+  drawCurve();
+  playDots(now);
+  requestAnimationFrame(frame);
+}
+
+/* ---------- 曲线 ---------- */
+const cv = document.getElementById("curve");
+function fitCanvas(){
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = cv.clientWidth * dpr; cv.height = cv.clientHeight * dpr;
+  cv.getContext("2d").setTransform(dpr,0,0,dpr,0,0);
+}
+function cssv(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function drawCurve(){
+  const g = cv.getContext("2d");
+  const W = cv.clientWidth, H = cv.clientHeight;
+  g.clearRect(0,0,W,H);
+  const padL = 42, padR = 12, padT = 14, padB = 24;
+  const plotW = W-padL-padR, plotH = H-padT-padB;
+  const T = 0.45;
+  const x = t => padL + t/T*plotW;
+  const y = v => padT + plotH - Math.min(1.25, v)/1.25*plotH;
+  const st = cssv("--line");
+  g.strokeStyle = st; g.lineWidth = 1; g.font = "10px ui-monospace, SFMono-Regular, Consolas, monospace";
+  g.fillStyle = cssv("--tm");
+  [0,0.5,1].forEach(v=>{
+    g.beginPath(); g.moveTo(padL, y(v)); g.lineTo(W-padR, y(v)); g.stroke();
+    g.fillText(v.toFixed(1), 8, y(v)+3);
+  });
+  [0,150,300,450].forEach(ms=>{
+    if (ms/1000 > T) return;
+    g.beginPath(); g.moveTo(x(ms/1000), padT); g.lineTo(x(ms/1000), padT+plotH); g.stroke();
+    g.fillText(ms+"ms", x(ms/1000)-12, H-8);
+  });
+
+  // 原贝塞尔
+  g.strokeStyle = cssv("--tm"); g.lineWidth = 1.5; g.setLineDash([4,3]);
+  g.beginPath();
+  for (let t=0;t<=T;t+=0.002){
+    const e = Math.min(1, t/(140/1000));
+    const v = bezierY(e, 0.22,0.61,0.36,1);
+    if (t===0) g.moveTo(x(t), y(v)); else g.lineTo(x(t), y(v));
+  }
+  g.stroke(); g.setLineDash([]);
+
+  // 当前 spring
+  const s = mkSpring(P.current.dur, P.current.bnc); s.target = 1;
+  const dt = 1/2000;
+  g.strokeStyle = cssv("--accent"); g.lineWidth = 2;
+  g.beginPath();
+  let first = true;
+  for (let t=0;t<=T;t+=dt){
+    springStep(s, dt);
+    if (first){ g.moveTo(x(t), y(s.p)); first = false; } else g.lineTo(x(t), y(s.p));
+  }
+  g.stroke();
+
+  // 连续目标变化:0.09s 处目标从 34 改成 -34(模拟快速反向拖动)
+  const s2 = mkSpring(P.current.dur, P.current.bnc); s2.target = 1;
+  const t2 = 0.09;
+  let acc = 0;
+  g.strokeStyle = cssv("--ok"); g.lineWidth = 1.5;
+  g.beginPath(); first = true;
+  for (let t=0;t<=T;t+=dt){
+    if (Math.abs(t - t2) < dt) s2.target = -0.6;
+    springStep(s2, dt);
+    if (first){ g.moveTo(x(t), y(s2.p)); first = false; } else g.lineTo(x(t), y(s2.p));
+  }
+  g.stroke();
+}
+
+/* ---------- 预设圆点 ---------- */
+const dotsWrap = document.getElementById("dots");
+const dotCols = PRESETS.map(p => {
+  const col = document.createElement("div");
+  col.className = "dotcol";
+  col.innerHTML = '<div class="dottrack"><div class="dot"></div></div>' +
+    '<div class="nm">'+p.name+'</div>' +
+    '<div class="dsc">'+(p.bnc===null ? "140ms bezier" : p.dur+"ms · "+p.bnc)+'</div>';
+  dotsWrap.appendChild(col);
+  const dot = col.querySelector(".dot");
+  const s = p.bnc===null ? mkBezier(p.dur, p.curve) : mkSpring(p.dur, p.bnc);
+  return { p, dot, s, running:false };
+});
+document.getElementById("play").addEventListener("click", () => {
+  const now = performance.now();
+  dotCols.forEach(c => {
+    if (c.p.bnc === null){ c.s.from = 0; c.s.p = 0; c.s.target = 0; c.s.started = false; bezierSetTarget(c.s, 1, now); }
+    else { c.s.p = 0; c.s.v = 0; c.s.target = 1; }
+    c.running = true;
+  });
+});
+let lastDots = performance.now();
+function playDots(now){
+  const dt = Math.min(0.05, (now-lastDots)/1000); lastDots = now;
+  dotCols.forEach(c => {
+    if (!c.running) return;
+    if (c.p.bnc === null) bezierStep(c.s, now); else springStep(c.s, dt);
+    const travel = 118;
+    c.dot.style.transform = "translateY(" + (c.s.p*travel).toFixed(2) + "px)";
+    if (Math.abs(c.s.p-1) < 0.004) c.running = false;
+  });
+}
+
+/* ---------- 控件 ---------- */
+const sDur = document.getElementById("s-dur"), sBnc = document.getElementById("s-bnc");
+function syncMetrics(){
+  P.current.dur = +sDur.value; P.current.bnc = +sBnc.value;
+  document.getElementById("o-dur").textContent = sDur.value + " ms";
+  document.getElementById("o-bnc").textContent = (+sBnc.value).toFixed(2);
+  const a = analyse(P.current.dur, P.current.bnc);
+  document.querySelector("#m-z .v").textContent = a.zeta.toFixed(2);
+  document.querySelector("#m-t .v").textContent = a.settle === null ? ">3s" : Math.round(a.settle*1000)+"ms";
+  document.querySelector("#m-o .v").textContent = (a.over*SHIFT).toFixed(1)+"px";
+  document.getElementById("m-z").className = "m " + (a.zeta < 0.3 ? "bad" : a.zeta < 0.6 ? "warn" : "good");
+  document.getElementById("m-t").className = "m " + (a.settle > 0.26 ? "warn" : "good");
+  document.getElementById("m-o").className = "m " + (a.over*SHIFT > 4 ? "bad" : a.over*SHIFT > 2 ? "warn" : "good");
+}
+sDur.addEventListener("input", syncMetrics);
+sBnc.addEventListener("input", syncMetrics);
+
+document.getElementById("presets").innerHTML = PRESETS.slice(1).map(p =>
+  '<button class="act" data-dur="'+p.dur+'" data-bnc="'+p.bnc+'">'+p.name+'</button>').join("");
+document.getElementById("presets").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  sDur.value = b.dataset.dur; sBnc.value = b.dataset.bnc; syncMetrics();
+});
+
+document.getElementById("theme").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  document.documentElement.setAttribute("data-theme", b.dataset.th);
+  [...e.currentTarget.querySelectorAll("button")].forEach(x => x.setAttribute("aria-pressed", String(x===b)));
+  fitCanvas();
+});
+
+window.addEventListener("resize", fitCanvas);
+fitCanvas(); syncMetrics();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

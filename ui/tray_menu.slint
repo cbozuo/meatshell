@@ -1,0 +1,269 @@
+// (#tray-menu-flyout 2026-09-21) Self-drawn tray flyout.
+// Win32 TrackPopupMenu cannot render per-item icons or hug the longest row.
+// This frameless always-on-top window mirrors the mainstream prototype:
+//   16px / 1.25 stroke icons in an 11x11 optical box, width = max-content.
+// Geometry: 8px radius, 32px rows, 12px item inset, 6px chrome padding.
+
+import { Theme } from "theme.slint";
+
+component TrayGlyph inherits Rectangle {
+    in property <int> kind;
+    in property <brush> ink;
+    width: 16px * Theme.ui-scale;
+    height: 16px * Theme.ui-scale;
+
+    // Show: monitor + stand (optical box 11x11).
+    if root.kind == 0 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 1.25px * Theme.ui-scale;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        clip: false;
+        commands: "M 3.75 2.5 L 12.25 2.5 A 1.25 1.25 0 0 1 13.5 3.75 L 13.5 9.25 A 1.25 1.25 0 0 1 12.25 10.5 L 3.75 10.5 A 1.25 1.25 0 0 1 2.5 9.25 L 2.5 3.75 A 1.25 1.25 0 0 1 3.75 2.5 Z";
+    }
+    if root.kind == 0 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 1.25px * Theme.ui-scale;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        clip: false;
+        commands: "M 8 10.5 L 8 13.25 M 5.5 13.25 L 10.5 13.25";
+    }
+
+    // About: ring + i.
+    if root.kind == 1 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 1.25px * Theme.ui-scale;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        clip: false;
+        commands: "M 2.5 8 A 5.5 5.5 0 1 0 13.5 8 A 5.5 5.5 0 1 0 2.5 8";
+    }
+    if root.kind == 1 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: root.ink;
+        stroke: transparent;
+        clip: false;
+        commands: "M 8 4.85 A 0.55 0.55 0 1 0 8.001 4.85";
+    }
+    if root.kind == 1 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 1.25px * Theme.ui-scale;
+        stroke-line-cap: round;
+        clip: false;
+        commands: "M 8 7.4 L 8 11.3";
+    }
+
+    // Exit: power.
+    if root.kind == 2 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 1.25px * Theme.ui-scale;
+        stroke-line-cap: round;
+        clip: false;
+        commands: "M 8 2.5 L 8 8";
+    }
+    if root.kind == 2 : Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: transparent;
+        stroke: root.ink;
+        stroke-width: 1.25px * Theme.ui-scale;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        clip: false;
+        commands: "M 4.61 3.67 A 5.5 5.5 0 1 0 11.39 3.67";
+    }
+}
+
+component TrayMenuItem inherits Rectangle {
+    in property <string> label;
+    in property <int> kind;
+    in property <bool> danger: false;
+    callback clicked();
+
+    height: 32px * Theme.ui-scale;
+    border-radius: Theme.radius-sm;
+    property <bool> hot: item-ta.has-hover || item-ta.pressed;
+    background: root.danger && root.hot
+        ? Theme.danger.with-alpha(0.14)
+        : (root.hot ? Theme.bg-hover : transparent);
+    property <brush> label-fg: root.danger && root.hot ? Theme.danger : Theme.text-primary;
+    property <brush> icon-fg: root.danger && root.hot ? Theme.danger
+        : (root.hot ? Theme.text-primary : Theme.text-secondary);
+
+    item-ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px * Theme.ui-scale;
+        padding-right: 12px * Theme.ui-scale;
+        spacing: 8px * Theme.ui-scale;
+        alignment: start;
+
+        VerticalLayout {
+            alignment: center;
+            width: 16px * Theme.ui-scale;
+            TrayGlyph {
+                kind: root.kind;
+                ink: root.icon-fg;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.label-fg;
+            font-size: 13.5px * Theme.ui-scale;
+            font-weight: 400;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component TraySep inherits Rectangle {
+    height: 9px * Theme.ui-scale;
+    Rectangle {
+        y: 4px * Theme.ui-scale;
+        x: 12px * Theme.ui-scale;
+        width: parent.width - 24px * Theme.ui-scale;
+        height: 1px;
+        background: Theme.border-subtle;
+    }
+}
+
+export component TrayMenuWindow inherits Window {
+    title: "meatshell";
+    icon: @image-url("../assets/icon.png");
+    no-frame: true;
+    always-on-top: true;
+    background: Theme.popup-bg;
+    default-font-family: Theme.ui-font-family;
+
+    in-out property <bool> dark-mode <=> Theme.dark;
+    in-out property <float> ui-scale <=> Theme.ui-scale;
+    in-out property <string> ui-font-family <=> Theme.ui-font-family;
+    in-out property <bool> wallpaper-active <=> Theme.wallpaper-active;
+    in-out property <color> wp-accent <=> Theme.wp-accent;
+
+    in-out property <int> session-count: 0;
+    out property <float> flyout-w: body.preferred-width / 1px;
+    out property <float> flyout-h: body.preferred-height / 1px;
+
+    callback show-clicked();
+    callback about-clicked();
+    callback exit-clicked();
+    callback dismiss();
+
+    public function take-keys() {
+        keys.focus();
+    }
+
+    preferred-width: body.preferred-width;
+    preferred-height: body.preferred-height;
+    width: body.preferred-width;
+    height: body.preferred-height;
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-width: 1px;
+        border-color: Theme.border-subtle;
+        border-radius: 8px * Theme.ui-scale;
+        background: transparent;
+    }
+
+    keys := FocusScope {
+        x: 0;
+        y: 0;
+        width: body.preferred-width;
+        height: body.preferred-height;
+        focus-on-click: false;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.dismiss();
+                accept
+            } else {
+                reject
+            }
+        }
+
+        body := VerticalLayout {
+            padding: 6px * Theme.ui-scale;
+            spacing: 0px;
+            alignment: start;
+
+            if root.session-count > 0 : Rectangle {
+                height: 32px * Theme.ui-scale;
+                HorizontalLayout {
+                    padding-left: 12px * Theme.ui-scale;
+                    padding-right: 12px * Theme.ui-scale;
+                    spacing: 4px * Theme.ui-scale;
+                    alignment: start;
+                    Text {
+                        text: @tr("{0}", root.session-count);
+                        color: Theme.accent;
+                        font-size: 16px * Theme.ui-scale;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: @tr("active sessions");
+                        color: Theme.text-secondary;
+                        font-size: Theme.fs-md;
+                        font-weight: 400;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+            if root.session-count > 0 : TraySep {}
+
+            TrayMenuItem {
+                label: @tr("Show");
+                kind: 0;
+                clicked => { root.show-clicked(); }
+            }
+            TrayMenuItem {
+                label: @tr("About");
+                kind: 1;
+                clicked => { root.about-clicked(); }
+            }
+            TraySep {}
+            TrayMenuItem {
+                label: @tr("Exit");
+                kind: 2;
+                danger: true;
+                clicked => { root.exit-clicked(); }
+            }
+        }
+    }
+}

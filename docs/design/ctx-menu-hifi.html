@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>右键菜单高保真 · 图标与宽度协调（ctx-menu-hifi）</title>
+<style>
+  /* ===== 字体：与 Slint 同源的 Material Icons ===== */
+  @font-face {
+    font-family: "Material Icons";
+    src: url("/ui/fonts/MaterialIcons-Regular.ttf") format("truetype");
+  }
+  :root {
+    /* dark 主题取值（对齐 theme.slint dark 分支） */
+    --popup-bg: #23262d;        /* Theme.popup-bg */
+    --border-strong: #4a4e59;   /* Theme.border-strong */
+    --border-subtle: #383c45;   /* Theme.border-subtle（分隔线） */
+    --bg-hover: #2f333d;        /* Theme.bg-hover（行悬浮） */
+    --text-primary: #e7e9ee;
+    --text-secondary: #9aa0ad;
+    --text-muted: #6d7381;
+    --danger: #cc3333;
+    --danger-hover: rgba(204,51,51,0.125);
+    --page-bg: #17191f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--page-bg);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--text-primary);
+    padding: 40px 48px 60px;
+  }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+  .sub { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 32px; line-height: 1.7; }
+  .sub b { color: var(--text-primary); font-weight: 600; }
+
+  .stage { display: flex; gap: 36px; align-items: flex-start; flex-wrap: wrap; }
+  .case { display: flex; flex-direction: column; gap: 10px; }
+  .case-label { font-size: 12px; color: var(--text-secondary); letter-spacing: 0.5px; }
+  .case-label b { color: var(--text-primary); font-weight: 600; }
+
+  /* ===== 菜单容器：三处同参数（统一宽 200px） ===== */
+  .menu {
+    width: 200px;
+    background: var(--popup-bg);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.31);
+    padding: 5px;               /* 菜单 padding 5px（Slint 同源） */
+    display: flex; flex-direction: column;
+  }
+
+  /* ===== 行：30px 高 / 10+16+9 栅格 / radius 4 / hover ===== */
+  .row {
+    height: 30px;
+    border-radius: 4px;
+    display: flex; align-items: center;
+    padding-left: 10px;
+    gap: 9px;
+    font-size: 13px;            /* Theme.fs-md */
+    color: var(--text-primary);
+    overflow: hidden;
+  }
+  .row.hover { background: var(--bg-hover); }
+  .row .ic {
+    width: 16px; flex: none;
+    font-family: "Material Icons";
+    font-size: 12px;            /* Theme.fs-sm */
+    color: var(--text-secondary);
+    text-align: center;
+    line-height: 1;
+  }
+  .row .txt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* 危险行 */
+  .row.danger { color: var(--danger); }
+  .row.danger .ic { color: var(--danger); }
+  .row.danger.hover { background: var(--danger-hover); }
+
+  /* 分区标题（移动到）：同栅格，次级字色/字号，无交互 */
+  .row.section { color: var(--text-muted); font-size: 12px; }
+  .row.section .ic { color: var(--text-muted); }
+
+  /* 分组颜色行：色块 + chevron 钉右缘（padding-right 10px 与左侧对称） */
+  .row.value { padding-right: 10px; }
+  .row.value .txt { flex: 1; }
+  .swatch {
+    width: 13px; height: 13px; flex: none;
+    border-radius: 3.5px;
+    border: 1px solid var(--border-strong);
+  }
+  .chev {
+    width: 12px; flex: none;
+    font-family: "Material Icons";
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center; line-height: 1;
+  }
+
+  /* 分隔线：壳 9px + 1px 线，全宽 */
+  .sep { height: 9px; position: relative; flex: none; }
+  .sep::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 4px;
+    height: 1px; background: var(--border-subtle);
+  }
+
+  /* 说明表 */
+  table { border-collapse: collapse; margin-top: 40px; font-size: 12.5px; }
+  th, td { border: 1px solid #33363f; padding: 7px 14px; text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; background: #1d2027; }
+  td.old { color: var(--text-muted); }
+  td.new { color: #7fc08a; }
+</style>
+</head>
+<body>
+
+<h1>会话列表右键菜单 · 图标与宽度协调高保真</h1>
+<div class="sub">
+  统一点：<b>四菜单恒 200px 宽</b>（原 blank 固定 190 / row·grp 内容宽 164~220，四菜四种宽）；<b>分组颜色行色块+箭头钉右缘</b>（原紧跟文字，行结构唯一异类）。
+  保持点：30px 行高、10+16+9 图标栅格、5px 菜单 padding、radius 4、全宽分隔线、危险红、一套 Material Icons 字形。
+</div>
+
+<div class="stage">
+
+  <!-- ① 空白右键 -->
+  <div class="case">
+    <div class="case-label"><b>① 空白右键</b> · 200px</div>
+    <div class="menu">
+      <div class="row"><span class="ic">&#xE879;</span><span class="txt">新建会话</span></div>
+      <div class="row"><span class="ic">&#xE2CC;</span><span class="txt">新建分组</span></div>
+      <div class="sep"></div>
+      <div class="row"><span class="ic">&#xE5D7;</span><span class="txt">全部展开</span></div>
+      <div class="row"><span class="ic">&#xE5D6;</span><span class="txt">全部折叠</span></div>
+      <div class="sep"></div>
+      <div class="row"><span class="ic">&#xE8F5;</span><span class="txt">显示本地终端</span></div>
+    </div>
+  </div>
+
+  <!-- ② 成员右键 -->
+  <div class="case">
+    <div class="case-label"><b>② 成员右键</b> · 200px（长组名省略号）</div>
+    <div class="menu">
+      <div class="row hover"><span class="ic">&#xE3C9;</span><span class="txt">编辑</span></div>
+      <div class="row"><span class="ic">&#xE14D;</span><span class="txt">复制副本</span></div>
+      <div class="row danger"><span class="ic">&#xE872;</span><span class="txt">删除</span></div>
+      <div class="sep"></div>
+      <div class="row section"><span class="ic">&#xE9A1;</span><span class="txt">移动到</span></div>
+      <div class="row"><span class="ic">&#xE2C7;</span><span class="txt">默认组</span></div>
+      <div class="row"><span class="ic">&#xE2C7;</span><span class="txt">生产环境 / 测试环境组</span></div>
+      <div class="row"><span class="ic">&#xE2C7;</span><span class="txt">2</span></div>
+    </div>
+  </div>
+
+  <!-- ③ 组头右键 -->
+  <div class="case">
+    <div class="case-label"><b>③ 组头右键</b> · 200px</div>
+    <div class="menu">
+      <div class="row"><span class="ic">&#xE3C9;</span><span class="txt">编辑分组</span></div>
+      <div class="row value">
+        <span class="ic">&#xE40A;</span><span class="txt">分组颜色</span>
+        <span class="swatch" style="background:#3fbf7f;"></span>
+        <span class="chev">&#xE5CC;</span>
+      </div>
+      <div class="sep"></div>
+      <div class="row"><span class="ic">&#xE2CC;</span><span class="txt">新建分组</span></div>
+      <div class="sep"></div>
+      <div class="row"><span class="ic">&#xE8F5;</span><span class="txt">显示本地终端</span></div>
+    </div>
+  </div>
+
+  <!-- ④ 默认组右键 -->
+  <div class="case">
+    <div class="case-label"><b>④ 默认组右键</b> · 200px（无编辑行）</div>
+    <div class="menu">
+      <div class="row value">
+        <span class="ic">&#xE40A;</span><span class="txt">分组颜色</span>
+        <span class="swatch" style="background:#f0a432;"></span>
+        <span class="chev">&#xE5CC;</span>
+      </div>
+      <div class="sep"></div>
+      <div class="row"><span class="ic">&#xE2CC;</span><span class="txt">新建分组</span></div>
+      <div class="sep"></div>
+      <div class="row"><span class="ic">&#xE8F5;</span><span class="txt">显示本地终端</span></div>
+    </div>
+  </div>
+
+</div>
+
+<table>
+  <tr><th>维度</th><th>现状</th><th>本稿</th></tr>
+  <tr><td>菜单宽度</td><td class="old">blank 固定 190px；row/grp 内容宽 min(220, max(164, 内容)) —— 四菜四种宽</td><td class="new">四菜单恒 200px，长组名 elide</td></tr>
+  <tr><td>分组颜色行</td><td class="old">色块+箭头紧跟文字（文字不 stretch），padding-right 8px</td><td class="new">文字吸满，色块+箭头钉右缘，padding-right 10px 与左对称</td></tr>
+  <tr><td>行高 / 栅格</td><td class="old">30px；10+16+9；图标 fs-sm text-secondary</td><td class="new">保持不动（本已协调）</td></tr>
+  <tr><td>分隔线</td><td class="old">壳 9px + 1px border-subtle 全宽</td><td class="new">保持不动</td></tr>
+  <tr><td>图标字形</td><td class="old">一套 Material Icons（filled），细箭头与实心眼/文件夹密度混排</td><td class="new">字形不换（密度差异属字体特性，语义正确优先）；如需彻底统一粗细需嵌入 Outlined 字体，另行评估</td></tr>
+</table>
+
+</body>
+</html>

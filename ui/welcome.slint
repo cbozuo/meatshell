@@ -114,8 +114,7 @@ component SessionRow inherits Rectangle {
     // 位移输出到根元素 y + animate:animate 是 property-change 驱动的,绑定
     // 翻转产生的真实变化才会启动动画(不能用 if 包动画元素,那永不启动)。
     in property <length> drag-origin-y: 0px;
-    // (#slot-shift-same-group) 被拖行所属组:仅同组行参与让位与命中。
-    // 跨组拖动排序已整体移除——框与让位都只发生在被拖行自己的组内。
+    // (#slot-shift-same-group) 被拖行所属组:仅同组行参与让位与命中(只支持组内排序)。
     in property <string> drag-group: "";
     // (#drag-fly-home 2026-09-10) 取消归位窗口期:让位冻结、行命中停报、
     // 本体行立即复现(ghost 正在飞回原槽)。
@@ -144,7 +143,10 @@ component SessionRow inherits Rectangle {
     //   下移: ghost 底 > X 中线  ⇔  pointer > slot-y - half → X 上移让位
     //   上移: ghost 顶 < X 中线  ⇔  pointer < slot-y + half → X 下移让位
     // 横线已退役,让位动画本身就是落点指示。
-    property <length> line-half: (root.drag-pitch - 2px) / 2;
+    // (#member-gap 2026-09-21) 行距加 2px 后步距 = drag-pitch,**中线 = pitch/2**:
+    // 成员行距(行高+2px 间距)从此恰好等于 drag-pitch(32/34),命中带以整步距
+    // 对称划分,不再有 -2px 的错位补偿。
+    property <length> line-half: root.drag-pitch / 2;
     // (#shift-pure) 让位几何 = **纯阈值**(无指针死区):抖动由"命中与让位
     // 同刻翻转"天然消除。位移输出到根元素 y + animate:animate 是
     // property-change 驱动的,绑定翻转产生的真实变化才会启动动画
@@ -162,8 +164,7 @@ component SessionRow inherits Rectangle {
     property <length> ghost-top-y: root.pointer-y + self.ghost-shift;
     property <length> ghost-bottom-y: self.ghost-top-y + (root.drag-pitch - 2px);
     function recompute-shift() {
-        // (#in-group-only) 只做**组内排序**:跨组的让位分支(异组行上/下移)
-        // 已随跨组排序一并移除——非本组的行一律不让位,框也不会出现在别的组。
+        // (#in-group-only) 只做组内排序:非本组的行一律不让位。
         if (!root.list-dragging || session.builtin || session.id == root.drag-id
                 || root.drag-fly-home || session.group != root.drag-group) {
             self.shift-y = 0px;
@@ -187,14 +188,13 @@ component SessionRow inherits Rectangle {
     // 槽位框高度、±pitch 偏移与让位阈值(line-half)全部由此派生,失配
     // 会导致框比行高 8px、错位半行(用户截图),让位手感也迟钝。
     in-out property <length> drag-pitch: root.compact ? 34px : 32px;
-    // (#drag-step-real 2026-09-12) **让位步长 = 真实行高**(= drag-pitch - 2px)。
-    // 列表的行间距只存在于"组头 ↔ 首成员"之间(每个会话行是独立的 VerticalLayout,
-    // 行与行之间 sess-list 的 spacing 为 0),所以成员行的真实排布步长就是行高本身:
-    // 侧栏 32px、宽列表 30px —— 与 drag-pitch 恒差 2px。让位(shift-y)、
-    // 槽位框的 ±一格偏移、脊线接替一格,量的都是"挪一行",必须用这个
-    // 步长;用 drag-pitch 会每让位一行多挪 2px,几行之后让位行与空档错开、组脊线
-    // 在让位处裂开一道缝(用户反馈的"让位后竖线闭合不上")。
-    property <length> drag-step: root.drag-pitch - 2px;
+    // (#drag-step-real 2026-09-12 → #member-gap 2026-09-21) **让位步长 = 行距**。
+    // 旧世界:成员行紧贴(sess-list spacing 0),排布步长 = 行高 = pitch - 2px。
+    // 现在(#member-gap):成员行之间有 2px 间距,真实排布步长 = 行高 + 2px
+    // **恰好等于 drag-pitch**(32/34)——让位(shift-y)、槽位框的 ±一格偏移、
+    // 脊线接替一格,量的都是"挪一行 = 一个 pitch";行与行之间的 2px 间隙
+    // 由脊线段的向下桥接补齐(见 tree-guide 段的 seg-bridge)。
+    property <length> drag-step: root.drag-pitch;
     // (#drag-ghost-pointer 2026-09-06) 指针几何落点:slot-y = 本行在列表内容
     // 坐标里的 y(实例侧拖拽中经 changed 钩子写入,非 init 绑定),配合
     // root.ghost-y 判定 ghost 悬停在本行哪
@@ -233,8 +233,7 @@ component SessionRow inherits Rectangle {
         root.drag-dy > 0px
             ? self.ghost-bottom-y
             : self.ghost-top-y;
-    // (#in-group-only) 跨组排序已移除:命中只认**本组**成员行;组头行不参与
-    // 行落点(其上方是组头卡,不是可落槽位)。
+    // (#in-group-only) 命中只认**本组**成员行;组头行不参与行落点(其上方是组头卡)。
     // (#yield-owner-3) 命中行 = 让位的那一行,判据与 recompute-shift 同源,
     // 带宽一个身位、相邻两行首尾相接 —— 恒有且只有一行被命中,它就是"因让位
     // 腾出来的那一格"的所有者:
@@ -327,10 +326,13 @@ component SessionRow inherits Rectangle {
     height: root.compact ? 32px : 30px;
     // (#slot-shift) 让位位移:配合外包 wrapper 使用(布局子元素不能设 y)。
     y: root.shift-y;
-    // (#ease-align-spec 2026-09-10) 140ms + cubic-bezier(.22,.61,.36,1):
-    // 对齐交互原型/规格 §5·§6 的让位动画参数(原 120ms ease-out)。缓动曲线
-    // 换成 spec 那条"前段快、后段收"的曲线,多行连续让位时更跟手。
-    animate y { duration: 140ms; easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
+    // 让位动画 = 物理弹簧 spring(0.35) / 90ms。用弹簧而非贝塞尔:animate 由属性变化驱动,
+    // 贝塞尔下目标每变一次就从曲线 t=0 重跑,连续拖动时观感是"每让一格都重新起跑";
+    // 弹簧解 ODE、目标改变时保留当前速度,跟手更顺。
+    // duration 定自然频率(w_n = 2π/duration),bounce 定阻尼(zeta = 1-bounce);bounce
+    // 只能是数字字面量(spring(50%) / spring(x*2) 编译报错)。三处必须同参(本行 + 落点框
+    // + 脊线段),错参会出现"线比行早到"的错拍。
+    animate y { duration: 90ms; easing: spring(0.35); }
 
     // Remember where the right-click landed so the popup can appear there.
     // (#ctx-menu-backdrop 2026-09-08) 右键菜单整体迁往 AppWindow 根的集中
@@ -563,64 +565,6 @@ component SessionRow inherits Rectangle {
         && (root.drop-owner == session.id
             || (session.id == root.drag-id && !root.drop-has-target
                 && root.drop-owner == ""));
-    if root.box-show : Rectangle {
-        property <color> box-c: Theme.group-color(root.session.group-color-hex != "", root.session.group-color);
-        // (#slot-spine-head-gap 2026-09-14) 框占据的恒是**本行原槽**(y = -shift-y
-        // 抵消行自身位移),而"组头 ↔ 组首成员"之间有一道 **2px 布局间距**
-        // (成员行之间没有,见 #spine-seg-flush)。于是组首成员的槽位上方空出
-        // 一小段,框里的补线只画框高,缺口就露在框左上角 —— 用户实测"框左侧的
-        // 竖线上面有个缺口",像素剖面:组头卡底边 y≈819、竖线 823 才开始。
-        // 处理与成员行自己的脊线同款(见 seg-seam-above):本行是组首成员时,
-        // 补线向上多画 2px,接到组头卡下边,缺口消失。
-        property <bool> box-head-gap: root.session.group-header != "";
-        // (#slot-box-at-yielded-slot-3) 框 = **命中行原槽位**(= 让位腾出的
-        // 那一格 = 松手后新成员所在的槽位)。框是命中行的子元素、命中行自己
-        // 带着 shift-y,所以行内坐标写 `-shift-y` 抵消:
-        //   下移:让位行 shift = -step → 框 y = +step,视觉仍停在该行原槽;
-        //   上移:让位行 shift = +step → 框 y = -step,同理。
-        // 命中带与让位严格同源(见 ghost-over);被拖行自己命中时 shift 恒为 0
-        // → 框停在自己的槽位,即"松手无变化"。(#slot-box-inset) 判定与
-        // box-show 同源:有 owner 就是 owner 行,否则是被拖行自己。
-        y: root.drop-owner == session.id ? -root.shift-y : 0px;
-        // 插入位换行时给 y 挂短过渡:框滑动过去而不是瞬移,跟得上 ghost。
-        animate y { duration: 120ms; easing: ease-out; }
-        // (#slot-box-align-r2 2026-09-11) 左缘对齐**成员内容起点**
-        // (10px + content-indent = 28px,即分支横线右端 / 图标方块左缘):
-        // 旧值 24px 落在横线(20..28)中间,看上去"框把横线切断了"(用户
-        // 截图)。右缘保持 8px 内缩,与列表右边界对齐。
-        x: 10px + root.content-indent;
-        width: root.width - (10px + root.content-indent) - 8px;
-        height: root.drag-pitch - 2px;
-        background: box-c.with-alpha(0.06);
-        // (#slot-spine 2026-09-11) 落点槽位补一段**组脊线**:插入点是一个"洞"
-        // ——那一行让位走了,没有行来画自己的竖线段,于是目标组/本组的脊线在
-        // 落点框处断掉一截(用户实测"移入组的左侧竖线不存在")。这里在框的左
-        // 侧补一条与脊线同 x / 同宽 / 同色的竖线,贯穿框高,把缺口接上。
-        // x 取自与成员行完全相同的公式(10 + content-indent/2 - 1),再换算成
-        // 框内相对坐标(-content-indent/2 - 1);框是 SessionRow 的直接子元素、
-        // 无 clip,负向溢出正常绘制。
-        // (#slot-box-left-solid 2026-09-11 → #slot-box-solid 2026-09-14) 左缘
-        // **只有这一条补线**:09-11 时框左缘另有 3 段虚线,与这条实脊线并排
-        // →"一虚一实"两条线,样式不统一(用户截图),故当时先去掉左缘虚线段。
-        // 现在框整体改实线描边(#slot-box-solid):左缘轮廓由框自身描边承担
-        // (组色 0.55),本条补线在框左外侧、与成员行竖线同 x 贯穿框高,两者
-        // 同为实线,不再风格冲突。
-        Rectangle {
-            x: -(root.content-indent / 2) - 1px;
-            // (#slot-spine-head-gap 2026-09-14) 组首成员向上补 2px,接住组头卡;
-            // 其余行照旧从框顶开始(相邻成员行紧贴,没有缝可补)。
-            y: parent.box-head-gap ? -2px : 0px;
-            width: 2px;
-            height: parent.height + (parent.box-head-gap ? 2px : 0px);
-            background: parent.box-c.with-alpha(root.spine-hot ? 0.90 : 0.30);
-        }
-        // (#slot-box-solid 2026-09-14) 描边三值 = 组色圆角实线。为什么由虚线
-        // 改实线、颜色为何取 0.55,见上方属性区同名段落,此处不重复。
-        border-width: 1px;
-        border-color: box-c.with-alpha(0.55);
-        border-radius: 6px;
-    }
-
     card := Rectangle {
         // (#session-list-inset-revert 2026-09-05) 撤销 4px 内缩,恢复全宽:
         // 内缩后与右侧资源面板的行高亮宽度不一致,左右不协调(用户反馈)。
@@ -650,6 +594,9 @@ component SessionRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 10px + root.content-indent;
         padding-right: 10px;
+        // (#row-icon-align-r2 2026-09-22) 图标槽 15→16px 时曾把间距同步放到
+        // 10px,实测偏空(用户截图)。图标视觉宽已从 12.86 增到 14.91,槽内留白
+        // 只剩 0.55px,8px 的净距已足够;回到 8px。
         spacing: root.compact ? 8px : 12px;
 
         Rectangle {
@@ -660,13 +607,16 @@ component SessionRow inherits Rectangle {
             // (#proto-icon 2026-09-17) 图标内容**按协议取字形**,与新建会话
             // 对话框的协议下拉框同源。
             // (#hifi-icon-r3 2026-09-20) 去掉底板色块(用户实测与文字抢视觉),
-            // 图标直接裸渲染;15px 与成员名 fs-sm(12px) 视觉等高协调。
+            // 图标直接裸渲染。
+            // (#row-icon-align 2026-09-22) 槽 15px → 16px:ProtocolIcon 按满槽宽
+            // 算字号,字形视觉高 10.32 → 11.97px,与 13px 成员名的比值由 0.79
+            // 升到 0.92。此前图标比协议下拉框(18px 槽)小一号、显得发糊。
             width: 16px;
             height: 16px;
             y: (parent.height - self.height) / 2;
             ProtocolIcon {
-                width: 15px;
-                height: 15px;
+                width: 16px;
+                height: 16px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 proto-id: session.kind == "local" ? "ssh" : session.kind;
@@ -726,78 +676,72 @@ component SessionRow inherits Rectangle {
     }
     }
 
+    // (#slot-box-persist 2026-09-21) 框从 `if box-show` 条件元素改为**常驻元素
+    // + visible**:owner 换手(如上移命中组首行)时旧方案销毁旧框、在新区新建
+    // 实例——新建实例的 animate y 首帧不播(animate 是属性变化驱动,首值不是
+    // "变化"),y 瞬时取终值 -shift-y(已翻 +step),而宿主行的 140ms 让位动画
+    // 才刚起步(视觉还在原槽)→ 框绝对位置瞬时高出一格,正好落进组头卡区、
+    // 左补线伸进组名,140ms 后才回落(用户实测"上移到第一位框跳到组名又回来、
+    // 竖线出现在组名里")。常驻后元素跨换手存活,y 绑定变化时动画真正播放、
+    // 与行 y(同参 140ms bezier)锁步,换手期框绝对位置恒定,呈现为平滑滑动。
+    // 常驻多 2 个不可见元素/行,visible:false 不参与绘制,成本可忽略。
+    Rectangle {
+        visible: root.box-show;
+        property <color> box-c: Theme.group-color(root.session.group-color-hex != "", root.session.group-color);
+        // (#slot-box-at-yielded-slot-3) 框 = **命中行原槽位**(= 让位腾出的
+        // 那一格 = 松手后新成员所在的槽位)。框是命中行的子元素、命中行自己
+        // 带着 shift-y,所以行内坐标写 `-shift-y` 抵消:
+        //   下移:让位行 shift = -step → 框 y = +step,视觉仍停在该行原槽;
+        //   上移:让位行 shift = +step → 框 y = -step,同理。
+        // 命中带与让位严格同源(见 ghost-over);被拖行自己命中时 shift 恒为 0
+        // → 框停在自己的槽位,即"松手无变化"。(#slot-box-inset) 判定与
+        // box-show 同源:有 owner 就是 owner 行,否则是被拖行自己。
+        y: root.drop-owner == session.id ? -root.shift-y : 0px;
+        // (#slot-box-above 2026-09-21) 与行/脊线动画同参(原 120ms ease-out)。
+        animate y { duration: 90ms; easing: spring(0.35); }
+        // (#slot-box-align-r2 2026-09-11) 左缘对齐**成员内容起点**
+        // (10px + content-indent = 28px,即分支横线右端 / 图标方块左缘):
+        // 旧值 24px 落在横线(20..28)中间,看上去"框把横线切断了"(用户
+        // 截图)。右缘保持 8px 内缩,与列表右边界对齐。
+        x: 10px + root.content-indent;
+        width: root.width - (10px + root.content-indent) - 8px;
+        height: root.drag-pitch - 2px;
+        background: box-c.with-alpha(0.06);
+        // (#slot-box-solid 2026-09-14) 描边三值 = 组色圆角实线。为什么由虚线
+        // 改实线、颜色为何取 0.55,见上方属性区同名段落,此处不重复。
+        border-width: 1px;
+        border-color: box-c.with-alpha(0.55);
+        border-radius: 6px;
+    }
+
     // (#tree-guide-keep-on-drag 2026-09-09) 树形引导竖线提到 card 之外:
     // 拖动期间 card.opacity 归零(原槽成洞),树线若留在 card 内会一并消失,
     // 原槽留下一段断线(用户截图反馈"左侧竖线要补全")。移为 SessionRow
     // 根同级元素后它不受 card.opacity 影响,始终锚在原槽位置补全竖线;非
     // 拖动态视觉不变(竖线位于左侧内缩区,不与内容重叠)。
-    // (#spine-continuous-drag-r2 2026-09-11) 既**跟手**又**不断线**:上一版
-    // 拖动期改用组头里的一条固定高脊线 —— 线不动而行在让位位移,视觉上
-    // "组都往下走了竖线没走",而且默认组(成员 indent 为 0)的线位还算错
-    // (用户实测双反馈)。改回**分段线随行移动**,再用"向原位方向多画一格"
-    // (y = min(0, shift-y) / height = 行高 + |shift-y|)把位移留下的缺口自
-    // 己盖住:行移走时它朝原位延一格,正好补上缺口,两端都不露白。
     if root.tree-guide : Rectangle {
-        // 让位位移(0 / ±drag-step):作为本段竖线的延展依据。
-        property <length> sy: root.shift-y;
-        // (#spine-seg-gap 2026-09-11 → #spine-seg-flush 2026-09-12) **补隙方向
-        // 修正**。09-11 那版的前提是"相邻两行之间恒有 2px 行间距",于是让每段
-        // 向下多画 2px 去盖缝;但布局里那 2px 只存在于【组头 ↔ 首成员】(同一个
-        // 组内 VL 的 spacing):成员行各是一个独立 VL、sess-list spacing 为 0,
-        // **行与行是紧贴的**。于是这 2px 没补到任何缝,反而让相邻两段**重叠**
-        // —— 组色 α0.30 叠两次成 α0.51,在两行交界处糊出一小段比竖线更亮的线,
-        // 看上去就是竖线上挂了一颗"点"(像素实测:竖线 RGB 46,68,98,重合处
-        // 54,89,135;组内成员多于一个才出现——单成员组没有相邻段可叠,用户正是
-        // 这样描述并截图标注的)。
-        // 现在反过来:段高 = **行高**(成员之间天然首尾相接、零重叠),只让
-        // "上方真有缝"的那一段向上延 2px —— 缝在组头卡的下边,那儿正是组首成员。
-        // (#spine-seg-flush 2026-09-12) 本段上方是否有 2px 缝(需要向上补):
-        // 组首成员 —— 上方隔着组内 VL 的 2px spacing,就是组头卡。
-        property <bool> seg-seam-above: root.session.group-header != "";
-        property <length> seg-top: self.seg-seam-above ? 2px : 0px;
+        // 脊线段:2px 宽 / 组色 / 全行高。y 用 `-root.y` 抵消行自身的位移(root.y 即行 y
+        // 的动画后值),段因此钉死在自己的槽位 —— 让位时只有成员行滑动、竖线不动,段间
+        // 边界恒等于静止时的精确铺贴关系,不会出现亚像素暗缝。
         // (#group-hue-align-html 2026-09-10) 2px + α0.30:对齐 HTML 原型
         // 规格(2px 组色 α0.28);2px 同时更抗 femtovg 邻接重绘闪烁。
-        // (#tree-line-full-r2 2026-09-10) 竖线恢复**全行高**。上一版按
-        // `group-header != ""` 砍成下半段是错的:纯组头行(id == "")根本不
-        // 渲染 SessionRow,本就没有竖线;该判断实际只命中"组内第一个成员"
-        // (id != "" 且 group-header != "",如 188 行),把它砍半 → 脊线在组头
-        // 下方断了一截。恢复全高后,脊线自然从组头卡**下方**开始(组头卡片
-        // 不含 tree-guide),既"不穿组头"又"不断线"。
+        // 竖线取**全行高**:从组头卡下方开始(组头卡不含 tree-guide),不穿组头也不断线。
         // (#tree-line-hover 2026-09-10) 悬停该组(组头或组内任一行)→ 整条
         // 脊线高亮。`hover-group != ""` 是必需的保护——空字符串是共享状态
         // 的初值,若不排除,所有 group == "" 的行会被判定为常亮(幽灵高亮)。
-        // (#line-highlight-color-only 2026-09-10) **只提亮,不加粗**:上版
-        // 高亮时宽 2px→3px 且 x 左移 0.5px 保轴心,虽然轴心不动,但半像素
-        // 落在像素边界上会让线出现"半透边缘 + 相邻元素 1px 重绘"的抖动
-        // 观感(用户反馈"加粗会影响布局")。改为宽度/位置恒定、只抬不透明
-        // 度 0.30 → 0.90:结构线的高亮本质是"亮度层级"变化,用透明度表达
-        // 最干净,也彻底避开几何改动。
-        // (#ctx-highlight-scope 2026-09-10) 竖线的点亮范围 = "鼠标所在的组"
-        // ∪ "右键菜单锚点所在的组"。两者都是**指向本组的指针**,语义一致:
-        // 菜单开着时锚点就是这一组,竖线不该被取消(用户截图两例:右击成员、
-        // 右击组头,都要求整组竖线保持高亮)。菜单一失效(自动关闭/Esc/选中
-        // 一项),ctx-group-active 立刻回落 false,竖线随之熄灭——高亮仍能被
-        // "鼠标在哪 + 菜单开没开"完整解释,没有第三个隐藏状态。
+        // 高亮只抬不透明度(0.30 → 0.90),宽度与位置恒定 —— 改几何会让半像素落在像素边界上,
+        // 出现"半透边缘 + 邻接重绘"的抖动。
+        // 点亮范围 = 鼠标所在的组 ∪ 右键菜单锚点所在的组;菜单失效即熄灭,没有第三个隐藏状态。
         // (#spine-highlight-drag 2026-09-11) 拖动期间**被拖行所在组**的脊线
         // 保持点亮(hover 在 grab 期间冻结,改由拖动状态驱动)。
-        // (#slot-spine-hot) 提到组件级共用:落点框左侧补的那段竖线
-        // 也要用同一个高亮值,否则相邻两段一深一浅、又是"不统一"(用户实测)。
+        // 高亮值由组件级 spine-hot 统一给出:悬停 / 菜单锚点 / 拖动中 ghost 所在组 → 0.90。
+        // 每段向上外延 2px(上桥接):首成员接住组头卡下方那道缝,其余成员吃成员间的
+        // 2px 缝。相邻段因此首尾精确相接、零重叠 —— 重叠会让组色 α0.30 叠成 α0.51,
+        // 在交界处糊出一段比线身更亮的线。
         x: 10px + (root.content-indent / 2) - 1px;
-        // (#spine-continuous-drag-r3) 延展方向 = **朝自己的原位**:
-        //   · 行被下移(+pitch,发生在拖动上移时)→ 缺口在它**上方** → 顶边抬到
-        //     -pitch 盖住(高度同时 +pitch);
-        //   · 行被上移(-pitch,发生在拖动下移时)→ 缺口在它**下方** → 顶边不动、
-        //     高度 +pitch。
-        // (#spine-seg-flush) 再叠一项"上方补缝"(seg-top,仅组首成员非 0):
-        // 它向上延的是组头卡下方那道 2px 缝,与让位延展互不干扰。
-        y: -self.seg-top - max(0px, self.sy);
+        y: -2px - root.y;
         width: 2px;
-        // (#spine-seg-flush) 基准高度 = **行高**(相邻两行紧贴,段与段首尾相接
-        // 即连续,多画就是重叠,见 seg-top 处的成因说明)。
-        height: parent.height + abs(self.sy) + self.seg-top;
-        // 与行的让位动画同参数(140ms / cubic-bezier(.22,.61,.36,1)),否则
-        // 线会先跳到新位置、行再滑过去,出现"线比行早到"的错拍。
-        animate y, height { duration: 140ms; easing: cubic-bezier(0.22, 0.61, 0.36, 1); }
+        height: parent.height + 2px;
         background: Theme.group-color(root.session.group-color-hex != "", root.session.group-color).with-alpha(root.spine-hot ? 0.90 : 0.30);
         animate background { duration: 120ms; easing: ease-out; }
     }
@@ -916,14 +860,11 @@ export component Welcome inherits Rectangle {
     // 槽位框高度、±pitch 偏移与让位阈值(line-half)全部由此派生,失配
     // 会导致框比行高 8px、错位半行(用户截图),让位手感也迟钝。
     in-out property <length> drag-pitch: root.compact ? 34px : 32px;
-    // (#drag-step-real 2026-09-12) 让位步长 = **真实行高**(= drag-pitch - 2px)。
-    // 行间距只存在于"组头 ↔ 首成员"之间(每个会话行是独立的 VerticalLayout,
-    // 行与行之间 sess-list 的 spacing 为 0):成员行的真实排布步长 = 行高本身
-    // (侧栏 32px / 宽列表 30px),恒比 drag-pitch 小 2px。让位(shift-y)、
-    // 槽位框的 ±一格偏移、脊线接替一格,量的都是"挪一行",
-    // 必须用这个步长;用 drag-pitch 每让位一行就多挪 2px,几行之后让位行与
-    // 空档错开、组脊线在让位处裂开一道缝(用户反馈"让位后竖线闭合不上")。
-    property <length> drag-step: root.drag-pitch - 2px;
+    // (#drag-step-real 2026-09-12 → #member-gap 2026-09-21) 让位步长 = **行距**。
+    // 旧行紧贴时步长 = 行高(pitch - 2px);现在成员行之间有 2px 间距
+    // (#member-gap),真实排布步长 = 行高 + 2px = drag-pitch(32/34)。
+    // 让位(shift-y)、槽位框的 ±一格偏移、脊线接替一格,量的都是"挪一行"。
+    property <length> drag-step: root.drag-pitch;
     // (#drag-ghost-pointer 2026-09-06) 聚合落点:命中行经 drop-report 上报
     // (ghost 中心同一时刻只可能落在一行内,后写覆盖即正确值);
     // drag-start 清空,松手消费。ghost-y 的计算放在条件子树内(list-host,
@@ -937,8 +878,7 @@ export component Welcome inherits Rectangle {
     property <int> drop-target-pos: 1;
     // (#ghost-pill) 落点归属组:"" = 无落点(取消归位);行命中 = 落点行的组。
     // ghost 右侧的落点标签与组头徽章预览共用这一个判定。
-    // (#in-group-only) 跨组排序移除后,组头命中/待出组/出组/越界各态一并退役,
-    // 落点组恒等于命中行的组。
+    // (#in-group-only) 落点组恒等于命中行的组。
     property <string> drop-here-group:
         root.drag-fly-home ? "" : root.drop-target-group;
     property <int> drop-here-pos: root.drop-target-pos;
@@ -1609,8 +1549,19 @@ export component Welcome inherits Rectangle {
                         viewport-width: self.width;
                         viewport-height: max(self.height, sess-list.preferred-height);
                     sess-list := VerticalLayout {
-                    spacing: 0px;
+                    // (#member-gap 2026-09-21) 成员行之间从紧贴(0)改为 **2px**,
+                    // 与"组名↔首成员"的既有 2px 对齐(用户提议):拖拽槽框的边线
+                    // 不再紧贴下一行起笔位被盖(下边线丢失的根因),列表密度与
+                    // 设计稿 #session-tree-hierarchy 的本意(成员间 2px)一致。
+                    // 注意:步距从此 = 行高+2 = drag-pitch(32/34),拖拽常量
+                    // drag-step/line-half 已同步重整(见 SessionRow 同名属性)。
+                    spacing: 2px;
                     for session[i] in sessions : VerticalLayout {
+                        // (#slot-box-above 2026-09-21) 1.18 运行时动态 z 首次落地:
+                        // 画落点框的属主行与被拖行整子树抬到其它条目之上——邻行卡/
+                        // 树线不再可能压住框的边线(1.18 起兄弟 z 可运行时重排,
+                        // 不再依赖声明顺序)。ghost 卡在列表之后声明,恒在最上。
+                        z: (session.id == root.drag-drop-owner || session.id == root.drag-id) ? 1 : 0;
                         // Exclude hidden rows from layout spacing while a group
                         // is collapsed; keep its first row for the group header.
                         visible: (session.group-header != "" || !session.collapsed)
@@ -1630,7 +1581,9 @@ export component Welcome inherits Rectangle {
                         // r3 的"折叠 4px/展开 12px"自适应会随点击收展跳变,导致
                         // 点击的组自身上下位移(用户反馈);固定值消除跳变。
                         // (#density) 组间距 8→6:与收紧后的行高成比例。
-                        padding-top: self.visible && session.group-header != "" && i > 0 ? 6px : 0px;
+                        // (#member-gap 2026-09-21) 6→4:列表 spacing 统一 2px 后,
+                        // 组间净距 = 4 + 2 = 6px,与改前完全一致(补偿而非加大)。
+                        padding-top: self.visible && session.group-header != "" && i > 0 ? 4px : 0px;
                         spacing: 2px;
                         // Group header on the first row of each group (#41).
                         // Click anywhere on it to collapse / expand the group.
@@ -1681,10 +1634,8 @@ export component Welcome inherits Rectangle {
                                         self.absolute-position.y - sess-list.absolute-position.y;
                                 }
                             }
-                            // (#in-group-only 2026-09-14) 跨组排序移除:成员拖动
-                            // 不再进入别的组,组头不做任何"进组"命中,也不让位。
-                            // 组头保留的交互只有:点击折叠/展开、右键菜单、
-                            // 以及组头自身的拖动排序(insert-here / 插入线)。
+                                // (#in-group-only) 组头不做"进组"命中、也不让位;保留的交互:点击
+                                // 折叠/展开、右键菜单、组头自身的拖动排序。
                             // (#density) 组头 38→32,与成员行同比例收紧。
                             height: 32px;
                             // (#group-sort-line-r2 2026-09-11) 组排序**插入线**的
@@ -2458,9 +2409,7 @@ export component Welcome inherits Rectangle {
                                 -6000px, 6000px);
                         }
                     }
-                    // (#in-group-only 2026-09-14) 跨组排序移除:列表首/尾越界
-                    // 哨兵(over-head / over-ungroup → move-to-start / end)连同
-                    // "移出分组"语义一并退役 —— 拖出本组范围即无落点,松手原地。
+                    // (#in-group-only) 拖出本组范围即无落点,松手原地。
 
                     // (#drop-slot-line-r5 2026-09-07) 横线整体退役:用户定稿
                     // "去除蓝色主题色线条",让位基准改为拖动成员(ghost 卡)
@@ -2560,9 +2509,7 @@ export component Welcome inherits Rectangle {
                             || (root.group-dragging && root.group-drag-id != ""
                                 && !root.drag-fly-home) : ghost-card := Rectangle {
                         property <length> ghost-h: max(1px, root.drag-pitch - 2px);
-                        // (#in-group-only) 底部越界的"出组变形"(accent 描边)
-                        // 随跨组排序一并移除:拖到底不换组也不出组,ghost 恒为
-                        // 成员样式。
+                        // (#in-group-only) 拖到底不换组也不出组,ghost 恒为成员样式。
                         // (#ghost-compact-card 2026-09-11) 原 #ghost-band 的
                         // "成员样式 / 顶层样式"两套层级(由 in-group 驱动的缩进、
                         // 图标尺寸、字号字重)随 ghost 卡改**纯文字紧凑卡**一并

@@ -269,6 +269,7 @@ impl WindowCloser {
         if self.exit_confirmed.replace(true) {
             return;
         }
+        hide_tray_flyout();
         if let Some(w) = self.window.upgrade() {
             w.set_confirm_close_open(false);
             save_layout(&w, &self.store);
@@ -355,6 +356,17 @@ fn close_session_rows(
 thread_local! {
     static TRAY_ENSURE: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
     static TRAY_HANDLE: RefCell<Option<Tray>> = const { RefCell::new(None) };
+    // (#tray-menu-flyout 2026-09-21) 自绘弹层。(#tray-flyout-blank) 不再常驻:
+    // 右击现建、关闭即销毁(见 hide_tray_flyout),TRAY_MENU 只是"当前存活
+    // 实例"的槽位,None = 无弹层。
+    static TRAY_MENU: RefCell<Option<Rc<TrayMenuWindow>>> = const { RefCell::new(None) };
+    static TRAY_DISMISS_ARMED: Cell<bool> = const { Cell::new(false) };
+    // (#about-window 2026-09-21) 托盘「关于」的独立介绍弹窗槽位(现建现毁,
+    // 同 TRAY_MENU 模式)。
+    static ABOUT_WIN: RefCell<Option<Rc<AboutWindow>>> = const { RefCell::new(None) };
+    // (#tray-flyout-r8) 菜单打开期间的 Esc 轮询 Timer(50ms,GetAsyncKeyState;
+    // NOACTIVATE 窗口收不到键盘焦点的绕行方案)。
+    static TRAY_ESC_TIMER: RefCell<slint::Timer> = RefCell::new(slint::Timer::default());
 }
 
 /// (#close-exit-fix 2026-09-19) 退出看门狗。
@@ -435,6 +447,384 @@ fn minimize_to_tray(win: &AppWindow) {
     let _ = win.hide();
 }
 
+fn hide_tray_flyout() {
+    TRAY_DISMISS_ARMED.with(|a| a.set(false));
+    // (#tray-flyout-r8) 停 Esc 轮询 + 卸载点外部收起的低级鼠标钩子。
+    TRAY_ESC_TIMER.with(|t| t.borrow().stop());
+    Tray::remove_menu_hook();
+    TRAY_MENU.with(|m| {
+        if let Some(w) = m.borrow().as_ref() {
+            let _ = w.hide();
+        }
+    });
+    // (#tray-icon-vanish 2026-09-21) 弹层抢前台会让 Explorer 的托盘悬停/溢出
+    // 层收起,图标偶发停留"未重画"态 —— 关闭时 NIM_MODIFY 兜底强制重画。
+    Tray::refresh_icon();
+    // (#tray-flyout-blank 2026-09-21) 关闭即销毁弹层窗口(0ms 后,等当前输入
+    // 事件栈退栈),每次右击都重建、走"首次显示"路径。复用窗口时实测二次打开
+    // 必空白:hide 时 winit 后端 frame-throttle 可能仍挂着未决 redraw(隐藏
+    // 窗口收不到 WM_PAINT,pending 停留 true、计时器空转);再 show 时后端先清
+    // pending,我们的 request_redraw 又被仍在运行的计时器吞掉
+    // (request_throttled_redraw: `if self.timer.running() { return }`),
+    // 直到鼠标滑动触发重绘才有内容。销毁重建彻底绕开该状态机,也消灭空转。
+    // is_visible 保护:0ms 销毁若排在一次"现建+show"之后执行(极快连击),
+    // 不能把正显示的新实例一起销毁。
+    slint::Timer::single_shot(std::time::Duration::from_millis(0), || {
+        let visible = TRAY_MENU.with(|m| {
+            m.borrow()
+                .as_ref()
+                .is_some_and(|w| w.window().is_visible())
+        });
+        if !visible {
+            TRAY_MENU.with(|m| *m.borrow_mut() = None);
+        }
+    });
+}
+
+/// (#about-window 2026-09-21) 隐藏并销毁「关于」弹窗(0ms 后等输入事件栈退
+/// 栈,is_visible 保护,同 hide_tray_flyout 的销毁模式)。
+fn hide_about_window() {
+    ABOUT_WIN.with(|m| {
+        if let Some(w) = m.borrow().as_ref() {
+            let _ = w.hide();
+        }
+    });
+    slint::Timer::single_shot(std::time::Duration::from_millis(0), || {
+        ABOUT_WIN.with(|m| {
+            let visible = m
+                .borrow()
+                .as_ref()
+                .is_some_and(|w| w.window().is_visible());
+            if !visible {
+                *m.borrow_mut() = None;
+            }
+        });
+    });
+}
+
+/// (#about-window 2026-09-21) 托盘菜单「关于」→ 弹独立介绍窗:**不 show 主
+/// 界面、不移除托盘图标**(生命周期跟随主界面隐藏态,"关于"不动主界面)。
+/// 现建现毁(同托盘弹层,绕开二次 show 空白的状态机),主显示器工作区居中。
+fn show_about_window(main: &slint::Weak<AppWindow>) {
+    ABOUT_WIN.with(|m| {
+        if let Some(old) = m.borrow_mut().take() {
+            let _ = old.hide();
+        }
+    });
+    // (#tray-flyout-r7) 创建期注入:标志 → 后端创建钩子给这个窗口带 owner
+    //(托盘宿主)/skip-taskbar/无激活(见 window.rs TRAY_WINDOW_NEXT)。
+    window::TRAY_WINDOW_NEXT.store(true, std::sync::atomic::Ordering::Relaxed);
+    let about = match AboutWindow::new() {
+        Ok(w) => {
+            window::TRAY_WINDOW_NEXT.store(false, std::sync::atomic::Ordering::Relaxed);
+            Rc::new(w)
+        }
+        Err(e) => {
+            window::TRAY_WINDOW_NEXT.store(false, std::sync::atomic::Ordering::Relaxed);
+            tracing::error!("about: window failed: {e}");
+            return;
+        }
+    };
+    if let Some(w) = main.upgrade() {
+        about.set_dark_mode(w.get_dark_mode());
+        about.set_ui_scale(w.get_ui_scale());
+        about.set_ui_font_family(w.get_ui_font_family());
+        about.set_wallpaper_active(w.get_wallpaper_active());
+        about.set_wp_accent(w.get_wp_accent());
+    }
+    about.set_version(env!("CARGO_PKG_VERSION").into());
+    about.on_close_clicked(move || {
+        hide_about_window();
+    });
+    about.on_open_repo(move || {
+        let url = "https://github.com/yituorou/meatshell";
+        #[cfg(windows)]
+        let _ = std::process::Command::new("explorer").arg(url).spawn();
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open").arg(url).spawn();
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    });
+    // 窗口原生关闭钮:拦截为隐藏 + 延迟销毁(真关闭在托盘态会触发"最后
+    // 可见窗口关闭"的收尾路径)。
+    about.window().on_close_requested(move || {
+        hide_about_window();
+        slint::CloseRequestResponse::HideWindow
+    });
+    let _ = about.show();
+    center_window(about.window());
+    // (#tray-flyout-r7) 关于窗的任务栏/owner 已在**创建时**经后端钩子注入
+    //(TRAY_WINDOW_NEXT → with_owner_window + with_skip_taskbar),无需运行时补设。
+    ABOUT_WIN.with(|m| *m.borrow_mut() = Some(about));
+}
+
+fn sync_tray_theme(main: &AppWindow, tray: &TrayMenuWindow) {
+    tray.set_dark_mode(main.get_dark_mode());
+    tray.set_ui_scale(main.get_ui_scale());
+    tray.set_ui_font_family(main.get_ui_font_family());
+    tray.set_wallpaper_active(main.get_wallpaper_active());
+    tray.set_wp_accent(main.get_wp_accent());
+}
+
+fn active_session_count(core: &AppCore) -> i32 {
+    let store = core.store.borrow();
+    let mut n = 0usize;
+    for st in core.window_states.borrow().values() {
+        n += close_session_rows(&st.tabs_model, &st.handles, &store).len();
+    }
+    n as i32
+}
+
+/// 托盘菜单贴边:先按「底边对齐光标上方 6px」(任务栏在下的常见布局,留缝
+/// 避免遮住托盘图标的悬停区),再钳到光标所在显示器工作区,避免多屏/任务栏
+/// 在上时飞出屏幕。
+const TRAY_CURSOR_GAP: i32 = 24;
+
+fn clamp_tray_pos(cursor_x: i32, cursor_y: i32, width: i32, height: i32) -> (i32, i32) {
+    // (#tray-flyout-r4-r2) **左缘对齐点击点、向右上弹**(x = cursor_x):右缘
+    // 对齐(r4)实测被用户否决("感觉是朝左向上弹了");超出工作区右侧时由
+    // 下方钳制拉回。底缘仍在点击点上方 6px。
+    let mut x = cursor_x;
+    let mut y = cursor_y - height - TRAY_CURSOR_GAP;
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        let mon = MonitorFromPoint(
+            POINT {
+                x: cursor_x,
+                y: cursor_y,
+            },
+            MONITOR_DEFAULTTONEAREST,
+        );
+        if !mon.is_invalid() {
+            let mut mi = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(mon, &mut mi).as_bool() {
+                let wr = mi.rcWork;
+                if x + width > wr.right {
+                    x = wr.right - width;
+                }
+                if y + height > wr.bottom {
+                    y = wr.bottom - height;
+                }
+                if x < wr.left {
+                    x = wr.left;
+                }
+                if y < wr.top {
+                    y = wr.top;
+                }
+            }
+        }
+    }
+    (x, y)
+}
+
+/// (#tray-flyout-r4) 弹层窗口样式:**WS_EX_NOACTIVATE**(不抢激活——悬停/点击
+/// 都不改前台焦点,Explorer 托盘飞出层不被顶掉,问题③)+ **WS_EX_TOOLWINDOW
+/// + set_skip_taskbar(true)**(不进任务栏,问题①)。r3 实测:放 show 之后无效
+/// ——Explorer 不会因运行中改样式而撤掉已建的任务栏按钮;必须 **show 前**设置,
+/// 建按钮时直接跳过;show 后再调一次做防御性重设。HUD 取法沿用 window.rs 的
+/// raw-window-handle 惯例(winit 0.30 的 WindowExtWindows::hwnd 本工具链不可用)。
+#[cfg(windows)]
+fn apply_tray_flyout_chrome(fly: &Rc<TrayMenuWindow>) {
+    fly.window().with_winit_window(|ww| {
+        use i_slint_backend_winit::winit::platform::windows::WindowExtWindows;
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, GWLP_HWNDPARENT, GWL_EXSTYLE,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        };
+        ww.set_skip_taskbar(true);
+        let Ok(handle) = ww.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(h) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(h.hwnd.get() as *mut _);
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let _ = SetWindowLongPtrW(
+                hwnd,
+                GWL_EXSTYLE,
+                style | WS_EX_NOACTIVATE.0 as isize | WS_EX_TOOLWINDOW.0 as isize,
+            );
+            // (#tray-persist 2026-09-21) 认托盘消息宿主为 **owner 窗口**:被属主
+            // 的顶层窗口 Windows 从不给任务栏按钮(与 TOOLWINDOW 时序无关,确定性
+            // 消除右击/显示/关于时的任务栏图标闪现)。宿主全程常驻,不波及菜单。
+            let host = Tray::host_hwnd();
+            if host != 0 {
+                let _ = SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, host);
+            }
+        }
+    });
+}
+
+fn show_tray_flyout(
+    fly: &Rc<TrayMenuWindow>,
+    main: &slint::Weak<AppWindow>,
+    core: &Rc<AppCore>,
+    cursor_x: i32,
+    cursor_y: i32,
+) {
+    TRAY_DISMISS_ARMED.with(|a| a.set(false));
+    if let Some(w) = main.upgrade() {
+        sync_tray_theme(&w, fly);
+    }
+    fly.set_session_count(active_session_count(core));
+    // (#tray-flyout-blank 2026-09-21) 几何必须在 show() 前一次性完成:Slint
+    // 属性即时求值,set_session_count 后 preferred 尺寸立刻正确(0 会话塌掉
+    // 状态头也一样)。show 后只 request_redraw,不再改几何。
+    let place = || {
+        let lw = fly.get_flyout_w().max(8.0);
+        let lh = fly.get_flyout_h().max(8.0);
+        fly.window().set_size(slint::LogicalSize::new(lw, lh));
+        let scale = fly.window().scale_factor().max(0.01);
+        let pw = (lw * scale).round().max(1.0) as i32;
+        let ph = (lh * scale).round().max(1.0) as i32;
+        let (px, py) = clamp_tray_pos(cursor_x, cursor_y, pw, ph);
+        fly.window()
+            .set_position(slint::PhysicalPosition::new(px, py));
+        tracing::info!(px, py, pw, ph, "tray: place flyout");
+    };
+    place();
+    let _ = fly.show();
+    fly.window().request_redraw();
+    fly.invoke_take_keys();
+    // (#tray-flyout-r7) 旧有的 show 后 TOOLWINDOW/NOACTIVATE 补设与 r5 的
+    // visibility 循环已全部移除:菜单窗口的 owner(托盘宿主)/skip-taskbar/
+    // 无激活改在**创建时**经后端钩子注入(window.rs TRAY_WINDOW_NEXT)——
+    // 创建期属性不会被 winit apply_diff 的 EXSTYLE 重写清掉,任务栏按钮从
+    // 不出现,飞出层不被顶掉。不再 focus_window(不抢前台,飞出层保持)。
+    // (#tray-flyout-r7) 菜单窗口可聚焦:NOACTIVATE 已取消 → Focused(false)
+    // 失焦隐藏恢复有效(点外部/Esc 都能收)。
+    apply_window_chrome(fly.window());
+    // (#tray-flyout-r8) 点外部收起:装低级鼠标钩子(hide_tray_flyout 时卸载)。
+    #[cfg(windows)]
+    fly.window().with_winit_window(|ww| {
+        use i_slint_backend_winit::winit::platform::windows::WindowExtWindows;
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let Ok(handle) = ww.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(h) = handle.as_raw() else {
+            return;
+        };
+        Tray::install_menu_hook(h.hwnd.get());
+    });
+    // (#tray-flyout-r8) Esc 收起:菜单打开期间 50ms 轮询 GetAsyncKeyState
+    //(NOACTIVATE 窗口收不到键盘焦点,轮询是绕行方案;同 app.rs 拖拽取消
+    // 兜底的既有模式)。GetAsyncKeyState 高位=按住、低位=按下过,任一命中
+    // 即收起(收起时 Timer 一并停止,不会连发)。
+    #[cfg(windows)]
+    TRAY_ESC_TIMER.with(|t| {
+        t.borrow().start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(50),
+            || {
+                #[link(name = "user32")]
+                extern "system" {
+                    fn GetAsyncKeyState(vkey: i32) -> i16;
+                }
+                unsafe {
+                    // 高位=按住、低位=按下过,任一命中即收起
+                    //(收起时 Timer 一并停止,不会连发)。
+                    if GetAsyncKeyState(0x1B) != 0 {
+                        hide_tray_flyout();
+                    }
+                }
+            },
+        );
+    });
+    // 50ms 兜底重绘:首次显示本就有"先画首帧再映射窗口"(后端 first-show
+    // 路径),这里是防御性补一枪,防个别环境下 pre-draw 被跳过后窗口停在空白。
+    let fly_weak = Rc::downgrade(fly);
+    slint::Timer::single_shot(std::time::Duration::from_millis(50), move || {
+        if let Some(f) = fly_weak.upgrade() {
+            f.window().request_redraw();
+        }
+    });
+    slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
+        TRAY_DISMISS_ARMED.with(|a| a.set(true));
+    });
+}
+
+fn bind_tray_flyout(
+    fly: &Rc<TrayMenuWindow>,
+    closer: WindowCloser,
+    main_weak: slint::Weak<AppWindow>,
+) {
+    {
+        // (#tray-icon-vanish) 失焦/Esc 统一走 hide_tray_flyout(armed 复位 +
+        // NIM_MODIFY 心跳),不再直接持 fly_weak 手动 hide。
+        fly.window().on_winit_window_event(move |_sw, event| {
+            use i_slint_backend_winit::winit::event::{ElementState, WindowEvent as WEvent};
+            use i_slint_backend_winit::winit::keyboard::{Key, NamedKey};
+            use i_slint_backend_winit::EventResult;
+            match event {
+                WEvent::Focused(false) => {
+                    // (#tray-icon-vanish) 统一走 hide_tray_flyout:armed 复位 +
+                    // NIM_MODIFY 心跳,避免 Explorer 不重画托盘图标。
+                    if TRAY_DISMISS_ARMED.with(|a| a.get()) {
+                        hide_tray_flyout();
+                    }
+                }
+                WEvent::KeyboardInput { event, .. } => {
+                    if event.state == ElementState::Pressed
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                    {
+                        hide_tray_flyout();
+                        return EventResult::PreventDefault;
+                    }
+                }
+                // (#tray-flyout-r7) 菜单窗口恢复可聚焦(NOACTIVATE 已随创建期
+                // 注入方案移除)→ Focused(false) 失焦隐藏重新有效:点外部/Esc/
+                // 菜单项都会收;鼠标移到哪里都不会让菜单自动消失(用户诉求)。
+                _ => {}
+            }
+            EventResult::Propagate
+        });
+    }
+    {
+        let main_weak = main_weak.clone();
+        fly.on_show_clicked(move || {
+            hide_tray_flyout();
+            // (#tray-persist 2026-09-21) 图标全程常驻:唤回主窗口不再移除图标。
+            if let Some(w) = main_weak.upgrade() {
+                tracing::info!("tray: show main window");
+                let _ = w.show();
+                raise_to_front(&w);
+            }
+        });
+    }
+    {
+        let main_weak = main_weak.clone();
+        fly.on_about_clicked(move || {
+            hide_tray_flyout();
+            // (#tray-flyout-r4-r2) 「关于」= **独立介绍弹窗**:不拉起主界面、
+            // 不移除托盘图标(生命周期跟随主界面隐藏态,"关于"不动主界面)。
+            show_about_window(&main_weak);
+        });
+    }
+    {
+        fly.on_exit_clicked(move || {
+            hide_tray_flyout();
+            closer.confirm();
+        });
+    }
+    {
+        fly.on_dismiss(move || {
+            hide_tray_flyout();
+        });
+    }
+}
+
 /// (#self-drawn-resize 2026-09-20) 进行中的自绘 resize 拖拽快照。
 ///
 /// 无边框主窗口的 resize 不再走 winit `drag_resize_window` 的 OS 模态循环
@@ -496,6 +886,7 @@ fn teardown_window(
     if let Some(w) = editor_weak.upgrade() {
         let _ = w.hide();
     }
+    hide_tray_flyout();
 }
 
 /// Tab ids currently shown in a pane (`term.id == pane.active-id` in Slint).
@@ -3260,6 +3651,24 @@ fn open_window(
                     WEvent::Focused(f) => {
                         focused = *f;
                         apply_activity(focused, minimized, occluded);
+                        if !*f {
+                            // (#drag-focus-cancel 2026-09-21) 拖拽中失焦立即取消:
+                            // 截屏覆盖层(Win+Shift+S 等)在按下瞬间抢走焦点并吞掉
+                            // 鼠标 up,key_watch 的 150ms 轮询是当时唯一兜底,且其
+                            // 前台 HWND 比较在覆盖层场景可能静默失效(拿不到 hwnd
+                            // 时 unwrap_or(false) 不触发)——UI 侧拖拽态残留(本体
+                            // 是洞、ghost 钉死)直到下一次左击才被 #drag-stale-click
+                            // 清掉,观感即"卡死"。这里改事件驱动:失焦当场递增取消
+                            // 序列号(与 key_watch 完全同一条 UI 通路),ghost 立即
+                            // 飞回原位。150ms 轮询保留作兜底。
+                            if let Some(w) = weak.upgrade() {
+                                if w.get_session_drag_active() {
+                                    w.set_session_drag_cancel_seq(
+                                        w.get_session_drag_cancel_seq().wrapping_add(1),
+                                    );
+                                }
+                            }
+                        }
                         if *f {
                             #[cfg(target_os = "windows")]
                             slint_window.with_winit_window(|window| window.set_ime_allowed(true));
@@ -3573,14 +3982,25 @@ fn open_window(
     TRAY_ENSURE.with(|slot| {
         let closer = closer.clone();
         let tray_weak = window.as_weak();
+        let core = core.clone();
         *slot.borrow_mut() = Some(Rc::new(move || {
             if TRAY_HANDLE.with(|h| h.borrow().is_some()) {
                 return;
             }
             let closer = closer.clone();
             let tray_weak = tray_weak.clone();
+            let core = core.clone();
+            // (#tray-flyout-blank 2026-09-21) 弹层窗口不再预创建/常驻:每次右击
+            // 现建(OpenMenu 分支),关闭即销毁(hide_tray_flyout)。复用窗口要过
+            // winit 后端的 hide/show 状态机,实测二次打开必空白(见
+            // hide_tray_flyout 注释);现建走"首次显示"路径,后端先画首帧再映射。
             let handle = Tray::ensure(Box::new(move |action| match action {
                 TrayAction::Show => {
+                    hide_tray_flyout();
+                    // (#tray-persist 2026-09-21) 托盘图标**全程常驻**:左键唤回主
+                    // 窗口时不再移除图标(用户定稿:启动随主窗口同步出现、退出同步
+                    // 消失,最小化到托盘期间图标保留用于唤回)。撤掉了 r4 的延迟
+                    // take+drop——那段本是为"重显即移除"服务的,现语义取消。
                     // (#tray-show-fix 2026-09-19) upgrade 失败 = 组件已被销毁；
                     // registry 改持 Strong 后不应再发生，留 warn 便于回归。
                     if let Some(w) = tray_weak.upgrade() {
@@ -3591,7 +4011,36 @@ fn open_window(
                         tracing::warn!("tray: main window component gone — cannot show");
                     }
                 }
-                TrayAction::Exit => closer.confirm(),
+                TrayAction::OpenMenu { x, y } => {
+                    // (#tray-flyout-r2) 旧实例先**显式隐藏**再丢弃:杜绝"隐藏
+                    // 链路失灵时旧弹层残留堆积"(任务栏/屏上叠加,用户截图)。
+                    TRAY_MENU.with(|m| {
+                        if let Some(old) = m.borrow_mut().take() {
+                            let _ = old.hide();
+                        }
+                    });
+                    // (#tray-flyout-r7) 创建期注入:标志 → 后端创建钩子给这个窗口
+                    // 带 owner(托盘宿主)/skip-taskbar/无激活(见 window.rs
+                    // TRAY_WINDOW_NEXT)。
+                    window::TRAY_WINDOW_NEXT.store(true, std::sync::atomic::Ordering::Relaxed);
+                    let fly = match TrayMenuWindow::new() {
+                        Ok(w) => {
+                            window::TRAY_WINDOW_NEXT
+                                .store(false, std::sync::atomic::Ordering::Relaxed);
+                            let fly = Rc::new(w);
+                            bind_tray_flyout(&fly, closer.clone(), tray_weak.clone());
+                            TRAY_MENU.with(|m| *m.borrow_mut() = Some(fly.clone()));
+                            fly
+                        }
+                        Err(e) => {
+                            window::TRAY_WINDOW_NEXT
+                                .store(false, std::sync::atomic::Ordering::Relaxed);
+                            tracing::error!("tray: flyout window failed: {e}");
+                            return;
+                        }
+                    };
+                    show_tray_flyout(&fly, &tray_weak, &core, x, y);
+                }
             }));
             TRAY_HANDLE.with(|h| *h.borrow_mut() = Some(handle));
         }));
@@ -3628,7 +4077,7 @@ fn open_window(
                     w.window()
                         .set_position(slint::PhysicalPosition::new(pos.x + 40, pos.y + 40));
                 }
-                None => center_window(&w),
+                None => center_window(w.window()),
             }
         });
     }
@@ -3735,12 +4184,21 @@ fn open_window(
     // without this the app starts but no window ever appears (#multi-window).
     window.show().context("failed to show window")?;
 
+    // (#tray-persist 2026-09-21) 托盘图标**全程常驻**:启动即随主窗口创建
+    // (TRAY_ENSURE 闭包内建 is_some 去重,多窗口只建一次)。之前是"最小化到
+    // 托盘才按需创建",现改为启动同步出现、退出(TrayWin::drop)同步消失。
+    TRAY_ENSURE.with(|slot| {
+        if let Some(ensure) = slot.borrow().as_ref() {
+            ensure();
+        }
+    });
+
     Ok(window_id)
 }
 
 /// Center the window on the primary monitor's work area (Windows).
 #[cfg(windows)]
-fn center_window(win: &AppWindow) {
+fn center_window(win: &slint::Window) {
     #[repr(C)]
     struct Rect {
         left: i32,
@@ -3755,7 +4213,7 @@ fn center_window(win: &AppWindow) {
     }
     const SPI_GETWORKAREA: u32 = 0x0030;
 
-    let size = win.window().size(); // physical pixels
+    let size = win.size(); // physical pixels
     let mut wa = Rect {
         left: 0,
         top: 0,
@@ -3770,12 +4228,11 @@ fn center_window(win: &AppWindow) {
     let area_h = (wa.bottom - wa.top).max(0) as u32;
     let x = wa.left + ((area_w.saturating_sub(size.width)) / 2) as i32;
     let y = wa.top + ((area_h.saturating_sub(size.height)) / 2) as i32;
-    win.window()
-        .set_position(slint::PhysicalPosition::new(x, y));
+    win.set_position(slint::PhysicalPosition::new(x, y));
 }
 
 #[cfg(not(windows))]
-fn center_window(_win: &AppWindow) {}
+fn center_window(_win: &slint::Window) {}
 
 /// Bring a window to the front and give it keyboard focus: un-minimize it
 /// and ask the OS for focus. Used when an OS entry point (taskbar jump list,

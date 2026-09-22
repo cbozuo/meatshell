@@ -26,9 +26,11 @@ import { SftpEntry, SftpTreeNode, TunnelInfo } from "sftp_panel.slint";
 import { ProcWindow, ProcRow } from "proc_window.slint";
 import { SystemInfoWindow, SysInfoRow, SysMetricRow, SysNetRow } from "system_info_window.slint";
 import { EditorWindow, EditorFindResult } from "editor_window.slint";
+import { TrayMenuWindow } from "tray_menu.slint";
+import { AboutWindow } from "about_window.slint";
 import { InterfacePanel, OutputRuleItem, WslProfileInfo } from "interface_panel.slint";
 // Re-export so `slint::include_modules!` generates the detached Rust window types.
-export { ProcWindow, SystemInfoWindow, EditorWindow }
+export { ProcWindow, SystemInfoWindow, EditorWindow, TrayMenuWindow, AboutWindow }
 import { ComboBox, SpinBox, LineEdit, Button, ScrollView, CheckBox, Palette } from "std-widgets.slint";
 
 export { SessionInfo, SessionDraft, TabInfo, SftpEntry, SftpTreeNode, TunnelInfo, QuickCmd, PortFwd, WslProfileInfo, CtxRowHit }

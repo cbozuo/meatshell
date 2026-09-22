@@ -7,10 +7,10 @@ description = "A lightweight FinalShell-style SSH/terminal client written in Rus
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/your/meatshell"
 readme = "README.md"
-rust-version = "1.75"
+rust-version = "1.92"
 
 [dependencies]
-slint = { version = "1.8", features = ["compat-1-2"] }
+slint = { version = "1.18", features = ["compat-1-2"] }
 
 # ICU4X (pulled in by Slint's text layout) spams stderr with raw `eprintln!`
 # ("ICU4X data error: No segmentation model for language: ja") because its
@@ -19,7 +19,7 @@ slint = { version = "1.8", features = ["compat-1-2"] }
 # subscriber, where init_tracing silences the `icu_provider` target.
 icu_provider = { version = "2", features = ["logging"] }
 # Direct access to the winit window/events (OS file-drop for drag-and-drop upload).
-i-slint-backend-winit = "1.16"
+i-slint-backend-winit = "1.18"
 # Raw HWND access (matches winit's rwh 0.6) for the Win11 rounded-corner + shadow
 # DWM tweaks on the frameless window (#162 / #166). Only used under cfg(windows).
 raw-window-handle = "0.6"
@@ -122,10 +122,10 @@ jemallocator = "0.5"
 # Windows/Linux never compile Skia; on Windows it conflicts with another ICU
 # import library at link time when using the MSVC toolchain (#224).
 [target.'cfg(target_os = "macos")'.dependencies]
-slint = { version = "1.8", features = ["renderer-skia"] }
+slint = { version = "1.18", features = ["renderer-skia"] }
 
 [build-dependencies]
-slint-build = "1.8"
+slint-build = "1.18"
 
 # Embeds assets/meatshell.ico into the .exe so Explorer / taskbar / shortcuts
 # show the app icon. Windows-only; ignored on other targets.

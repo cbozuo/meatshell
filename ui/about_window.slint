@@ -1,0 +1,117 @@
+// (#about-window 2026-09-21) 托盘菜单「关于」的独立介绍弹窗:不拉起主界面。
+// 原生边框小窗(系统关闭钮即可),内容与主窗口关于卡同源(icon/标语/仓库/许可)。
+import { Theme } from "theme.slint";
+
+export component AboutWindow inherits Window {
+    title: "meatshell";
+    icon: @image-url("../assets/icon.png");
+    background: Theme.popup-bg;
+    default-font-family: Theme.ui-font-family;
+
+    // Theme 同步组:独立窗口不共享全局状态,由 Rust 侧从主窗口拷贝(同托盘菜单)。
+    in-out property <bool> dark-mode <=> Theme.dark;
+    in-out property <float> ui-scale <=> Theme.ui-scale;
+    in-out property <string> ui-font-family <=> Theme.ui-font-family;
+    in-out property <bool> wallpaper-active <=> Theme.wallpaper-active;
+    in-out property <color> wp-accent <=> Theme.wp-accent;
+
+    // 版本号由 Rust 注入(env!("CARGO_PKG_VERSION"))。
+    in property <string> version;
+    callback close-clicked();
+    callback open-repo();
+
+    width: 400px;
+    height: 264px;
+
+    VerticalLayout {
+        padding: 28px;
+        padding-top: 30px;
+        spacing: 16px;
+
+        // 头部:图标 + 名称/版本
+        HorizontalLayout {
+            alignment: center;
+            spacing: 14px;
+            Image {
+                source: @image-url("../assets/icon.png");
+                width: 56px;
+                height: 56px;
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: "meatshell";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: "v" + root.version;
+                    font-size: Theme.fs-sm;
+                    color: Theme.text-muted;
+                }
+            }
+        }
+
+        // 标语:与主窗口关于卡同一条 @tr(翻译已存在于 lang/*.po)
+        Text {
+            text: @tr("meatshell — a lightweight Rust + Slint SSH client by 'lil meatball'");
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            color: Theme.text-secondary;
+            font-size: Theme.fs-md;
+        }
+
+        // 仓库链接(点击打开 GitHub)
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: link-t.preferred-width + 20px;
+                height: link-t.preferred-height + 10px;
+                border-radius: 6px;
+                background: ta.has-hover ? Theme.bg-hover : transparent;
+                animate background { duration: 90ms; }
+                ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-repo(); }
+                }
+                link-t := Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: "github.com/yituorou/meatshell";
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: Theme.accent;
+                    font-size: Theme.fs-sm;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        // 许可
+        Text {
+            text: "MIT / Apache-2.0";
+            horizontal-alignment: center;
+            color: Theme.text-muted;
+            font-size: Theme.fs-xs;
+        }
+    }
+
+    // Esc 关闭(窗口聚焦时生效;常规关闭走原生标题钮)
+    keys := FocusScope {
+        x: 0;
+        y: 0;
+        width: 0px;
+        height: 0px;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.close-clicked();
+                accept
+            } else {
+                reject
+            }
+        }
+    }
+}

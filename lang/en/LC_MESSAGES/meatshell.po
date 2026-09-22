@@ -51,6 +51,15 @@ msgstr "No transfers yet"
 msgid "About"
 msgstr "About"
 
+msgid "Show"
+msgstr "Show"
+
+msgid "Exit"
+msgstr "Exit"
+
+msgid "active sessions"
+msgstr "active sessions"
+
 msgid "About meatshell"
 msgstr "About meatshell"
 

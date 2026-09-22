@@ -736,7 +736,11 @@ export component ProtocolIcon inherits Rectangle {
         // (#proto-optical 2026-09-20) 字号跟随**实际渲染宽度**(调用方覆盖
         // width/height 后自动生效),而非 icon-size —— 此前 icon-size 恒为
         // 默认 18px,导致 12px / 15px 容器里字号仍是 16.56px(会话行溢出 38%)。
-        font-size: root.width * 0.92 * Theme.protocol-scale(root.proto-id);
+        // (#row-icon-align 2026-09-22) 去掉原 0.92 压缩系数。该系数是按"字形宽
+        // 19.97/24 × 字号 ≤ 槽宽"反算的,保证宽度不溢出,代价是视觉高只剩
+        // 10.32px,比 13px 正文矮 21%(会话行实测"图标发糊")。槽宽给足后无需
+        // 压缩:16px 槽下四协议视觉高统一在 11.97~12.04,与正文比值 0.92。
+        font-size: root.width * Theme.protocol-scale(root.proto-id);
         horizontal-alignment: center;
         vertical-alignment: center;
     }

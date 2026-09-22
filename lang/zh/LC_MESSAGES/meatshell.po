@@ -51,6 +51,15 @@ msgstr "暂无传输记录"
 msgid "About"
 msgstr "关于"
 
+msgid "Show"
+msgstr "显示"
+
+msgid "Exit"
+msgstr "退出"
+
+msgid "active sessions"
+msgstr "个活动会话"
+
 msgid "About meatshell"
 msgstr "关于 meatshell"
 

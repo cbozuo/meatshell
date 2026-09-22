@@ -1,5 +1,14 @@
 use super::*;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// (#tray-flyout-r7) "下一个创建的窗口 = 托盘弹层/关于窗"标志:后端创建钩子在
+/// `XxxWindow::new()` 内**同步**执行,借此在**创建时**注入 owner(托盘宿主)/
+/// skip-taskbar/无激活——创建期属性才站得住;运行时 `SetWindowLongPtr` 打的
+/// TOOLWINDOW/NOACTIVATE 位会被 winit apply_diff 的 EXSTYLE 整段重写清掉
+/// (r3-r5 三轮实测任务栏按钮反复出现)。
+pub(super) static TRAY_WINDOW_NEXT: AtomicBool = AtomicBool::new(false);
+
 #[cfg(target_os = "linux")]
 pub(super) fn set_window_icon(window: &AppWindow) {
     use i_slint_backend_winit::winit::window::Icon;
@@ -93,7 +102,21 @@ pub(super) fn setup_windows_platform(renderer_mode: &str) {
     );
     let backend = builder
         .with_window_attributes_hook(|attrs| {
-            attrs.with_transparent(false).with_undecorated_shadow(false)
+            let attrs = attrs.with_transparent(false).with_undecorated_shadow(false);
+            // (#tray-flyout-r7) 托盘弹层/关于窗:创建时注入 owner(托盘宿主)+
+            // skip-taskbar+无激活——被属主的顶层窗口 Windows 从不给任务栏按钮
+            //(确定性,与 TOOLWINDOW 时序无关),且不产生任务栏状态变化(飞出层
+            // 不被顶掉)。宿主 hwnd 经 Tray::host_hwnd() 现读(托盘启动即建)。
+            if super::tray::Tray::host_hwnd() != 0
+                && TRAY_WINDOW_NEXT.swap(false, Ordering::Relaxed)
+            {
+                let host = super::tray::Tray::host_hwnd();
+                attrs.with_skip_taskbar(true)
+                    .with_active(false)
+                    .with_owner_window(host)
+            } else {
+                attrs
+            }
         })
         .build();
 

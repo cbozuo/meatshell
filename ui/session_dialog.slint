@@ -277,6 +277,11 @@ component ProtoSelect inherits VerticalLayout {
     // PopupWindow 没有 closed 回调,拿不到 click-outside 关闭时机,只能这样。
     in-out property <int> drop-clock: 0;
     property <int> open-clock: -1;
+    // (#proto-focus 2026-09-22) 选中协议时的时钟快照:pick-clock == drop-clock
+    // 期间协议框保持蓝框(用户要求"切换协议后蓝框还要存在");点其它字段/点
+    // 空白推进 drop-clock 后自动清除。切协议本身不再推进时钟(scope-focus-timer
+    // 已去掉 drop-clock += 1),所以快照稳定成立。
+    property <int> pick-clock: -1;
 
     pure function proto-label(id: string) -> string {
         if (id == "serial") { return @tr("Serial"); }
@@ -308,10 +313,15 @@ component ProtoSelect inherits VerticalLayout {
         // Slint 1.16 读不到 PopupWindow.visible,用 drop-open 镜像展开态
         // (与 GroupCombo 同一套:点开置位、选中项清位)。
         // (#dialog-focus-reset) 蓝框只在「自己仍是最近一次打开的下拉」时成立。
-        border-color: root.drop-open && root.open-clock == root.drop-clock ? Theme.accent
+        // (#proto-focus 2026-09-22) 选中协议后 pick-clock == drop-clock 期间
+        // 蓝框继续保持(切换协议不再清蓝框,用户要求)。
+        border-color: (root.drop-open && root.open-clock == root.drop-clock)
+            || root.pick-clock == root.drop-clock ? Theme.accent
             : (bta.has-hover ? Theme.line-2 : Theme.border-control);
-        background: root.drop-open && root.open-clock == root.drop-clock ? Theme.field-2 : Theme.field;
-        if root.drop-open && root.open-clock == root.drop-clock : Rectangle {
+        background: (root.drop-open && root.open-clock == root.drop-clock)
+            || root.pick-clock == root.drop-clock ? Theme.field-2 : Theme.field;
+        if (root.drop-open && root.open-clock == root.drop-clock)
+            || root.pick-clock == root.drop-clock : Rectangle {
             x: -3px; y: -3px;
             width: parent.width + 6px;
             height: parent.height + 6px;
@@ -416,70 +426,52 @@ component ProtoSelect inherits VerticalLayout {
                 padding: 5px;
                 spacing: 1px;
 
-                // (#hifi-v17) 分组标题 = .grp:10.5px / letter-spacing .08em /
-                // 上下留白(8px 9px 4px)。中文无大小写,以「字距+小号」表达同级。
-                Rectangle {
-                    height: 26px;
-                    Text {
-                        x: 9px;
-                        width: parent.width - 18px;
-                        height: parent.height;
-                        text: @tr("Remote login");
-                        color: Theme.text-muted;
-                        font-size: Theme.fs-xs;
-                        vertical-alignment: center;
-                    }
-                }
+                // (#proto-focus 2026-09-22) 分组标题行(远程登录/本地/远程桌面)
+                // 已按用户要求移除,协议项平铺;三个 @tr 标签无其它消费者。
                 ProtoItem {
                     proto-id: "ssh"; label: "SSH";
                     selected: root.value == "ssh"; badge: root.badge-of("ssh");
-                    picked => { root.drop-open = false; root.picked("ssh"); proto-pop.close(); }
+                    picked => {
+                        root.drop-open = false;
+                        root.pick-clock = root.drop-clock + 1;
+                        root.picked("ssh"); proto-pop.close();
+                    }
                 }
                 ProtoItem {
                     proto-id: "telnet"; label: "Telnet";
                     selected: root.value == "telnet"; badge: root.badge-of("telnet");
-                    picked => { root.drop-open = false; root.picked("telnet"); proto-pop.close(); }
-                }
-
-                Rectangle {
-                    height: 26px;
-                    Text {
-                        x: 9px;
-                        width: parent.width - 18px;
-                        height: parent.height;
-                        text: @tr("On this machine");
-                        color: Theme.text-muted;
-                        font-size: Theme.fs-xs;
-                        vertical-alignment: center;
+                    picked => {
+                        root.drop-open = false;
+                        root.pick-clock = root.drop-clock + 1;
+                        root.picked("telnet"); proto-pop.close();
                     }
                 }
                 ProtoItem {
                     proto-id: "serial"; label: @tr("Serial");
                     selected: root.value == "serial"; badge: root.badge-of("serial");
-                    picked => { root.drop-open = false; root.picked("serial"); proto-pop.close(); }
-                }
-
-                Rectangle {
-                    height: 26px;
-                    Text {
-                        x: 9px;
-                        width: parent.width - 18px;
-                        height: parent.height;
-                        text: @tr("Remote desktop");
-                        color: Theme.text-muted;
-                        font-size: Theme.fs-xs;
-                        vertical-alignment: center;
+                    picked => {
+                        root.drop-open = false;
+                        root.pick-clock = root.drop-clock + 1;
+                        root.picked("serial"); proto-pop.close();
                     }
                 }
                 ProtoItem {
                     proto-id: "rdp"; label: "RDP";
                     selected: root.value == "rdp"; badge: root.badge-of("rdp");
-                    picked => { root.drop-open = false; root.picked("rdp"); proto-pop.close(); }
+                    picked => {
+                        root.drop-open = false;
+                        root.pick-clock = root.drop-clock + 1;
+                        root.picked("rdp"); proto-pop.close();
+                    }
                 }
                 ProtoItem {
                     proto-id: "vnc"; label: "VNC";
                     selected: root.value == "vnc"; badge: root.badge-of("vnc");
-                    picked => { root.drop-open = false; root.picked("vnc"); proto-pop.close(); }
+                    picked => {
+                        root.drop-open = false;
+                        root.pick-clock = root.drop-clock + 1;
+                        root.picked("vnc"); proto-pop.close();
+                    }
                 }
             }
         }
@@ -1546,7 +1538,10 @@ export component SessionDialog inherits Rectangle {
         running: root.scope-focus-pending;
         triggered => {
             root.scope-focus-pending = false;
-            root.drop-clock += 1;
+            // (#proto-focus 2026-09-22) 不再推进 drop-clock:这里的时钟推进会让
+            // 「切协议后协议框保持蓝框」(#proto-focus) 在切协议瞬间被清掉。焦点
+            // 拽回容器的本职保留;其它字段获焦/点空白仍会推进时钟(那些才是
+            // "用户移情别恋"的清除信号)。
             dialog-focus.focus();
         }
     }
@@ -1771,7 +1766,12 @@ export component SessionDialog inherits Rectangle {
                                     focus-changed(f) => { if (f) { root.drop-clock += 1; } }
                                     dialog-field: true;
                                     input-height: 38px;
-                                    auto-focus: true;
+                                    // (#proto-focus 2026-09-22) 不再自动聚焦名称框:
+                                    // 顶栏/面板两个入口打开时表现不一致的根因是此处的
+                                    // auto-focus Timer 与 #dialog-focus-reset 的容器
+                                    // 聚焦 Timer 竞速(谁后触发谁赢)。定稿=打开一律
+                                    // 不聚焦(焦点在容器,无蓝框),此属性删除后容器
+                                    // Timer 恒定胜出。
                                     label: @tr("Name (optional)");
                                     placeholder: root.draft-kind == "serial"
                                         ? @tr("Leave blank to use the serial port")
@@ -2552,7 +2552,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                         }
                                         Rectangle {
                                             width: fw-code.preferred-width;
-                                            height: 1px;
+                                            height: 1phx;
                                             visible: hint-fw-ta.has-hover;
                                             background: Theme.accent;
                                         }
@@ -2665,7 +2665,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                                         }
                                         Rectangle {
                                             width: tr-code1.preferred-width + 4px + tr-code2.preferred-width + 4px + tr-code3.preferred-width;
-                                            height: 1px;
+                                            height: 1phx;
                                             visible: hint-tr-ta.has-hover;
                                             background: Theme.accent;
                                         }
@@ -2701,54 +2701,45 @@ if root.draft-kind == "serial" : HorizontalLayout {
             // 出现;刚打开 viewport-y==0,顶部那条隐藏,故只见靠下那段)。
             // 内缩 20px 后离 border 足够远;边缘那 20px 本就没有内容可遮,且两色
             // 相同,视觉无差别。
-            Rectangle {
-                // (#head-line-over-fade) 再让出 1 个物理像素:即便 z 已把头部线抬到
-                // 上层,错开相位能让缩放取整时二者彻底不争同一条设备像素行。
-                // body 的 padding-top 是 16px,这 1px 内没有内容,且两色相同,看不出。
-                // (#fade-visible-fix 2026-09-21) viewport-y 被引擎钳在
-                // [height-viewport-height, 0],向下滚动变负 —— 原条件 `> 0px` 恒
-                // 假,这条顶部雾化自引入起从未显示过。
-                y: 1phx;
-                x: 20px;
-                width: parent.width - 40px;
-                height: 18px;
-                visible: body-flick.viewport-y < 0px;
-                background: @linear-gradient(180deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
-            }
+            // (#fade-top-card 2026-09-22) 顶部雾化条已迁到**卡片层**(见文件末尾同名注释):
+            // 容器内的位置无论怎么错开相位,条顶缘与头部线之间都会留出未雾化的空隙。
             Rectangle {
                 // (#fade-visible-fix 2026-09-21) 原条件阈值是正数,可滚动时恒真、
                 // 滚到底也不消失(内容底线被永久罩雾)。改为"未滚到底"的正确
                 // 判定:viewport-y 仍大于其最小值 height-viewport-height。
+                // (#fade-opacity 2026-09-21) 同顶部条:visible 改 opacity 常驻。
+                // 底缘全不透明是本职——遮蔽内容进页脚(#fade-line-safe 峰值内移
+                // 曾造成页尾重影,已回退)。
                 y: parent.height - 18px;
                 x: 20px;
                 width: parent.width - 40px;
                 height: 18px;
-                visible: body-flick.viewport-y > body-flick.height - body.preferred-height;
+                opacity: body-flick.viewport-y > body-flick.height - body.preferred-height ? 1.0 : 0.0;
+                animate opacity { duration: 120ms; easing: ease-out; }
                 background: @linear-gradient(0deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
             }
-            // (#head-line-moved 2026-09-20) 头部下分隔线。
-            //
-            // 位置很关键:它必须在**这一层**(body 容器内)、且排在 Flickable 与两条
-            // 渐隐条**之后** —— 与页脚那条线恒可见是同一个道理。页脚的线是 foot
-            // 自己的 border 顶边,foot 排在 body 之后绘制,所以谁也盖不住它。
-            //
-            // 之前它作为 close-body 的独立子元素、排在 body 容器**之前**,被容器里的
-            // 顶部渐隐条(不透明 panel-solid、与卡片底色同源,仅滚动后 visible)擦掉
-            // 墨量;上一轮给它加 z:1 **并没有解决**(用户复测仍消失)—— 布局子元素的
-            // z 在这里不可靠。改到本层之后,它就是最后绘制的元素,恒在最上。
-            //
-            // 高度仍用 1phx(物理像素):逻辑 1px 在 125% 缩放下跨两行光栅化,粗细
-            // 会随主题/缩放/展开态浮动(见 #hairline-phx)。
-            Rectangle {
-                y: 0px;
-                width: 100%;
-                height: 1phx;
-                background: Theme.dark ? Theme.line-2 : #b9b9c2;
-            }
+            // (#head-line-moved 2026-09-20 → #head-line-card 2026-09-21) 头部下
+            // 分隔线已**再升一层**:从本容器末尾移到 dlg-card 末尾(整卡最后绘制、
+            // 不在滚动 clip 子树内)。1.18 下只要顶部条发生过显隐切换,容器内的
+            // 线中段就会消失(把渐变改成 0 alpha 顶也无效,见 #fade-line-card),
+            // 容器内已无安全位置 —— 详见卡片层线元素处的注释。
         }
 
-        // (#foot-border3 2026-09-20) 布局里这条页脚顶分隔线已删:页脚顶线改由
-        // foot 自身的 border 顶边承担(见下),避免两条相邻 1px 叠成 2px。
+        // (#foot-gap 2026-09-21) 1phx 隔离垫层:body 容器底缘与页脚顶线之间
+        // 让出一个物理像素。1.18 的 clip 容器在分数相位下会把边界 AA 行**向下
+        // 多画一行**——容器底缘那行里恰好是底部渐隐条的全不透明底缘(横跨
+        // 20px~W-20px,与页脚顶线缺失段完全吻合),多画的一行糊死紧贴的线
+        //(线升到卡片层也躲不开:头部线活/页脚线死的系统差异 = 各自贴的边界行
+        // 有没有墨,顶部行良性、底部行全不透明)。垫层让容器底缘上移 1phx,
+        // 伪影多画的行落在卡片底色上不可见,线离开污染行。视觉代价 = 内容与
+        // 分隔线之间 1 物理像素底色间隙,不可感知。若仍复现,下一步升级为
+        // 渲染器隔离排查(软件渲染对照 femtovg)。
+        Rectangle {
+            height: 1phx;
+        }
+
+        // (#foot-border3 2026-09-20 → #foot-inset 2026-09-21) 布局里这条页脚顶
+        // 分隔线已删,页脚顶线改由页脚区顶部的独立 1phx 矩形承担(见下)。
 
         foot := Rectangle {
             width: 100%;
@@ -2756,20 +2747,37 @@ if root.draft-kind == "serial" : HorizontalLayout {
             // padding 与按钮高)。必须写死:dlg-card 的高度要用 foot.height 推算,
             // 若由布局算出来会构成 dlg-card.height -> layout-cache -> foot.height 的循环。
             height: 62px;
-            // (#foot-border3 2026-09-20) 页脚四边框由 foot **自身 border** 画:
-            //   · 顶边 = 页脚顶分隔线(与外框同色同宽,布局线已删,不再双线);
-            //   · 左/右/下与卡片 border 完全同几何、同色、重叠 —— 贴合无缝,
-            //     圆角弧线由两边同几何圆弧重叠承担(上一轮"内缩 1px 露缝"的
-            //     方案在亮色主题下缝可见,用户标注①②;叠画补线段则发粗,③);
-            //   · border 画在背景之上,panel-hi 底铺满也不遮线。
-            background: Theme.panel-hi;
-            // (#hairline-phx 2026-09-20) 同外框:1phx 物理像素,含顶线与两个底圆角。
-            border-width: 1phx;
-            border-color: Theme.dark ? Theme.line-2 : #b9b9c2;
-            border-top-left-radius: 0px;
-            border-top-right-radius: 0px;
-            border-bottom-left-radius: Theme.radius-xl;
-            border-bottom-right-radius: Theme.radius-xl;
+            // (#foot-inset 2026-09-21) foot 本体透明化,背景/边框职责移入内衬。
+            // 旧方案(#foot-border3):foot 自带四边 1phx 边框与卡片边框同几何
+            // **叠画**——边线落在非整数物理相位时抗锯齿墨摊到相邻两行,同色
+            // 两遍二次叠加(a + a(1-a)),视觉粗一倍:右下角竖线、整条下边框、
+            // 左下角、右缘 foot 段(用户标注①②③④四处)。当年选叠画是因为
+            // foot 背景会盖住卡片先画的边框、且"内缩 1px 露缝"(逻辑 1px 在
+            // 125% 下=1.25 物理比 1phx 宽 0.25)。现在:foot 本体透明,内衬背景
+            // **内缩 1phx** 恰好被卡片边框环占住不露缝,底圆角取
+            // radius-xl - 1phx(内圆角 = 外圆角 - 边框宽,与卡片弧线处处同心);
+            // 卡片边框从此全程只画一遍,①②③④一并归位。
+            background: transparent;
+            // 内衬背景:panel-hi 只铺到卡片边框内沿(左右各让 1phx、底部让 1phx)。
+            // (#foot-inset-r2) x/y 必须显式写 0 基准:Slint 对未指定位置的元素
+            // 默认**在父级居中**——顶线曾因此被居中到页脚垂直中部(用户截图),
+            // 内衬也曾因此整体下坠半像素。
+            // (#foot-line-card 2026-09-21) 页脚顶分隔线已从此处移除、升到卡片层
+            // (与头部线同款,见卡片层 #foot-line-card):opacity 化后头部线已愈,
+            // 唯独本线仍缺失(缺失段恒=底部渐隐条 20px 内缩区)——foot 内的位置
+            // 紧贴滚动容器底缘,仍被 1.18 容器边界合成伪影波及;卡片层被真机
+            // 证明免疫,照抄同款。
+            Rectangle {
+                x: 1phx;
+                y: 0px;
+                width: parent.width - 2phx;
+                height: parent.height - 1phx;
+                background: Theme.panel-hi;
+                border-bottom-left-radius: Theme.radius-xl - 1phx;
+                border-bottom-right-radius: Theme.radius-xl - 1phx;
+            }
+            // (#hairline-phx 2026-09-20) 线宽沿用 1phx 物理像素(顶线与全弹框
+            // 区块线一致)。
             HorizontalLayout {
                 padding-left: 20px;
                 padding-right: 20px;
@@ -2800,9 +2808,16 @@ if root.draft-kind == "serial" : HorizontalLayout {
                         height: 38px;
                         horizontal-stretch: 1;
                         status-ta := TouchArea {
-                            enabled: root.host-missing || root.serial-missing;
+                            // (#foot-status-tip-r2 2026-09-22) enabled 不再限定"表单校验
+                            // 错误":测试连接的运行时错误(如 connect failed)同样需要
+                            // 悬停浮层看完整文本,而它不置 host-missing/serial-missing,
+                            // 原先 enabled=false 连 has-hover 都不产生 → 浮层永不出现。
+                            // 光标与点击聚焦仍只在校验错误时生效。
+                            enabled: true;
                             mouse-cursor: (root.host-missing || root.serial-missing) ? pointer : default;
-                            clicked => { root.focus-error-field(); }
+                            clicked => {
+                                if (root.host-missing || root.serial-missing) { root.focus-error-field(); }
+                            }
                         }
                         VerticalLayout {
                             alignment: center;
@@ -2856,7 +2871,7 @@ if root.draft-kind == "serial" : HorizontalLayout {
                             y: (status-box.height + status-row.height) / 2 + 1px;
                             width: (root.footer-status-icon() == "" ? 0px : status-ico.width + 6px)
                                 + min(status-txt.preferred-width, status-txt.width);
-                            height: 1px;
+                            height: 1phx;
                             visible: (root.host-missing || root.serial-missing) && status-ta.has-hover;
                             background: Theme.danger;
                         }
@@ -2864,29 +2879,10 @@ if root.draft-kind == "serial" : HorizontalLayout {
                         // 浮出完整错误信息。宽度取状态区宽(上限 360px)以承载长句。
                         // 气泡不带 TouchArea,不接收鼠标 → 指针移上去它照常消失,
                         // 不会与状态区的 has-hover 互相触发形成抖动。
-                        if (root.host-missing || root.serial-missing)
-                            && status-ta.has-hover
-                            && status-txt.preferred-width > status-txt.width : Rectangle {
-                            x: 0px;
-                            y: -self.height - 8px;
-                            width: min(status-box.width, 360px);
-                            height: tip-txt.preferred-height + 14px;
-                            border-radius: Theme.radius-md;
-                            border-width: 1px;
-                            border-color: Theme.border-strong;
-                            background: Theme.popup-bg;
-                            drop-shadow-blur: 12px;
-                            drop-shadow-color: #000000a0;
-                            tip-txt := Text {
-                                x: 12px;
-                                y: 7px;
-                                width: parent.width - 24px;
-                                text: root.footer-status-text();
-                                color: Theme.text-primary;
-                                font-size: Theme.fs-sm;
-                                wrap: word-wrap;
-                            }
-                        }
+                        // (#foot-status-tip-r2 2026-09-22) 触发条件去掉"表单校验错误"
+                        // 限定,改为"任何错误文本 + 悬停 + 被省略号截断"。
+                        // (#foot-status-tip-card 2026-09-22) 本浮层已迁到**卡片层**末位
+                        // (见文件末尾同名注释):在 foot 内时页脚线会压在它上面划出一条线。
                     }
                 }
                 // (#foot-spacer-removed 2026-09-20) 原 spacer(纯撑开块)已删。
@@ -2927,6 +2923,86 @@ if root.draft-kind == "serial" : HorizontalLayout {
             }
         }
         }   // (#foot-border) VerticalLayout（弹框内容流）闭合
+
+        // (#head-line-card 2026-09-21) 头部下分隔线升到**卡片层**、作为整卡
+        // 最后绘制的元素。沿革:#head-line-moved 曾把它放进 body 容器末尾
+        // (容器内最后绘制),但 1.18 下只要顶部渐隐条发生过显隐切换(滚下去
+        // 再滚回来),线的中段就消失 —— #fade-line-safe 把渐变顶端改成 0 alpha
+        // 后依旧复现,证明擦线者不是条的墨,而是条在 clip 容器内切换可见性
+        // 伴随的重绘/合成伪影(缺失中段恒 = 条的 20px 内缩区域,两端各留
+        // ~20px 线头,用户截图)。容器内已无安全位置:搬出容器、升到卡片层,
+        // 条与滚动内容怎么切换都画不到它头上。
+        // y = hdr.height(49px 布局高,即 body 容器顶缘);宽度 100% 与容器同宽;
+        // 1phx 物理像素粗细(见 #hairline-phx)。
+        // (#fade-top-card 2026-09-22) 顶部雾化条,**卡片层**。原先在 body 容器内,
+        // 条的墨落在容器顶缘的边界行上(与头部线同一物理行),既触发合成伪影、
+        // 又必须在顶缘留空避开它 —— 于是线与雾化之间恒有一道未雾化的缝(实测
+        // "中间还有一点点距离没有雾化到")。迁到卡片层后与线**同位**(y = hdr.height),
+        // 声明在头部线之前 → 线后绘制压住条顶缘,紧贴无缝。
+        Rectangle {
+            y: hdr.height;
+            x: 20px;
+            width: parent.width - 40px;
+            height: 18px;
+            opacity: body-flick.viewport-y < 0px ? 1.0 : 0.0;
+            animate opacity { duration: 120ms; easing: ease-out; }
+            background: @linear-gradient(180deg, Theme.panel-solid 0%, Theme.panel-solid.with-alpha(0.0) 100%);
+        }
+
+        Rectangle {
+            y: hdr.height;
+            width: 100%;
+            height: 1phx;
+            background: Theme.dark ? Theme.line-2 : #b9b9c2;
+        }
+
+        // (#foot-line-card 2026-09-21) 页脚顶分隔线,与头部线同款"卡片层、整卡
+        // 最后绘制"。它在 foot 内时(y:0 贴滚动容器底缘)即便渐隐条已 opacity 化
+        // 仍恒缺一段(缺失段=底部条的 20px 内缩区,用户截图),而头部线卡片层化
+        // 后已愈——foot 内位置仍被 1.18 容器边界合成伪影波及,照抄被证明免疫
+        // 的卡片层方案。y = 卡片高 - foot.height = foot 顶缘。
+        Rectangle {
+            y: parent.height - foot.height;
+            width: 100%;
+            height: 1phx;
+            background: Theme.dark ? Theme.line-2 : #b9b9c2;
+        }
+
+        // (#foot-status-tip-card 2026-09-22) 错误信息浮层从 foot 内迁到**卡片层**、
+        // 排在页脚线之后。原先它在 foot 内(页脚线之前绘制),卡片层的页脚线会压在
+        // 浮层上划出一条线,与浮层自身下边框并列成"两条横线"(用户截图)。
+        // 底边定在页脚线下方 4px(= 卡片高 - foot.height + 4px),浮层的不透明底
+        // 正好盖住页脚线,只留浮层自己的下边框。
+        if status-ta.has-hover
+            && root.footer-status-text() != ""
+            && status-txt.preferred-width > status-txt.width : Rectangle {
+            // (#foot-status-tip-follow 2026-09-22) 水平位置**跟随指针**。
+            // status-ta.mouse-x 是指针在状态区内的 x;状态区左缘在卡片层坐标是
+            // 20px(foot 的 padding-left),让指针落在浮层内偏左 12px 处,再用
+            // clamp 钳住卡片左右各 12px,靠边时浮层不越出。max() 兜底:浮层比
+            // 可安置宽度还宽时避免 min > max。纵向仍在状态区**上方**(tooltip
+            // 惯例,且不遮挡错误文字本身)。
+            x: clamp(20px + status-ta.mouse-x - 12px, 12px,
+                     max(12px, parent.width - self.width - 12px));
+            y: parent.height - foot.height + 4px - self.height;
+            width: min(status-box.width, 360px);
+            height: card-tip-txt.preferred-height + 14px;
+            border-radius: Theme.radius-md;
+            border-width: 1phx;
+            border-color: Theme.border-strong;
+            background: Theme.popup-bg;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #000000a0;
+            card-tip-txt := Text {
+                x: 12px;
+                y: 7px;
+                width: parent.width - 24px;
+                text: root.footer-status-text();
+                color: Theme.text-primary;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+        }
 
     }
 }

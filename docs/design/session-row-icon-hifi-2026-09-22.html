@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>会话列表成员图标 · 高保真对照</title>
+<style>
+:root{
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+}
+html[data-theme="dark"]{
+  --page:#0d0e12; --list-bg:#14161a; --group-bg:#1b1f27; --hover:#22262f;
+  --panel:#1a1d23; --field:#191b21; --field2:#1d2027; --line:#3a3d46;
+  --tp:#e6e8ee; --ts:#b4b9c4; --tm:#9196a3;
+  --ok:#4ec9b0; --warn:#e2a84a; --bad:#e25c5c;
+}
+html[data-theme="light"]{
+  --page:#f4f5f8; --list-bg:#ffffff; --group-bg:#f2f2f7; --hover:#eaeaef;
+  --panel:#ffffff; --field:#f4f5f8; --field2:#eef0f4; --line:#dcdce3;
+  --tp:#1d1d1f; --ts:#45454a; --tm:#606066;
+  --ok:#0f8a6a; --warn:#b06a00; --bad:#c42b1c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:var(--font); background:var(--page); color:var(--tp);
+  font-size:13px; line-height:1.6; padding:28px 32px 64px;
+}
+h1{font-size:17px;font-weight:500;letter-spacing:.2px}
+h2{font-size:13px;font-weight:500;color:var(--tm);text-transform:none;letter-spacing:.4px;margin-bottom:12px}
+.sub{color:var(--tm);font-size:12px;margin-top:6px}
+.sub code{font-family:var(--mono);font-size:11px;color:var(--ts);background:var(--field);padding:1px 5px;border-radius:4px}
+header{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:26px;flex-wrap:wrap}
+.ctrl{display:flex;gap:8px;align-items:center}
+.seg{display:flex;background:var(--field);border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg button{
+  font-family:var(--font);font-size:12px;color:var(--ts);background:transparent;border:0;
+  padding:5px 12px;border-radius:6px;cursor:pointer;transition:background .12s,color .12s
+}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--tp);box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:20px}
+
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.col.rec{border-color:#4a90e2}
+.col-hd{padding:12px 14px 11px;border-bottom:1px solid var(--line)}
+.col-t{font-size:13px;font-weight:500;display:flex;align-items:center;gap:7px}
+.col-t .tag{font-size:10px;font-weight:400;padding:1px 6px;border-radius:20px;background:var(--field);color:var(--tm);letter-spacing:.3px}
+.col.rec .tag{background:rgba(74,144,226,.18);color:#6aa9ee}
+.col-p{font-family:var(--mono);font-size:10.5px;color:var(--tm);margin-top:5px;line-height:1.75}
+.col-p b{color:var(--ts);font-weight:400}
+.list{background:var(--list-bg);padding:6px 0 10px}
+
+.row{position:relative;height:32px;display:flex;align-items:center;font-size:13px}
+.row.group{background:var(--group-bg);padding-left:10px;gap:7px;color:var(--tp)}
+.chev{width:14px;height:14px;flex:0 0 14px;color:var(--ts)}
+.chev svg{width:14px;height:14px;display:block;fill:currentColor}
+.gfolder{width:16px;height:16px;flex:0 0 16px}
+.gfolder svg{width:16px;height:16px;display:block}
+.gname{font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gcount{font-size:11px;color:var(--tm);padding-right:12px;font-variant-numeric:tabular-nums}
+
+.row.member{padding-left:26px;gap:var(--gap);--gap:8px}
+.spine,.branch{position:absolute;background:var(--gc);pointer-events:none}
+.spine{left:16px;width:1px;top:0;bottom:0}
+.row.member.last .spine{bottom:50%}
+.branch{left:16px;width:10px;top:50%;height:1px}
+.row.member:hover{background:var(--hover)}
+.icoslot{width:var(--slot);height:var(--slot);flex:0 0 var(--slot);display:grid;place-items:center;overflow:visible}
+.icoslot svg{display:block;overflow:visible;color:var(--ico)}
+.mname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tp)}
+.row.member.plain .icoslot{display:none}
+
+.dd{background:var(--field);border:1px solid var(--line);border-radius:10px;padding:6px;margin:0 12px 12px}
+.dd-t{font-size:10.5px;color:var(--tm);padding:4px 4px 6px;font-family:var(--mono)}
+.dd-item{height:32px;border-radius:8px;padding:0 9px;display:flex;align-items:center;gap:9px;font-size:13px;color:var(--tp)}
+.dd-item.sel{background:rgba(74,144,226,.14)}
+.dd-item .ic{width:18px;height:18px;flex:0 0 18px;display:grid;place-items:center}
+.dd-item .ic svg{display:block;color:var(--ico)}
+.dd-item .bdg{margin-left:auto;font-size:10px;color:var(--tm);border:1px solid var(--line);border-radius:20px;padding:1px 6px}
+
+/* 变体参数 */
+.col[data-v="cur"]{--slot:15px;--k:.92;--gap:8px;--ico:var(--ts)}
+.col[data-v="a"]  {--slot:16px;--k:1;--gap:10px;--ico:var(--ts)}
+.col[data-v="b"]  {--slot:16px;--k:1;--gap:10px;--ico:var(--ts)}
+.col[data-v="c"]  {--slot:16px;--k:1;--gap:10px;--ico:var(--tm)}
+
+.zoomwrap{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.zoom{background:var(--list-bg);border:1px solid var(--line);border-radius:10px;overflow:hidden;--ico:var(--ts)}
+.zoom-hd{padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ts);display:flex;justify-content:space-between}
+.zoom-hd span{font-family:var(--mono);font-size:10.5px;color:var(--tm)}
+.zrow{position:relative;height:44px;display:flex;align-items:center;padding-left:26px;gap:var(--gap,10px)}
+.zrow .guide{position:absolute;top:2px;bottom:2px;width:1px;background:var(--bad);opacity:.55}
+.zrow .cap{font-size:11px;color:var(--tm);font-family:var(--mono)}
+.zcap{padding:9px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--tm);font-family:var(--mono);line-height:1.7}
+.zcap b{color:var(--ts);font-weight:400}
+.bigrow{display:grid;grid-template-columns:repeat(3,1fr);padding:22px 14px;gap:14px}
+.big{display:flex;flex-direction:column;align-items:center;gap:11px}
+.big .bx{height:88px;display:grid;place-items:center}
+.big .bl{font-size:11px;color:var(--tm);text-align:center;font-family:var(--mono);line-height:1.7}
+.big .bl b{color:var(--ts);font-weight:400}
+.lab{display:grid;grid-template-columns:120px 1fr 74px;gap:10px 14px;align-items:center}
+.lab label{font-size:12px;color:var(--ts)}
+.lab output{font-family:var(--mono);font-size:11px;color:var(--tm);text-align:right}
+input[type=range]{width:100%;accent-color:#4a90e2;height:16px}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+.m{background:var(--field);border:1px solid var(--line);border-radius:9px;padding:11px 13px}
+.m .k{font-size:11px;color:var(--tm)}
+.m .v{font-family:var(--mono);font-size:16px;color:var(--tp);margin-top:3px}
+.m .n{font-size:10.5px;color:var(--tm);margin-top:2px}
+.m.good .v{color:var(--ok)}
+.m.warn .v{color:var(--warn)}
+.m.bad .v{color:var(--bad)}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--tm);font-weight:500;font-size:11px}
+td code{font-family:var(--mono);font-size:11px;color:var(--ts)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+<h2 class="sr">会话列表成员协议图标的高保真对照：现状与三个优化方案</h2>
+
+<header>
+  <div>
+    <h1>会话列表成员图标 · 高保真对照</h1>
+    <div class="sub">
+      图标形状取自字体本体 <code>ui/fonts/MaterialIcons-Regular.ttf</code>，几何尺寸由
+      <code>ui/theme.slint:191 protocol-glyph</code> 与 <code>ui/theme.slint:203 protocol-scale</code> 决定，
+      调用点 <code>ui/welcome.slint:611</code> 与 <code>ui/session_dialog.slint:202</code>。
+    </div>
+  </div>
+  <div class="ctrl">
+    <div class="seg" id="theme">
+      <button aria-pressed="true" data-th="dark">暗色</button>
+      <button aria-pressed="false" data-th="light">亮色</button>
+    </div>
+  </div>
+</header>
+
+<h2>四种方案的整列对照</h2>
+<div class="grid" id="grid"></div>
+
+<div style="height:20px"></div>
+
+<h2>真实尺寸与 4× 放大</h2>
+<div class="card">
+  <div class="zoomwrap">
+    <div class="zoom">
+      <div class="zoom-hd">现状 · 真实尺寸<span>slot 15 · k 0.92</span></div>
+      <div class="zrow" id="zoom-cur" style="--gap:8px"></div>
+      <div class="zcap" id="cap-cur"></div>
+    </div>
+    <div class="zoom">
+      <div class="zoom-hd">方案 A · 真实尺寸<span>slot 16 · k 1.00</span></div>
+      <div class="zrow" id="zoom-a" style="--gap:10px"></div>
+      <div class="zcap" id="cap-a"></div>
+    </div>
+  </div>
+  <div class="zoom" style="margin-top:14px">
+    <div class="zoom-hd">图标本体 · 4× 放大<span>同一 terminal 字形，按各自公式字号渲染</span></div>
+    <div class="bigrow" id="bigrow"></div>
+  </div>
+</div>
+
+<h2>调参实时预览</h2>
+<div class="card">
+  <div class="lab">
+    <label for="s-slot">图标槽宽高</label>
+    <input type="range" id="s-slot" min="13" max="18" step="1" value="16">
+    <output id="o-slot">16 px</output>
+
+    <label for="s-k">字号系数 k</label>
+    <input type="range" id="s-k" min="0.80" max="1.10" step="0.01" value="1.00">
+    <output id="o-k">1.00</output>
+
+    <label for="s-gap">图标与文字间距</label>
+    <input type="range" id="s-gap" min="6" max="14" step="1" value="10">
+    <output id="o-gap">10 px</output>
+
+    <label for="s-ico">图标颜色档</label>
+    <input type="range" id="s-ico" min="0" max="2" step="1" value="1">
+    <output id="o-ico">text-secondary</output>
+  </div>
+
+  <div class="zoom" style="margin-top:16px">
+    <div class="zrow" id="lab-row" style="height:36px"></div>
+  </div>
+
+  <div class="metrics">
+    <div class="m" id="m-h"><div class="k">图标视觉高</div><div class="v">-</div><div class="n">terminal 字形 bbox 16.03 / 24</div></div>
+    <div class="m" id="m-w"><div class="k">图标视觉宽</div><div class="v">-</div><div class="n">19.97 / 24，须 ≤ 图标槽</div></div>
+    <div class="m" id="m-r"><div class="k">图标 / 文字高比</div><div class="n">文字 fs-md = 13px</div><div class="v">-</div></div>
+    <div class="m" id="m-f"><div class="k">实际 font-size</div><div class="v">-</div><div class="n">slot × k × scale(1.12)</div></div>
+  </div>
+</div>
+
+<h2>与新建会话协议下拉框的同源性</h2>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th>位置</th><th>图标槽</th><th>实际 font-size</th><th>视觉尺寸</th><th>相邻文字</th><th>间距</th></tr>
+    </thead>
+    <tbody id="tbl"></tbody>
+  </table>
+  <div class="sub" style="margin-top:12px">
+    两个位置的造型同源（同一个 <code>protocol-glyph</code> 函数），差异只在尺寸。改动时两处必须同步，
+    否则同一次协议迁移会在列表与下拉框里看到两种粗细。
+  </div>
+</div>
+
+<h2>方案说明</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>方案</th><th>改动内容</th><th>收益</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>现状</td>
+        <td><code>slot 15 · k 0.92 · gap 8 · ts</code></td>
+        <td>无</td>
+        <td>图标视觉高仅 10.32px，比 13px 正文矮 21%</td>
+      </tr>
+      <tr>
+        <td>A 光学对齐</td>
+        <td><code>slot 16 · k 1.00 · gap 10 · ts</code></td>
+        <td>视觉高升到 11.97px，与文字高比 0.79 提到 0.92，横向仍在 16px 内</td>
+        <td>仅改两个数值，须同步下拉框的 18px 档</td>
+      </tr>
+      <tr>
+        <td>B 细线重绘</td>
+        <td>按 16 网格重画四个造型，<code>stroke 1.5</code>，图形元素压到 2 个以内</td>
+        <td>字形细节从 4 个减到 2 个，小尺寸下不再糊成灰团</td>
+        <td>需要维护自绘 path，且下拉框同步替换</td>
+      </tr>
+      <tr>
+        <td>C 分层降噪</td>
+        <td>在 A 的基础上，组内成员 ≥2 且协议一致时不渲染图标</td>
+        <td>去掉 10 次重复的装饰噪声，列表回归文字本身；单成员组仍保留图标</td>
+        <td>需要 Rust 侧统计组内协议种类</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+const GLYPH = {
+  EB8E: "M20.02 3.98H3.98Q3.19 3.98 2.6 4.57Q2.02 5.16 2.02 6V18Q2.02 18.84 2.6 19.43Q3.19 20.02 3.98 20.02H20.02Q20.81 20.02 21.4 19.43Q21.98 18.84 21.98 18V6Q21.98 5.16 21.4 4.57Q20.81 3.98 20.02 3.98ZM20.02 18H3.98V8.02H20.02ZM18 17.02H12V15H18ZM7.5 17.02 6.09 15.61 8.67 12.98 6.09 10.41 7.5 9 11.48 12.98Z",
+  E069: "M18.98 18V8.02H5.02V18ZM18.98 3.98Q19.83 3.98 20.41 4.57Q21 5.16 21 6V18Q21 18.8 20.39 19.41Q19.78 20.02 18.98 20.02H5.02Q4.17 20.02 3.59 19.43Q3 18.84 3 18V6Q3 5.16 3.59 4.57Q4.17 3.98 5.02 3.98Z",
+  E30C: "M21 15.98V3.98H3V15.98ZM21 2.02Q21.8 2.02 22.41 2.6Q23.02 3.19 23.02 3.98V15.98Q23.02 16.78 22.41 17.39Q21.8 18 21 18H14.02V20.02H15.98V21.98H8.02V20.02H9.98V18H3Q2.2 18 1.59 17.39Q0.98 16.78 0.98 15.98V3.98Q0.98 3.19 1.59 2.6Q2.2 2.02 3 2.02Z",
+  E8C0: "M17.02 15.98V14.02H23.02V15.98Q23.02 16.97 22.45 17.72Q21.89 18.47 21 18.8V23.02H18.98V18.8Q17.02 18.09 17.02 15.98ZM12.98 2.02V6H15V12H9V6H11.02V2.02Q11.02 1.59 11.3 1.29Q11.58 0.98 12 0.98Q12.42 0.98 12.7 1.29Q12.98 1.59 12.98 2.02ZM21 6H23.02V12H17.02V6H18.98V2.02Q18.98 1.59 19.29 1.29Q19.59 0.98 20.02 0.98Q20.44 0.98 20.72 1.29Q21 1.59 21 2.02ZM0.98 15.98V14.02H6.98V15.98Q6.98 18.09 5.02 18.8V23.02H3V18.8Q2.11 18.47 1.55 17.72Q0.98 16.97 0.98 15.98ZM9 15.98V14.02H15V15.98Q15 16.97 14.44 17.72Q13.88 18.47 12.98 18.8V23.02H11.02V18.8Q10.12 18.47 9.56 17.72Q9 16.97 9 15.98ZM5.02 2.02V6H6.98V12H0.98V6H3V2.02Q3 1.59 3.28 1.29Q3.56 0.98 3.98 0.98Q4.41 0.98 4.71 1.29Q5.02 1.59 5.02 2.02Z",
+  E5CF: "M16.59 8.58 18 9.98 12 15.98 6 9.98 7.41 8.58 12 13.17Z",
+  E2C8: "M20.02 18V8.02H3.98V18ZM20.02 6Q20.81 6 21.4 6.61Q21.98 7.22 21.98 8.02V18Q21.98 18.8 21.4 19.41Q20.81 20.02 20.02 20.02H3.98Q3.19 20.02 2.6 19.41Q2.02 18.8 2.02 18V6Q2.02 5.2 2.6 4.59Q3.19 3.98 3.98 3.98H9.98L12 6Z"
+};
+const SCALE = { ssh:1.12, telnet:1.12, rdp:0.90, vnc:0.90, serial:0.82 };
+const BBOX  = { EB8E:[19.97,16.03], E069:[18.00,16.03], E30C:[22.03,19.97], E8C0:[22.03,22.03] };
+const CODE  = { ssh:"EB8E", telnet:"E069", rdp:"E30C", vnc:"E30C", serial:"E8C0" };
+const LABEL = { ssh:"SSH", telnet:"Telnet", rdp:"RDP", vnc:"VNC", serial:"Serial" };
+
+const OUTLINE = {
+  ssh: '<rect x="2" y="3.2" width="12" height="9.6" rx="2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M4.6 6.4l1.9 1.9-1.9 1.9M8.2 10.6h3.6" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  telnet: '<rect x="2" y="3.2" width="12" height="9.6" rx="2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M2.4 6.4h11.2" stroke="currentColor" stroke-width="1.5" fill="none"/>',
+  rdp: '<rect x="1.8" y="3" width="12.4" height="8" rx="1.8" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 11v2.4M5.6 13.4h4.8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
+  vnc: '<rect x="1.8" y="3" width="12.4" height="8" rx="1.8" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M8 11v2.4M5.6 13.4h4.8" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
+  serial: '<rect x="3.6" y="5.6" width="8.8" height="4.8" rx="1.2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M6 3.4v2.2M10 3.4v2.2M8 10.4v2.2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>'
+};
+
+const GROUPS = [
+  { gc:"#c084fc", gcL:"#9333ea", name:"默认组", count:1, items:["202-1"] },
+  { gc:"#fb923c", gcL:"#ea580c", name:"2",      count:2, items:["188","202"] },
+  { gc:"#f472b6", gcL:"#db2777", name:"1",      count:4, items:["188 (2)","188 (1)","1","202-2"] },
+  { gc:"#4ade80", gcL:"#16a34a", name:"3",      count:3, items:["3","3-2","3-1"] }
+];
+const PROTO = ["ssh","telnet","rdp","serial"];
+
+function fontIcon(kind, px){
+  const c = CODE[kind] || "EB8E";
+  return '<svg viewBox="0 0 24 24" width="'+px+'" height="'+px+'" style="fill:currentColor"><path d="'+GLYPH[c]+'"/></svg>';
+}
+function lineIcon(kind, px){
+  return '<svg viewBox="0 0 16 16" width="'+px+'" height="'+px+'" style="fill:none">'+(OUTLINE[kind]||OUTLINE.ssh)+'</svg>';
+}
+function slotPx(slot,k,kind){ return (slot*k*(SCALE[kind]||1.12)).toFixed(2); }
+
+function curTheme(){ return document.documentElement.getAttribute("data-theme"); }
+function renderList(v, opts){
+  const glyph = v==="b" ? lineIcon : fontIcon;
+  const light = curTheme() === "light";
+  return GROUPS.map(g=>{
+    const col = light ? g.gcL : g.gc;
+    const same = new Set(g.items.map(()=> "ssh")).size === 1;
+    const hide = opts.dim && same && g.items.length >= 2;
+    let html = '<div class="row group">'+
+      '<span class="chev"><svg viewBox="0 0 24 24"><path d="'+GLYPH.E5CF+'"/></svg></span>'+
+      '<span class="gfolder" style="color:'+col+'"><svg viewBox="0 0 24 24" fill="currentColor"><path d="'+GLYPH.E2C8+'"/></svg></span>'+
+      '<span class="gname">'+g.name+'</span><span class="gcount">'+g.count+'</span></div>';
+    html += g.items.map((n,i)=>{
+      const last = i===g.items.length-1;
+      return '<div class="row member'+(last?" last":"")+(hide?" plain":"")+'" style="--gc:'+col+'">'+
+        '<span class="spine"></span><span class="branch"></span>'+
+        '<span class="icoslot">'+glyph("ssh", slotPx(opts.slot,opts.k,"ssh"))+'</span>'+
+        '<span class="mname">'+n+'</span></div>';
+    }).join("");
+    return html;
+  }).join("");
+}
+
+function renderDrop(v){
+  const glyph = v==="b" ? lineIcon : fontIcon;
+  return '<div class="dd"><div class="dd-t">新建会话 · 协议下拉</div>'+
+    PROTO.map(p=>'<div class="dd-item'+(p==="ssh"?" sel":"")+'">'+
+      '<span class="ic">'+glyph(p, slotPx(18,1,p))+'</span>'+
+      '<span>'+LABEL[p]+'</span>'+
+      (p==="serial"?'<span class="bdg">soon</span>':"")+'</div>').join("")+'</div>';
+}
+
+const VARIANTS = [
+  { v:"cur", t:"现状", tag:"基线", rec:false, opts:{slot:15,k:.92,gap:8,dim:false},
+    p:'slot <b>15</b> · k <b>0.92</b> · gap <b>8</b><br>色档 <b>text-secondary</b><br>字形 <b>字体 ×4 细节</b>' },
+  { v:"a", t:"方案 A", tag:"光学对齐", rec:true, opts:{slot:16,k:1,gap:10,dim:false},
+    p:'slot <b>16</b> · k <b>1.00</b> · gap <b>10</b><br>色档 <b>text-secondary</b><br>字形 <b>字体 ×4 细节</b>' },
+  { v:"b", t:"方案 B", tag:"细线重绘", rec:false, opts:{slot:16,k:1,gap:10,dim:false},
+    p:'slot <b>16</b> · k <b>1.00</b> · gap <b>10</b><br>色档 <b>text-secondary</b><br>字形 <b>自绘 ×2 细节</b>' },
+  { v:"c", t:"方案 C", tag:"降噪", rec:false, opts:{slot:16,k:1,gap:10,dim:true},
+    p:'slot <b>16</b> · k <b>1.00</b> · gap <b>10</b><br>色档 <b>text-muted</b><br>同协议组 <b>≥2 成员隐藏图标</b>' }
+];
+
+function renderGrid(){
+  document.getElementById("grid").innerHTML = VARIANTS.map(o=>
+    '<div class="col'+(o.rec?" rec":"")+'" data-v="'+o.v+'">'+
+    '<div class="col-hd"><div class="col-t">'+o.t+'<span class="tag">'+o.tag+'</span></div>'+
+    '<div class="col-p">'+o.p+'</div></div>'+
+    '<div class="list">'+renderList(o.v,o.opts)+'</div>'+renderDrop(o.v)+'</div>').join("");
+}
+renderGrid();
+
+function zoomRow(slot,k){
+  const px = Number(slotPx(slot,k,"ssh")).toFixed(2);
+  return '<span class="guide" style="left:26px"></span>'+
+    '<span class="guide" style="left:'+(26+slot)+'px"></span>'+
+    '<span class="icoslot" style="width:'+slot+'px;height:'+slot+'px;flex:0 0 '+slot+'px">'+
+      fontIcon("ssh",px)+'</span>'+
+    '<span class="mname" style="flex:0 0 auto">202-1</span>';
+}
+document.getElementById("zoom-cur").innerHTML = zoomRow(15,.92);
+document.getElementById("zoom-a").innerHTML   = zoomRow(16,1);
+document.getElementById("cap-cur").innerHTML =
+  '图标视觉高 <b>10.32px</b> ÷ 正文 13px = <b>0.79</b><br>font-size <b>15.46px</b> · 字形宽 <b>12.86px</b> · 槽 15px';
+document.getElementById("cap-a").innerHTML =
+  '图标视觉高 <b>11.97px</b> ÷ 正文 13px = <b>0.92</b><br>font-size <b>17.92px</b> · 字形宽 <b>14.91px</b> · 槽 16px';
+
+const BIG = [
+  ["现状 · 字体字形 · 4 个细节", 15*.92*1.12, fontIcon],
+  ["方案 A · 字体字形 · 4 个细节", 16*1*1.12, fontIcon],
+  ["方案 B · 细线重绘 · 2 个细节", 16, lineIcon]
+];
+document.getElementById("bigrow").innerHTML = BIG.map(function(o){
+  return '<div class="big"><div class="bx">'+o[2]("ssh",(o[1]*4).toFixed(1))+'</div>'+
+    '<div class="bl">'+o[0]+'<br>字号 <b>'+o[1].toFixed(2)+'px</b> · 放大 <b>4×</b></div></div>';
+}).join("");
+
+document.getElementById("tbl").innerHTML = [
+  ["侧栏会话列表（compact）","15px","15.46px","12.86 × 10.32","fs-md 13px","8px"],
+  ["侧栏会话列表（方案 A）","16px","17.92px","14.91 × 11.97","fs-md 13px","10px"],
+  ["新建会话协议下拉","18px","18.43px","15.34 × 12.31","fs-md 13px","9px"]
+].map(r=>"<tr>"+r.map((c,i)=>i===0?"<td>"+c+"</td>":"<td><code>"+c+"</code></td>").join("")+"</tr>").join("");
+
+/* 调参 */
+const S = {slot:16,k:1,gap:10,ico:1};
+const ICO = ["--tm","--ts","--tp"];
+const ICONAME = ["text-muted","text-secondary","text-primary"];
+function syncLab(){
+  const px = slotPx(S.slot,S.k,"ssh");
+  const cvar = getComputedStyle(document.documentElement).getPropertyValue(ICO[S.ico]).trim();
+  document.getElementById("lab-row").innerHTML =
+    '<span class="icoslot" style="width:'+S.slot+'px;height:'+S.slot+'px;flex:0 0 '+S.slot+'px">'+
+      fontIcon("ssh",px)+'</span>'+
+    '<span class="mname" style="color:var(--tp)">188 (2)</span>';
+  document.getElementById("lab-row").style.gap = S.gap+"px";
+  document.getElementById("lab-row").querySelector(".icoslot svg").style.color = cvar;
+  document.getElementById("o-slot").textContent = S.slot+" px";
+  document.getElementById("o-k").textContent = S.k.toFixed(2);
+  document.getElementById("o-gap").textContent = S.gap+" px";
+  document.getElementById("o-ico").textContent = ICONAME[S.ico];
+  const h = 16.03/24*px, w = 19.97/24*px, r = h/13;
+  document.querySelector("#m-h .v").textContent = h.toFixed(2)+"px";
+  document.querySelector("#m-w .v").textContent = w.toFixed(2)+"px";
+  document.querySelector("#m-r .v").textContent = r.toFixed(2);
+  document.querySelector("#m-f .v").textContent = px+"px";
+  document.getElementById("m-w").className = "m " + (w > S.slot ? "bad" : "good");
+  document.getElementById("m-r").className = "m " + (r < .85 ? "bad" : (r < .9 ? "warn" : "good"));
+}
+[["s-slot","slot"],["s-k","k"],["s-gap","gap"],["s-ico","ico"]].forEach(([id,key])=>{
+  document.getElementById(id).addEventListener("input",e=>{
+    S[key] = parseFloat(e.target.value); syncLab();
+  });
+});
+syncLab();
+
+document.getElementById("theme").addEventListener("click",e=>{
+  const b = e.target.closest("button"); if(!b) return;
+  document.documentElement.setAttribute("data-theme", b.dataset.th);
+  [...e.currentTarget.querySelectorAll("button")].forEach(x=>x.setAttribute("aria-pressed", String(x===b)));
+  renderGrid();
+});
+</script>
+</body>
+</html>

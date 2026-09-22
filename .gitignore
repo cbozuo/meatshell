@@ -31,3 +31,7 @@ build_wip*.log
 # WorkBuddy project data lives inside the repo dir; it is tool-internal and
 # must never be committed to the code fork.
 /.workbuddy/
+
+# Vendor 目录内的构建产物与升级前的备份副本 — 不进版本库。
+vendor/*/target/
+vendor/*.bak/
